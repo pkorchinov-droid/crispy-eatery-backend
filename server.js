@@ -280,7 +280,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     ].join("\n");
 
     const { data, error } = await resend.emails.send({
-      from: "Crispy Eatery <onboarding@resend.dev>",
+      from: "Crispy Eatery <bills@eatery.crispycatering.com>",
       to: [email],
       subject: `Your Bill — Crispy Eatery ${order.id}`,
       text: textBody,
