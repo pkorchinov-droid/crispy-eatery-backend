@@ -7,7 +7,9 @@ const { Resend } = require("resend");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 // ── Middleware ──────────────────────────────────────────────
 app.use(cors());
@@ -239,6 +241,8 @@ app.post("/orders/:id/email-bill", async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
+    if (!resend)
+      return res.status(500).json({ error: "Email service not configured" });
 
     const orders = loadOrders();
     const order = orders.find((o) => o.id === req.params.id);
