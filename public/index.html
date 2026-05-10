@@ -1,0 +1,1720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crispy Eatery — Kitchen</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1510;
+    color: #f5f0e8;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    background: #2a2318;
+    border-bottom: 2px solid #b5753a;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: #e8c477;
+    letter-spacing: 1px;
+  }
+
+  .logo span {
+    font-weight: 400;
+    color: #c49a5c;
+    font-size: 14px;
+    margin-left: 10px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+  }
+
+  .stats {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .stat {
+    text-align: center;
+    padding: 4px 14px;
+    background: #352c20;
+    border-radius: 8px;
+  }
+
+  .stat-num {
+    font-size: 24px;
+    font-weight: 700;
+    color: #e8c477;
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #a09080;
+    margin-top: 2px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot.live { background: #4caf50; }
+  .status-dot.error { background: #f44336; animation: none; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .conn-status {
+    font-size: 12px;
+    color: #a09080;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── Order grid ─────────────────────────────────── */
+  .orders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 20px 24px;
+  }
+
+  /* ── Order card ─────────────────────────────────── */
+  .order-card {
+    background: #2a2318;
+    border-radius: 12px;
+    border: 1px solid #3d3428;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    animation: slideIn 0.4s ease;
+  }
+
+  .order-card.new-arrival {
+    border-color: #e8c477;
+    box-shadow: 0 0 20px rgba(232, 196, 119, 0.3);
+  }
+
+  .order-card.preparing {
+    border-color: #ff9800;
+    box-shadow: 0 0 12px rgba(255, 152, 0, 0.2);
+  }
+
+  .order-card.preparing .card-header {
+    background: #3d2e10;
+  }
+
+  .order-card.preparing .table-badge {
+    background: #ff9800;
+  }
+
+  .order-card.preparing .status-badge {
+    display: inline-block;
+  }
+
+  .order-card.ready {
+    border-color: #2196f3;
+    box-shadow: 0 0 12px rgba(33, 150, 243, 0.2);
+  }
+
+  .order-card.ready .card-header {
+    background: #1a2a3d;
+  }
+
+  .order-card.ready .table-badge {
+    background: #2196f3;
+  }
+
+  .order-card.ready .status-badge {
+    display: inline-block;
+    background: #2196f3;
+  }
+
+  .order-card.picked_up {
+    border-color: #9c27b0;
+    box-shadow: 0 0 12px rgba(156, 39, 176, 0.2);
+  }
+
+  .order-card.picked_up .card-header {
+    background: #2d1a33;
+  }
+
+  .order-card.picked_up .table-badge {
+    background: #9c27b0;
+  }
+
+  .order-card.picked_up .status-badge {
+    display: inline-block;
+    background: #9c27b0;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .order-card.done {
+    opacity: 0;
+    transform: scale(0.9);
+    transition: all 0.4s ease;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    background: #352c20;
+  }
+
+  .table-badge {
+    background: #b5753a;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 800;
+    padding: 6px 16px;
+    border-radius: 8px;
+    min-width: 56px;
+    text-align: center;
+  }
+
+  .status-badge {
+    display: none;
+    background: #ff9800;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-left: 10px;
+    animation: pulse 1.5s infinite;
+  }
+
+  .order-meta {
+    text-align: right;
+  }
+
+  .order-id {
+    font-size: 11px;
+    color: #8a7a68;
+    font-family: monospace;
+  }
+
+  .order-time {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8c477;
+  }
+
+  .elapsed {
+    font-size: 12px;
+    color: #a09080;
+    margin-top: 2px;
+  }
+
+  .card-body {
+    padding: 14px 18px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 6px 0 4px;
+    margin-top: 4px;
+    border-top: 1px dashed #4a3d2e;
+    color: #ff9800;
+  }
+  .section-label:first-child { border-top: none; margin-top: 0; }
+  .section-label.barista { color: #64b5f6; }
+
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 8px 0;
+    border-bottom: 1px solid #3d3428;
+  }
+
+  .item-row:last-child { border-bottom: none; }
+
+  .item-row.tappable {
+    cursor: pointer;
+    transition: all 0.2s;
+    border-radius: 6px;
+    padding: 8px 6px;
+    margin: 0 -6px;
+  }
+
+  .item-row.tappable:hover {
+    background: rgba(33, 150, 243, 0.1);
+  }
+
+  .item-row.tappable:active {
+    transform: scale(0.98);
+  }
+
+  .item-row.picked {
+    opacity: 0.4;
+    text-decoration: line-through;
+    text-decoration-color: #4caf50;
+    text-decoration-thickness: 2px;
+  }
+
+  .item-row.picked .item-qty {
+    background: #2e4a2e;
+    color: #4caf50;
+  }
+
+  /* Per-item ready (cooking) tracking */
+  .item-row.cookable {
+    cursor: pointer;
+    transition: all 0.2s;
+    border-radius: 6px;
+    padding: 8px 6px;
+    margin: 0 -6px;
+  }
+
+  .item-row.cookable:hover {
+    background: rgba(255, 152, 0, 0.1);
+  }
+
+  .item-row.cookable:active {
+    transform: scale(0.98);
+  }
+
+  .item-row.cooked {
+    opacity: 0.5;
+  }
+
+  .item-row.cooked .item-qty {
+    background: #2e4a2e;
+    color: #4caf50;
+  }
+
+  .item-row .cook-check {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid #5a4a38;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    font-size: 14px;
+    color: transparent;
+  }
+
+  .item-row.cooked .cook-check {
+    background: #4caf50;
+    border-color: #4caf50;
+    color: #fff;
+  }
+
+  .cook-hint {
+    text-align: center;
+    font-size: 12px;
+    color: #ff9800;
+    padding: 6px 0 2px;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+  }
+
+  .cook-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #a09080;
+  }
+
+  .cook-progress .prog-bar {
+    flex: 1;
+    height: 4px;
+    background: #3d3428;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .cook-progress .prog-fill {
+    height: 100%;
+    background: #ff9800;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .pickup-hint {
+    text-align: center;
+    font-size: 12px;
+    color: #2196f3;
+    padding: 6px 0 2px;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+  }
+
+  .pickup-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #a09080;
+  }
+
+  .pickup-progress .prog-bar {
+    flex: 1;
+    height: 4px;
+    background: #3d3428;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .pickup-progress .prog-fill {
+    height: 100%;
+    background: #4caf50;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .item-qty {
+    background: #4a3d2e;
+    color: #e8c477;
+    font-weight: 700;
+    min-width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 14px;
+    margin-right: 10px;
+    flex-shrink: 0;
+  }
+
+  .item-name {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 500;
+    color: #f0e8d8;
+    line-height: 1.3;
+  }
+
+  .item-variant {
+    font-weight: 400;
+    color: #a09080;
+    font-size: 13px;
+  }
+
+  .item-notes {
+    font-size: 12px;
+    color: #e8a040;
+    font-style: italic;
+    margin-top: 3px;
+  }
+
+  .item-price {
+    color: #8a7a68;
+    font-size: 14px;
+    margin-left: 10px;
+    flex-shrink: 0;
+  }
+
+  .order-notes {
+    background: #3d3020;
+    border-left: 3px solid #e8a040;
+    padding: 8px 12px;
+    margin: 10px 0 4px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: #e8a040;
+  }
+
+  .card-footer {
+    padding: 12px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #3d3428;
+  }
+
+  .order-total {
+    font-size: 18px;
+    font-weight: 700;
+    color: #e8c477;
+  }
+
+  .btn-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-prep {
+    background: #ff9800;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-prep:hover { background: #f57c00; transform: scale(1.02); }
+  .btn-prep:active { transform: scale(0.98); }
+
+  .btn-ready {
+    background: #2196f3;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-ready:hover { background: #1976d2; transform: scale(1.02); }
+  .btn-ready:active { transform: scale(0.98); }
+
+  .btn-done {
+    background: #4caf50;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-done:hover { background: #43a047; transform: scale(1.02); }
+  .btn-done:active { transform: scale(0.98); }
+
+  .btn-pickup {
+    background: #9c27b0;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-pickup:hover { background: #7b1fa2; transform: scale(1.02); }
+  .btn-pickup:active { transform: scale(0.98); }
+
+  .btn-paid {
+    background: #4caf50;
+    color: #fff;
+    border: none;
+    padding: 10px 28px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+    width: 100%;
+  }
+
+  .btn-paid:hover { background: #43a047; transform: scale(1.02); }
+  .btn-paid:active { transform: scale(0.98); }
+
+  /* ── Empty state ────────────────────────────────── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 20px;
+    color: #6a5a48;
+  }
+
+  .empty-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+
+  .empty-text {
+    font-size: 20px;
+    font-family: Georgia, serif;
+    font-style: italic;
+  }
+
+  .empty-sub {
+    font-size: 13px;
+    margin-top: 6px;
+    color: #5a4a38;
+  }
+
+  /* ── Flash animation for new orders ─────────────── */
+  @keyframes flashBorder {
+    0%, 100% { border-color: #e8c477; }
+    50% { border-color: #ff9800; }
+  }
+
+  .order-card.flash {
+    animation: flashBorder 0.5s ease 3;
+  }
+
+  /* ── Order history section ─────────────────────── */
+  .history-section {
+    padding: 0 24px 40px;
+  }
+
+  .history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 0 12px;
+    border-top: 1px solid #3d3428;
+    margin-top: 20px;
+  }
+
+  .history-title {
+    font-family: Georgia, serif;
+    font-size: 18px;
+    color: #8a7a68;
+    font-style: italic;
+  }
+
+  .history-toggle {
+    background: none;
+    border: 1px solid #3d3428;
+    color: #8a7a68;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .history-toggle:hover {
+    border-color: #8a7a68;
+    color: #c49a5c;
+  }
+
+  .history-list {
+    display: none;
+  }
+
+  .history-list.open {
+    display: block;
+  }
+
+  .history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #221c14;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    border: 1px solid #2a2318;
+    opacity: 0.7;
+  }
+
+  .history-item .hi-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .history-item .hi-table {
+    background: #3d3428;
+    color: #8a7a68;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  .history-item .hi-items {
+    font-size: 13px;
+    color: #8a7a68;
+  }
+
+  .history-item .hi-right {
+    text-align: right;
+  }
+
+  .history-item .hi-total {
+    font-size: 14px;
+    color: #6a5a48;
+    font-weight: 600;
+  }
+
+  .history-item .hi-time {
+    font-size: 11px;
+    color: #5a4a38;
+  }
+
+  .history-empty {
+    text-align: center;
+    padding: 20px;
+    color: #5a4a38;
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  /* ── View filter tabs ────────────────────────────── */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    padding: 14px 24px 0;
+    background: #1a1510;
+  }
+
+  .filter-btn {
+    background: #2a2318;
+    border: 1px solid #3d3428;
+    color: #a09080;
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .filter-btn:hover {
+    border-color: #8a7a68;
+    color: #c49a5c;
+  }
+
+  .filter-btn.active {
+    background: #b5753a;
+    border-color: #b5753a;
+    color: #fff;
+  }
+
+  .filter-btn.active[data-filter="kitchen"] {
+    background: #ff9800;
+    border-color: #ff9800;
+  }
+
+  .filter-btn.active[data-filter="barista"] {
+    background: #42a5f5;
+    border-color: #42a5f5;
+  }
+
+  /* Filter-based hiding */
+  body.filter-kitchen .order-card:not([data-has-kitchen="true"]) { display: none; }
+  body.filter-kitchen .item-row[data-type="barista"] { display: none; }
+  body.filter-kitchen .section-label { display: none; }
+
+  body.filter-barista .order-card:not([data-has-barista="true"]) { display: none; }
+  body.filter-barista .item-row[data-type="kitchen"] { display: none; }
+  body.filter-barista .section-label { display: none; }
+
+  /* ── Responsive ─────────────────────────────────── */
+  @media (max-width: 768px) {
+    .orders-grid {
+      grid-template-columns: 1fr;
+      padding: 12px;
+      gap: 12px;
+    }
+    header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+    .logo span { display: block; margin-left: 0; }
+    .filter-bar { padding: 10px 12px 0; }
+    .filter-btn { padding: 8px 14px; font-size: 13px; }
+    .history-section { padding: 0 12px 30px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">Crispy Eatery <span>Kitchen</span></div>
+  </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num" id="activeCount">0</div>
+      <div class="stat-label">Active</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="prepCount">0</div>
+      <div class="stat-label">Preparing</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="readyCount">0</div>
+      <div class="stat-label">Ready</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="pickedUpCount">0</div>
+      <div class="stat-label">Picked Up</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="doneCount">0</div>
+      <div class="stat-label">Paid</div>
+    </div>
+    <div class="conn-status">
+      <span class="status-dot live" id="statusDot"></span>
+      <span id="statusText">Live</span>
+    </div>
+  </div>
+</header>
+
+<div class="filter-bar" id="filterBar">
+  <button class="filter-btn active" onclick="setFilter('all')" data-filter="all">All</button>
+  <button class="filter-btn" onclick="setFilter('kitchen')" data-filter="kitchen">Kitchen</button>
+  <button class="filter-btn" onclick="setFilter('barista')" data-filter="barista">Barista</button>
+</div>
+
+<main class="orders-grid" id="ordersGrid">
+  <div class="empty-state" id="emptyState">
+    <div class="empty-icon">&#x1F373;</div>
+    <div class="empty-text">No active orders</div>
+    <div class="empty-sub">New orders will appear here automatically</div>
+  </div>
+</main>
+
+<section class="history-section">
+  <div class="history-header">
+    <div class="history-title">Order History</div>
+    <button class="history-toggle" id="historyToggle" onclick="toggleHistory()">Show</button>
+  </div>
+  <div class="history-list" id="historyList">
+    <div class="history-empty" id="historyEmpty">No completed orders yet</div>
+  </div>
+</section>
+
+<script>
+(function() {
+  // ── Config ──
+  const BACKEND = window.location.origin;
+  const POLL_INTERVAL = 3000;
+
+  // ── Drink detection (barista items) ──
+  const DRINK_KEYWORDS = [
+    'flat white', 'long black', 'short black', 'americano', 'latte', 'cappuccino',
+    'mocha', 'espresso', 'macchiato', 'coffee', 'matcha', 'chai',
+    'tea', 'hot chocolate', 'turmeric', 'smoothie',
+    'iced auckland', 'iced ferrero', 'iced berry black', 'iced orange',
+    'iced mango', 'iced coconut', 'iced lychee', 'iced strawberry',
+    'iced tonic passion', 'iced yuzu', 'iced london fog', 'iced peach',
+    'iced bumblebee', 'milkshake'
+  ];
+
+  function isDrink(itemName) {
+    const lower = itemName.toLowerCase();
+    return DRINK_KEYWORDS.some(function(kw) { return lower.indexOf(kw) !== -1; });
+  }
+
+  // ── State ──
+  let knownOrderIds = new Set();
+  let orderData = {};
+  let prepCount = 0;
+  let doneCount = 0;
+  let isFirstLoad = true;
+  let completedOrders = [];
+  let currentFilter = 'all';
+
+  // ── View filter ──
+  window.setFilter = function(filter) {
+    currentFilter = filter;
+    document.body.classList.remove('filter-kitchen', 'filter-barista');
+    if (filter !== 'all') {
+      document.body.classList.add('filter-' + filter);
+    }
+    // Update active button
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+    });
+    // Update header subtitle
+    const subtitles = { all: 'Kitchen', kitchen: 'Kitchen', barista: 'Barista' };
+    document.querySelector('.logo span').textContent = subtitles[filter] || 'Kitchen';
+    updateStats();
+  };
+
+  // ── Audio ──
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+
+  function ensureAudio() {
+    if (!audioCtx) audioCtx = new AudioCtx();
+  }
+
+  function playChime() {
+    try {
+      ensureAudio();
+      const now = audioCtx.currentTime;
+      [660, 880].forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, now + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.5);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + i * 0.15);
+        osc.stop(now + i * 0.15 + 0.6);
+      });
+    } catch(e) {
+      console.log('Audio not available');
+    }
+  }
+
+  // ── Elapsed time ──
+  function elapsed(iso) {
+    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (diff < 60) return 'just now';
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.floor(mins / 60);
+    return hrs + 'h ' + (mins % 60) + 'm ago';
+  }
+
+  function formatTime(iso) {
+    return new Date(iso).toLocaleTimeString('en-NZ', {
+      hour: '2-digit', minute: '2-digit', hour12: true
+    });
+  }
+
+  // ── Render card ──
+  function renderCard(order) {
+    const isPreparing = order.status === 'preparing';
+    const isReady = order.status === 'ready';
+    const isPickedUp = order.status === 'picked_up';
+    // Split items into kitchen (food) and barista (drinks)
+    const kitchenIndices = [];
+    const baristaIndices = [];
+    order.items.forEach(function(item, idx) {
+      if (isDrink(item.name)) { baristaIndices.push(idx); }
+      else { kitchenIndices.push(idx); }
+    });
+
+    function renderItemRow(item, idx) {
+      const itemType = isDrink(item.name) ? 'barista' : 'kitchen';
+      const variant = item.size ? '<span class="item-variant"> &middot; ' + item.size + '</span>' : '';
+      const notes = item.notes ? '<div class="item-notes">' + item.notes + '</div>' : '';
+      const cookable = isPreparing ? ' cookable' : '';
+      const cooked = (isPreparing && order.cookedItems && order.cookedItems[idx]) ? ' cooked' : '';
+      const cookAction = isPreparing ? ' onclick="toggleItemCooked(\'' + order.id + '\',' + idx + ')"' : '';
+      const cookCheck = isPreparing ? '<span class="cook-check">✓</span>' : '';
+      const tappable = isReady ? ' tappable' : '';
+      const picked = (isReady && order.pickedItems && order.pickedItems[idx]) ? ' picked' : '';
+      const tapAction = isReady ? ' onclick="toggleItemPickup(\'' + order.id + '\',' + idx + ')"' : '';
+      return '<div class="item-row' + cookable + cooked + tappable + picked + '" data-idx="' + idx + '" data-type="' + itemType + '"' + cookAction + tapAction + '>' +
+        '<span class="item-qty">' + item.qty + '</span>' +
+        '<div class="item-name">' + item.name + variant + notes + '</div>' +
+        '<span class="item-price">$' + (item.price * item.qty).toFixed(2) + '</span>' +
+        cookCheck +
+      '</div>';
+    }
+
+    let itemsHtml = '';
+    const hasKitchen = kitchenIndices.length > 0;
+    const hasBarista = baristaIndices.length > 0;
+    if (hasKitchen && hasBarista) {
+      itemsHtml += '<div class="section-label">🍳 Kitchen</div>';
+      itemsHtml += kitchenIndices.map(function(idx) { return renderItemRow(order.items[idx], idx); }).join('');
+      itemsHtml += '<div class="section-label barista">☕ Barista</div>';
+      itemsHtml += baristaIndices.map(function(idx) { return renderItemRow(order.items[idx], idx); }).join('');
+    } else {
+      // All same type — no section headers needed
+      itemsHtml = order.items.map(function(item, idx) { return renderItemRow(item, idx); }).join('');
+    }
+
+    // Cook progress hint shown when preparing
+    let cookHint = '';
+    if (isPreparing) {
+      const totalItems = order.items.length;
+      const cookedCount = order.cookedItems ? Object.keys(order.cookedItems).filter(k => order.cookedItems[k]).length : 0;
+      const pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+      cookHint = '<div class="cook-hint">Tap each item when cooked</div>' +
+        '<div class="cook-progress">' +
+          '<span>' + cookedCount + '/' + totalItems + '</span>' +
+          '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+    }
+
+    // Pickup hint shown when order is ready
+    let pickupHint = '';
+    if (isReady) {
+      const totalItems = order.items.length;
+      const pickedCount = order.pickedItems ? Object.keys(order.pickedItems).filter(k => order.pickedItems[k]).length : 0;
+      const pct = totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0;
+      pickupHint = '<div class="pickup-hint">Tap each item as staff picks up</div>' +
+        '<div class="pickup-progress">' +
+          '<span>' + pickedCount + '/' + totalItems + '</span>' +
+          '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+    }
+
+    const orderNotes = order.notes
+      ? '<div class="order-notes">' + order.notes + '</div>'
+      : '';
+
+    // Buttons based on status:
+    // received: PREP
+    // preparing: READY
+    // ready: PICKED UP
+    // picked_up: PAID BY CUSTOMER (full width)
+    let buttons = '';
+    if (!isPreparing && !isReady && !isPickedUp) {
+      buttons = '<button class="btn-prep" onclick="markPreparing(\'' + order.id + '\')">PREP</button>';
+    } else if (isPreparing) {
+      buttons = '<button class="btn-ready" onclick="markSectionDone(\'' + order.id + '\')">READY</button>';
+    } else if (isReady) {
+      buttons = '<button class="btn-pickup" onclick="markPickedUp(\'' + order.id + '\')">PICKED UP</button>';
+    } else if (isPickedUp) {
+      buttons = '<button class="btn-paid" onclick="markPaid(\'' + order.id + '\')">PAID BY CUSTOMER</button>';
+    }
+
+    // Status badge text and visibility
+    let statusClass = '';
+    let badgeText = '';
+    let badgeVisible = false;
+    if (isPreparing) {
+      statusClass = ' preparing';
+      badgeText = 'Preparing';
+      badgeVisible = true;
+    } else if (isReady) {
+      statusClass = ' ready';
+      badgeText = 'Ready';
+      badgeVisible = true;
+    } else if (isPickedUp) {
+      statusClass = ' picked_up';
+      badgeText = 'Picked Up';
+      badgeVisible = true;
+    }
+
+    return '<div class="order-card' + statusClass + '" id="card-' + order.id + '" data-id="' + order.id + '" data-has-kitchen="' + hasKitchen + '" data-has-barista="' + hasBarista + '">' +
+      '<div class="card-header">' +
+        '<div style="display:flex;align-items:center">' +
+          '<div class="table-badge">T' + order.tableNumber + '</div>' +
+          '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + badgeText + '</span>' +
+        '</div>' +
+        '<div class="order-meta">' +
+          '<div class="order-id">' + order.id + '</div>' +
+          '<div class="order-time">' + formatTime(order.createdAt) + '</div>' +
+          '<div class="elapsed" data-created="' + order.createdAt + '">' + elapsed(order.createdAt) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card-body">' + itemsHtml + orderNotes + cookHint + pickupHint + '</div>' +
+      '<div class="card-footer">' +
+        '<div class="order-total">$' + order.total.toFixed(2) + '</div>' +
+        '<div class="btn-group">' +
+          buttons +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // ── Mark section done (filter-aware READY) ──
+  window.markSectionDone = function(orderId) {
+    var order = orderData[orderId];
+    if (!order || order.status !== 'preparing') return;
+
+    // If viewing ALL, just mark everything ready
+    if (currentFilter === 'all') {
+      markReady(orderId);
+      return;
+    }
+
+    // Otherwise, batch-cook only items matching the current filter
+    if (!order.cookedItems) order.cookedItems = {};
+    order.items.forEach(function(item, idx) {
+      var itemIsDrink = isDrink(item.name);
+      if ((currentFilter === 'barista' && itemIsDrink) || (currentFilter === 'kitchen' && !itemIsDrink)) {
+        order.cookedItems[idx] = true;
+      }
+    });
+
+    // Update UI for all items
+    var card = document.getElementById('card-' + orderId);
+    if (card) {
+      var rows = card.querySelectorAll('.item-row');
+      var totalItems = order.items.length;
+      var cookedCount = 0;
+      rows.forEach(function(row, idx) {
+        if (order.cookedItems[idx]) {
+          row.classList.add('cooked');
+          cookedCount++;
+        }
+      });
+      var pct = Math.round((cookedCount / totalItems) * 100);
+      var progFill = card.querySelector('.cook-progress .prog-fill');
+      if (progFill) progFill.style.width = pct + '%';
+      var progText = card.querySelector('.cook-progress span');
+      if (progText) progText.textContent = cookedCount + '/' + totalItems;
+    }
+
+    // Sync to server
+    fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'preparing', cookedItems: order.cookedItems })
+    }).catch(function(e) { console.error('Failed to sync cooked state:', e); });
+
+    // If ALL items (kitchen + barista) are cooked, advance to ready
+    if (cookedCount === order.items.length) {
+      setTimeout(function() { markReady(orderId); }, 500);
+    }
+  };
+
+  // ── Mark order preparing ──
+  window.markPreparing = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) {
+      card.classList.add('preparing');
+      // Show status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) badge.style.display = 'inline-block';
+      // Replace all buttons with READY (ALL) override
+      const btnGroup = card.querySelector('.btn-group');
+      if (btnGroup) {
+        btnGroup.innerHTML = '';
+        const readyBtn = document.createElement('button');
+        readyBtn.className = 'btn-ready';
+        var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE' };
+        readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
+        readyBtn.onclick = function() { markSectionDone(orderId); };
+        btnGroup.appendChild(readyBtn);
+      }
+      // Make items tappable for per-dish cooking
+      const items = card.querySelectorAll('.item-row');
+      const totalItems = items.length;
+      items.forEach(function(row, idx) {
+        row.classList.add('cookable');
+        row.setAttribute('data-idx', idx);
+        // Add cook checkmark
+        if (!row.querySelector('.cook-check')) {
+          const check = document.createElement('span');
+          check.className = 'cook-check';
+          check.textContent = '✓';
+          row.appendChild(check);
+        }
+        row.onclick = function() { toggleItemCooked(orderId, idx); };
+      });
+      // Add cook hint + progress bar
+      const cardBody = card.querySelector('.card-body');
+      if (cardBody && !cardBody.querySelector('.cook-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'cook-hint';
+        hint.textContent = 'Tap each item when cooked';
+        cardBody.appendChild(hint);
+        const prog = document.createElement('div');
+        prog.className = 'cook-progress';
+        prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+        cardBody.appendChild(prog);
+      }
+    }
+
+    // Update local data
+    if (orderData[orderId]) orderData[orderId].status = 'preparing';
+    updateStats();
+
+    try {
+      await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'preparing' })
+      });
+    } catch(e) {
+      console.error('Failed to update order:', e);
+    }
+  };
+
+  // ── Mark order ready (kitchen done) ──
+  window.markReady = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) {
+      card.classList.remove('preparing');
+      card.classList.add('ready');
+      // Update status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+      // Remove cook state (cookable items, checkmarks, cook hint/progress)
+      card.querySelectorAll('.item-row').forEach(function(row) {
+        row.classList.remove('cookable', 'cooked');
+        row.onclick = null;
+        const check = row.querySelector('.cook-check');
+        if (check) check.remove();
+      });
+      const cookHintEl = card.querySelector('.cook-hint');
+      if (cookHintEl) cookHintEl.remove();
+      const cookProgEl = card.querySelector('.cook-progress');
+      if (cookProgEl) cookProgEl.remove();
+      // Clear cookedItems data
+      if (orderData[orderId]) delete orderData[orderId].cookedItems;
+      // Replace buttons with PICKED UP only
+      const btnGroup = card.querySelector('.btn-group');
+      if (btnGroup) {
+        btnGroup.innerHTML = '';
+        const pickupBtn = document.createElement('button');
+        pickupBtn.className = 'btn-pickup';
+        pickupBtn.textContent = 'PICKED UP';
+        pickupBtn.onclick = function() { markPickedUp(orderId); };
+        btnGroup.appendChild(pickupBtn);
+      }
+      // Make items tappable for per-dish pickup
+      const items = card.querySelectorAll('.item-row');
+      const totalItems = items.length;
+      items.forEach(function(row, idx) {
+        row.classList.add('tappable');
+        row.setAttribute('data-idx', idx);
+        row.onclick = function() { toggleItemPickup(orderId, idx); };
+      });
+      // Add pickup hint + progress bar
+      const cardBody = card.querySelector('.card-body');
+      if (cardBody && !cardBody.querySelector('.pickup-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'pickup-hint';
+        hint.textContent = 'Tap each item as staff picks up';
+        cardBody.appendChild(hint);
+        const prog = document.createElement('div');
+        prog.className = 'pickup-progress';
+        prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+        cardBody.appendChild(prog);
+      }
+    }
+
+    if (orderData[orderId]) orderData[orderId].status = 'ready';
+    updateStats();
+
+    try {
+      await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'ready' })
+      });
+    } catch(e) {
+      console.error('Failed to update order:', e);
+    }
+  };
+
+  // ── Toggle individual item cooked (during preparing) ──
+  window.toggleItemCooked = function(orderId, itemIdx) {
+    const order = orderData[orderId];
+    if (!order || order.status !== 'preparing') return;
+
+    if (!order.cookedItems) order.cookedItems = {};
+    order.cookedItems[itemIdx] = !order.cookedItems[itemIdx];
+
+    const card = document.getElementById('card-' + orderId);
+    if (!card) return;
+
+    const rows = card.querySelectorAll('.item-row');
+    if (rows[itemIdx]) {
+      rows[itemIdx].classList.toggle('cooked', order.cookedItems[itemIdx]);
+    }
+
+    // Update cook progress bar
+    const totalItems = order.items.length;
+    const cookedCount = Object.keys(order.cookedItems).filter(k => order.cookedItems[k]).length;
+    const pct = Math.round((cookedCount / totalItems) * 100);
+
+    const progFill = card.querySelector('.cook-progress .prog-fill');
+    if (progFill) progFill.style.width = pct + '%';
+
+    const progText = card.querySelector('.cook-progress span');
+    if (progText) progText.textContent = cookedCount + '/' + totalItems;
+
+    // Sync to server
+    fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'preparing', cookedItems: order.cookedItems })
+    }).catch(function(e) { console.error('Failed to sync cooked state:', e); });
+
+    // If all items cooked, auto-advance to ready
+    if (cookedCount === totalItems) {
+      setTimeout(function() { markReady(orderId); }, 500);
+    }
+  };
+
+  // ── Toggle individual item pickup ──
+  window.toggleItemPickup = function(orderId, itemIdx) {
+    const order = orderData[orderId];
+    if (!order || order.status !== 'ready') return;
+
+    // Initialize pickedItems tracking
+    if (!order.pickedItems) order.pickedItems = {};
+    order.pickedItems[itemIdx] = !order.pickedItems[itemIdx];
+
+    const card = document.getElementById('card-' + orderId);
+    if (!card) return;
+
+    // Toggle strike-through on the item row
+    const rows = card.querySelectorAll('.item-row');
+    if (rows[itemIdx]) {
+      rows[itemIdx].classList.toggle('picked', order.pickedItems[itemIdx]);
+    }
+
+    // Update progress bar
+    const totalItems = order.items.length;
+    const pickedCount = Object.keys(order.pickedItems).filter(k => order.pickedItems[k]).length;
+    const pct = Math.round((pickedCount / totalItems) * 100);
+
+    const progFill = card.querySelector('.prog-fill');
+    if (progFill) progFill.style.width = pct + '%';
+
+    const progText = card.querySelector('.pickup-progress span');
+    if (progText) progText.textContent = pickedCount + '/' + totalItems;
+
+    // Sync to server
+    fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ready', pickedItems: order.pickedItems })
+    }).catch(function(e) { console.error('Failed to sync picked state:', e); });
+
+    // If all items picked, auto-advance to picked_up status
+    if (pickedCount === totalItems) {
+      setTimeout(function() { markPickedUp(orderId); }, 500);
+    }
+  };
+
+  // ── Mark order picked up ──
+  window.markPickedUp = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) {
+      card.classList.remove('ready');
+      card.classList.add('picked_up');
+      // Update status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+      // Remove tappable state and pickup hint/progress
+      card.querySelectorAll('.item-row').forEach(function(row) {
+        row.classList.remove('tappable', 'picked');
+        row.onclick = null;
+      });
+      const hint = card.querySelector('.pickup-hint');
+      if (hint) hint.remove();
+      const prog = card.querySelector('.pickup-progress');
+      if (prog) prog.remove();
+      // Replace PICKED UP button with PAID BY CUSTOMER (full width)
+      const pickupBtn = card.querySelector('.btn-pickup');
+      if (pickupBtn) {
+        const paidBtn = document.createElement('button');
+        paidBtn.className = 'btn-paid';
+        paidBtn.textContent = 'PAID BY CUSTOMER';
+        paidBtn.onclick = function() { markPaid(orderId); };
+        pickupBtn.parentNode.insertBefore(paidBtn, pickupBtn);
+        pickupBtn.remove();
+      }
+    }
+
+    if (orderData[orderId]) orderData[orderId].status = 'picked_up';
+    updateStats();
+
+    try {
+      await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'picked_up' })
+      });
+    } catch(e) {
+      console.error('Failed to update order:', e);
+    }
+  };
+
+  // ── Mark order paid (sends to history) ──
+  window.markPaid = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) card.classList.add('done');
+
+    // Save to history before removing
+    if (orderData[orderId]) {
+      const order = orderData[orderId];
+      order.completedAt = new Date().toISOString();
+      completedOrders.unshift(order);
+      if (completedOrders.length > 50) completedOrders.pop();
+      renderHistory();
+    }
+
+    try {
+      await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' })
+      });
+    } catch(e) {
+      console.error('Failed to update order:', e);
+    }
+
+    setTimeout(() => {
+      if (card) card.remove();
+      delete orderData[orderId];
+      knownOrderIds.delete(orderId);
+      doneCount++;
+      updateStats();
+    }, 400);
+  };
+
+  // ── Mark order done (legacy) ──
+  window.markDone = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) card.classList.add('done');
+
+    // Save to history before removing
+    if (orderData[orderId]) {
+      const order = orderData[orderId];
+      order.completedAt = new Date().toISOString();
+      completedOrders.unshift(order);
+      if (completedOrders.length > 50) completedOrders.pop();
+      renderHistory();
+    }
+
+    try {
+      await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' })
+      });
+    } catch(e) {
+      console.error('Failed to update order:', e);
+    }
+
+    setTimeout(() => {
+      if (card) card.remove();
+      delete orderData[orderId];
+      knownOrderIds.delete(orderId);
+      doneCount++;
+      updateStats();
+    }, 400);
+  };
+
+  // ── Toggle history ──
+  window.toggleHistory = function() {
+    const list = document.getElementById('historyList');
+    const btn = document.getElementById('historyToggle');
+    list.classList.toggle('open');
+    btn.textContent = list.classList.contains('open') ? 'Hide' : 'Show';
+  };
+
+  // ── Render history ──
+  function renderHistory() {
+    const list = document.getElementById('historyList');
+    const empty = document.getElementById('historyEmpty');
+
+    if (completedOrders.length === 0) {
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    // Remove old history items (keep the empty div)
+    const existing = list.querySelectorAll('.history-item');
+    existing.forEach(el => el.remove());
+
+    completedOrders.forEach(order => {
+      const itemNames = order.items.map(i =>
+        i.qty + 'x ' + i.name + (i.size ? ' (' + i.size + ')' : '')
+      ).join(', ');
+
+      const html = '<div class="history-item">' +
+        '<div class="hi-left">' +
+          '<span class="hi-table">T' + order.tableNumber + '</span>' +
+          '<span class="hi-items">' + itemNames + '</span>' +
+        '</div>' +
+        '<div class="hi-right">' +
+          '<div class="hi-total">$' + order.total.toFixed(2) + '</div>' +
+          '<div class="hi-time">' + formatTime(order.completedAt || order.createdAt) + '</div>' +
+        '</div>' +
+      '</div>';
+
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      list.appendChild(temp.firstChild);
+    });
+  }
+
+  // ── Update stats ──
+  function updateStats() {
+    let activeC = 0;
+    let prepC = 0;
+    let readyC = 0;
+    let pickedUpC = 0;
+    knownOrderIds.forEach(id => {
+      if (!orderData[id]) return;
+      const order = orderData[id];
+      // Filter check: skip orders that don't match current view
+      if (currentFilter === 'kitchen' && !order.items.some(function(i) { return !isDrink(i.name); })) return;
+      if (currentFilter === 'barista' && !order.items.some(function(i) { return isDrink(i.name); })) return;
+      if (order.status === 'preparing') prepC++;
+      if (order.status === 'ready') readyC++;
+      if (order.status === 'picked_up') pickedUpC++;
+      activeC++;
+    });
+    document.getElementById('activeCount').textContent = activeC;
+    document.getElementById('prepCount').textContent = prepC;
+    document.getElementById('readyCount').textContent = readyC;
+    document.getElementById('pickedUpCount').textContent = pickedUpC;
+    document.getElementById('doneCount').textContent = doneCount;
+    document.getElementById('emptyState').style.display =
+      activeC === 0 ? 'flex' : 'none';
+  }
+
+  // ── Poll orders ──
+  async function pollOrders() {
+    try {
+      const resp = await fetch(BACKEND + '/orders');
+      const data = await resp.json();
+
+      // Filter to active orders only
+      const active = data.orders.filter(o => o.status !== 'done');
+      let hasNew = false;
+
+      active.forEach(order => {
+        if (!knownOrderIds.has(order.id)) {
+          knownOrderIds.add(order.id);
+          orderData[order.id] = order;
+          hasNew = true;
+
+          const grid = document.getElementById('ordersGrid');
+          const empty = document.getElementById('emptyState');
+
+          const temp = document.createElement('div');
+          temp.innerHTML = renderCard(order);
+          const card = temp.firstChild;
+
+          if (!isFirstLoad) {
+            card.classList.add('new-arrival', 'flash');
+            setTimeout(() => card.classList.remove('flash'), 1500);
+            setTimeout(() => card.classList.remove('new-arrival'), 5000);
+          }
+
+          grid.insertBefore(card, grid.firstChild === empty ? empty : grid.firstChild);
+        } else {
+          const localOrder = orderData[order.id];
+          if (!localOrder) return;
+          const statusChanged = localOrder.status !== order.status;
+
+          // Sync per-item state from server (even if status didn't change)
+          if (order.cookedItems) localOrder.cookedItems = order.cookedItems;
+          if (order.pickedItems) localOrder.pickedItems = order.pickedItems;
+
+          const card = document.getElementById('card-' + order.id);
+          if (!card) return;
+
+          if (statusChanged) {
+            localOrder.status = order.status;
+            // Clear all status classes
+            card.classList.remove('preparing', 'ready', 'picked_up');
+
+            // Clean up any existing per-item UI
+            card.querySelectorAll('.item-row').forEach(function(row) {
+              row.classList.remove('cookable', 'cooked', 'tappable', 'picked');
+              row.onclick = null;
+              var ck = row.querySelector('.cook-check'); if (ck) ck.remove();
+            });
+            var els = card.querySelectorAll('.cook-hint,.cook-progress,.pickup-hint,.pickup-progress');
+            els.forEach(function(el) { el.remove(); });
+
+            if (order.status === 'preparing') {
+              card.classList.add('preparing');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Preparing'; badge.style.background = '#ff9800'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) {
+                btnGroup.innerHTML = '';
+                var readyBtn = document.createElement('button');
+                readyBtn.className = 'btn-ready';
+                var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE' };
+                readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
+                readyBtn.onclick = function() { markSectionDone(order.id); };
+                btnGroup.appendChild(readyBtn);
+              }
+              var items = card.querySelectorAll('.item-row');
+              var totalItems = items.length;
+              items.forEach(function(row, idx) {
+                row.classList.add('cookable');
+                row.setAttribute('data-idx', idx);
+                var check = document.createElement('span');
+                check.className = 'cook-check'; check.textContent = '✓';
+                row.appendChild(check);
+                row.onclick = function() { toggleItemCooked(order.id, idx); };
+              });
+              var cardBody = card.querySelector('.card-body');
+              if (cardBody) {
+                var hint = document.createElement('div');
+                hint.className = 'cook-hint'; hint.textContent = 'Tap each item when cooked';
+                cardBody.appendChild(hint);
+                var prog = document.createElement('div');
+                prog.className = 'cook-progress';
+                prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+                cardBody.appendChild(prog);
+              }
+            } else if (order.status === 'ready') {
+              card.classList.add('ready');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) btnGroup.innerHTML = '<button class="btn-pickup" onclick="markPickedUp(\'' + order.id + '\')">PICKED UP</button>';
+              var items = card.querySelectorAll('.item-row');
+              var totalItems = items.length;
+              items.forEach(function(row, idx) {
+                row.classList.add('tappable');
+                row.setAttribute('data-idx', idx);
+                row.onclick = function() { toggleItemPickup(order.id, idx); };
+              });
+              var cardBody = card.querySelector('.card-body');
+              if (cardBody) {
+                var hint = document.createElement('div');
+                hint.className = 'pickup-hint'; hint.textContent = 'Tap each item as staff picks up';
+                cardBody.appendChild(hint);
+                var prog = document.createElement('div');
+                prog.className = 'pickup-progress';
+                prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+                cardBody.appendChild(prog);
+              }
+            } else if (order.status === 'picked_up') {
+              card.classList.add('picked_up');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) btnGroup.innerHTML = '<button class="btn-paid" onclick="markPaid(\'' + order.id + '\')">PAID BY CUSTOMER</button>';
+            }
+          }
+
+          // Sync per-item visual state from server (works whether status changed or not)
+          if (order.status === 'preparing' && order.cookedItems) {
+            var rows = card.querySelectorAll('.item-row');
+            var totalItems = rows.length;
+            var cookedCount = 0;
+            rows.forEach(function(row, idx) {
+              if (order.cookedItems[idx]) {
+                row.classList.add('cooked');
+                cookedCount++;
+              } else {
+                row.classList.remove('cooked');
+              }
+            });
+            var pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+            var progFill = card.querySelector('.cook-progress .prog-fill');
+            if (progFill) progFill.style.width = pct + '%';
+            var progText = card.querySelector('.cook-progress span');
+            if (progText) progText.textContent = cookedCount + '/' + totalItems;
+          }
+          if (order.status === 'ready' && order.pickedItems) {
+            var rows = card.querySelectorAll('.item-row');
+            var totalItems = rows.length;
+            var pickedCount = 0;
+            rows.forEach(function(row, idx) {
+              if (order.pickedItems[idx]) {
+                row.classList.add('picked');
+                pickedCount++;
+              } else {
+                row.classList.remove('picked');
+              }
+            });
+            var pct = totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0;
+            var progFill = card.querySelector('.pickup-progress .prog-fill');
+            if (progFill) progFill.style.width = pct + '%';
+            var progText = card.querySelector('.pickup-progress span');
+            if (progText) progText.textContent = pickedCount + '/' + totalItems;
+          }
+        }
+      });
+
+      // Remove cards for orders that disappeared server-side
+      const activeIds = new Set(active.map(o => o.id));
+      knownOrderIds.forEach(id => {
+        if (!activeIds.has(id)) {
+          const card = document.getElementById('card-' + id);
+          if (card) card.remove();
+          // Add to history if we have data
+          if (orderData[id]) {
+            orderData[id].completedAt = new Date().toISOString();
+            completedOrders.unshift(orderData[id]);
+            if (completedOrders.length > 50) completedOrders.pop();
+            renderHistory();
+          }
+          delete orderData[id];
+          knownOrderIds.delete(id);
+          doneCount++;
+        }
+      });
+
+      if (hasNew && !isFirstLoad) {
+        playChime();
+      }
+
+      isFirstLoad = false;
+
+      document.getElementById('statusDot').className = 'status-dot live';
+      document.getElementById('statusText').textContent = 'Live';
+
+      updateStats();
+    } catch(e) {
+      console.error('Poll error:', e);
+      document.getElementById('statusDot').className = 'status-dot error';
+      document.getElementById('statusText').textContent = 'Offline';
+    }
+  }
+
+  // ── Update elapsed times ──
+  function updateElapsed() {
+    document.querySelectorAll('.elapsed[data-created]').forEach(el => {
+      el.textContent = elapsed(el.dataset.created);
+    });
+  }
+
+  // ── Init ──
+  document.addEventListener('click', function unlock() {
+    ensureAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    document.removeEventListener('click', unlock);
+  }, { once: true });
+
+  pollOrders();
+  setInterval(pollOrders, POLL_INTERVAL);
+  setInterval(updateElapsed, 30000);
+})();
+</script>
+
+</body>
+</html>
