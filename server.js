@@ -46,6 +46,42 @@ function nextOrderId() {
   return `#${String(num).padStart(3, "0")}`;
 }
 
+// ── Customer email storage ─────────────────────────────────
+const CUSTOMERS_FILE = path.join(__dirname, "customers.json");
+
+function loadCustomers() {
+  try {
+    if (fs.existsSync(CUSTOMERS_FILE)) {
+      return JSON.parse(fs.readFileSync(CUSTOMERS_FILE, "utf8"));
+    }
+  } catch (e) {
+    console.error("[customers] Error loading file:", e.message);
+  }
+  return [];
+}
+
+function saveCustomerEmail(email, orderId, tableNumber, total) {
+  const customers = loadCustomers();
+  const existing = customers.find((c) => c.email === email);
+  if (existing) {
+    existing.visits += 1;
+    existing.totalSpent += total;
+    existing.lastVisit = new Date().toISOString();
+    existing.orders.push(orderId);
+  } else {
+    customers.push({
+      email,
+      firstVisit: new Date().toISOString(),
+      lastVisit: new Date().toISOString(),
+      visits: 1,
+      totalSpent: total,
+      orders: [orderId],
+    });
+  }
+  fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify(customers, null, 2));
+  console.log(`[customers] Saved ${email} (${existing ? "returning" : "new"} customer)`);
+}
+
 // ── Health check ───────────────────────────────────────────
 app.get("/", (_req, res) => {
   const orders = loadOrders();
@@ -291,12 +327,24 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       return res.status(500).json({ error: "Failed to send email", details: error.message });
     }
 
+    // Save customer email for marketing
+    saveCustomerEmail(email, order.id, order.tableNumber, order.total);
+
     console.log(`[email] Bill sent for ${order.id} → ${email} (${data.id})`);
     res.json({ success: true, message: "Bill sent to " + email });
   } catch (err) {
     console.error("[email] Error:", err.message);
     res.status(500).json({ error: "Failed to send email", details: err.message });
   }
+});
+
+// ── GET /customers — view customer email list (staff) ─────
+app.get("/customers", (_req, res) => {
+  const customers = loadCustomers();
+  res.json({
+    count: customers.length,
+    customers: customers.sort((a, b) => b.visits - a.visits),
+  });
 });
 
 // ── DELETE /orders — clear all orders (dev only) ──────────
