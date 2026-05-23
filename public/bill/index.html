@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Crispy Eatery — Your Bill</title>
+  <title>Crispy Eatery â Your Bill</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -322,7 +322,7 @@
         '<div class="footer">' +
           '<p>Crispy Eatery</p>' +
           '<p style="color:#b6a988">341 Remuera Road</p>' +
-          '<p style="color:#b6a988">7 am — 3:30 pm · daily</p>' +
+          '<p style="color:#b6a988">7 am â 3:30 pm Â· daily</p>' +
         '</div>';
     }
 
@@ -391,13 +391,15 @@
       }
     }
 
+    var EMAIL_RE = /^[^\s@<>"',;:\\]+@[^\s@<>"',;:\\]+\.[^\s@<>"',;:\\]{2,}$/;
+
     async function sendBill() {
       var emailInput = document.getElementById('emailInput');
       var sendBtn = document.getElementById('sendBtn');
       var statusMsg = document.getElementById('statusMsg');
       var email = emailInput.value.trim();
 
-      if (!email || !email.includes('@')) {
+      if (!EMAIL_RE.test(email) || email.length > 254) {
         statusMsg.className = 'status error';
         statusMsg.textContent = 'Please enter a valid email address';
         return;
@@ -413,15 +415,19 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: email })
         });
-        var data = await res.json();
 
-        if (data.success) {
+        var data = null;
+        try { data = await res.json(); } catch (_) { /* non-JSON body */ }
+
+        if (res.ok && data && data.success) {
           statusMsg.className = 'status success';
           statusMsg.textContent = 'Bill sent to ' + email + '!';
           sendBtn.textContent = 'Sent!';
         } else {
           statusMsg.className = 'status error';
-          statusMsg.textContent = data.error || 'Failed to send. Please try again.';
+          statusMsg.textContent = (data && data.error)
+            ? data.error
+            : ('Failed to send (HTTP ' + res.status + '). Please try again.');
           sendBtn.disabled = false;
           sendBtn.textContent = 'Email My Bill';
         }
