@@ -21,7 +21,7 @@ if (!STAFF_TOKEN) {
   );
 }
 
-// ââ Middleware ââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Middleware ──────────────────────────────────────────────
 const allowedOrigins = FRONTEND_ORIGIN
   ? FRONTEND_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean)
   : [];
@@ -38,7 +38,7 @@ app.use(
 );
 app.use(express.json({ limit: "64kb" }));
 
-// ââ Auth middleware ââââââââââââââââââââââââââââââââââââââââ
+// ── Auth middleware ────────────────────────────────────────
 function requireStaff(req, res, next) {
   if (!STAFF_TOKEN) {
     return res.status(503).json({ error: "Staff auth not configured" });
@@ -51,7 +51,7 @@ function requireStaff(req, res, next) {
   next();
 }
 
-// ââ File mutex (serialize concurrent writes to JSON stores) â
+// ── File mutex (serialize concurrent writes to JSON stores) ─
 let writeChain = Promise.resolve();
 function withWriteLock(fn) {
   const next = writeChain.then(fn, fn);
@@ -65,7 +65,7 @@ function atomicWriteSync(filePath, content) {
   fs.renameSync(tmp, filePath);
 }
 
-// ââ Order storage ââââââââââââââââââââââââââââââââââââââââââ
+// ── Order storage ──────────────────────────────────────────
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 
 function loadOrders() {
@@ -100,7 +100,7 @@ function nextOrderId(orders) {
   return `#${String(max + 1).padStart(3, "0")}`;
 }
 
-// ââ Customer email storage âââââââââââââââââââââââââââââââââ
+// ── Customer email storage ─────────────────────────────────
 const CUSTOMERS_FILE = path.join(__dirname, "customers.json");
 
 function loadCustomers() {
@@ -142,7 +142,7 @@ function saveCustomerEmail(email, orderId, tableNumber, total) {
   console.log(`[customers] Saved ${email} (${existing ? "returning" : "new"} customer)`);
 }
 
-// ââ Validators ââââââââââââââââââââââââââââââââââââââââââââ
+// ── Validators ────────────────────────────────────────────
 const VALID_STATUSES = new Set([
   "received",
   "preparing",
@@ -159,7 +159,7 @@ function toFiniteNumber(v, fallback) {
 }
 
 function clampMoney(n) {
-  // 0 â¤ price â¤ 9999.99, integer-cent precision.
+  // 0 ≤ price ≤ 9999.99, integer-cent precision.
   if (!Number.isFinite(n) || n < 0) return 0;
   if (n > 9999.99) return 9999.99;
   return Math.round(n * 100) / 100;
@@ -192,14 +192,14 @@ function normalizeItems(items) {
   }));
 }
 
-// ââ Health check âââââââââââââââââââââââââââââââââââââââââââ
+// ── Health check ───────────────────────────────────────────
 app.get("/", (_req, res) => {
   const orders = loadOrders();
   res.json({
     status: "ok",
     mode: "local",
     totalOrders: orders.length,
-    note: "Doshii integration pending â orders stored locally",
+    note: "Doshii integration pending — orders stored locally",
   });
 });
 
@@ -211,7 +211,7 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ââ POST /order â receive order from QR menu (PUBLIC) âââââ
+// ── POST /order — receive order from QR menu (PUBLIC) ─────
 app.post("/order", (req, res) => {
   withWriteLock(() => {
     try {
@@ -243,24 +243,24 @@ app.post("/order", (req, res) => {
       orders.push(order);
       persistOrders(orders);
 
-      console.log(`\n${"â".repeat(50)}`);
-      console.log(`ð NEW ORDER ${order.id}`);
+      console.log(`\n${"═".repeat(50)}`);
+      console.log(`🔔 NEW ORDER ${order.id}`);
       console.log(`   Table: ${order.tableNumber} | Guests: ${order.guestCount}${order.phoneNumber ? ` | Phone: ${order.phoneNumber}` : ""}`);
       console.log(`   Items:`);
       order.items.forEach((item) => {
         console.log(
-          `     â¢ ${item.qty}x ${item.name}${item.size ? ` (${item.size})` : ""} â $${item.price.toFixed(2)}${item.notes ? ` [${item.notes}]` : ""}`
+          `     • ${item.qty}x ${item.name}${item.size ? ` (${item.size})` : ""} — $${item.price.toFixed(2)}${item.notes ? ` [${item.notes}]` : ""}`
         );
       });
       console.log(`   Total: $${order.total.toFixed(2)}`);
       if (order.notes) console.log(`   Notes: ${order.notes}`);
       console.log(`   Time: ${order.createdAt}`);
-      console.log(`${"â".repeat(50)}\n`);
+      console.log(`${"═".repeat(50)}\n`);
 
       res.json({
         success: true,
         orderId: order.id,
-        message: `Order received â Table ${order.tableNumber}`,
+        message: `Order received — Table ${order.tableNumber}`,
         total: order.total,
       });
     } catch (err) {
@@ -270,8 +270,8 @@ app.post("/order", (req, res) => {
   });
 });
 
-// ââ Static dashboard & bill âââââââââââââââââââââââââââââââ
-// Dashboard is staff-only â gate it before serving HTML.
+// ── Static dashboard & bill ───────────────────────────────
+// Dashboard is staff-only — gate it before serving HTML.
 app.get("/dashboard", requireStaff, (_req, res, next) => next());
 app.use(
   "/dashboard",
@@ -281,7 +281,7 @@ app.use(
 // Bill page is customer-facing (lookup by order ID via URL).
 app.use("/bill", express.static(path.join(__dirname, "public", "bill")));
 
-// ââ GET /orders â staff ââââââââââââââââââââââââââââââââââââ
+// ── GET /orders — staff ────────────────────────────────────
 app.get("/orders", requireStaff, (req, res) => {
   let orders = loadOrders();
   const status = req.query.status;
@@ -310,7 +310,7 @@ app.get("/orders", requireStaff, (req, res) => {
   });
 });
 
-// ââ GET /orders/by-table/:table â public, for QR "add to tab" â
+// ── GET /orders/by-table/:table — public, for QR "add to tab" ─
 // Returns minimal info (no PII) so the customer page can detect an open tab.
 app.get("/orders/by-table/:table", (req, res) => {
   const table = String(req.params.table || "");
@@ -330,7 +330,7 @@ app.get("/orders/by-table/:table", (req, res) => {
   });
 });
 
-// ââ GET /orders/:id â public (for bill page lookup) âââââââ
+// ── GET /orders/:id — public (for bill page lookup) ───────
 app.get("/orders/:id", (req, res) => {
   const orders = loadOrders();
   const order = orders.find((o) => o.id === req.params.id);
@@ -338,7 +338,7 @@ app.get("/orders/:id", (req, res) => {
   res.json(order);
 });
 
-// ââ POST /orders/:id/add-items â public (QR "add to order") â
+// ── POST /orders/:id/add-items — public (QR "add to order") ─
 app.post("/orders/:id/add-items", (req, res) => {
   withWriteLock(() => {
     try {
@@ -369,15 +369,15 @@ app.post("/orders/:id/add-items", (req, res) => {
       orders[idx].updatedAt = new Date().toISOString();
       persistOrders(orders);
 
-      console.log(`\n${"â".repeat(50)}`);
-      console.log(`â ITEMS ADDED to ${orders[idx].id} (Table ${orders[idx].tableNumber})`);
+      console.log(`\n${"═".repeat(50)}`);
+      console.log(`➕ ITEMS ADDED to ${orders[idx].id} (Table ${orders[idx].tableNumber})`);
       newItems.forEach((item) => {
         console.log(
-          `     â¢ ${item.qty}x ${item.name}${item.size ? ` (${item.size})` : ""} â $${item.price.toFixed(2)}${item.notes ? ` [${item.notes}]` : ""}`
+          `     • ${item.qty}x ${item.name}${item.size ? ` (${item.size})` : ""} — $${item.price.toFixed(2)}${item.notes ? ` [${item.notes}]` : ""}`
         );
       });
       console.log(`   New total: $${orders[idx].total.toFixed(2)}`);
-      console.log(`${"â".repeat(50)}\n`);
+      console.log(`${"═".repeat(50)}\n`);
 
       res.json({
         success: true,
@@ -392,7 +392,7 @@ app.post("/orders/:id/add-items", (req, res) => {
   });
 });
 
-// ââ PATCH /orders/:id â staff ââââââââââââââââââââââââââââââ
+// ── PATCH /orders/:id — staff ──────────────────────────────
 app.patch("/orders/:id", requireStaff, (req, res) => {
   withWriteLock(() => {
     try {
@@ -444,7 +444,7 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
       orders[idx].updatedAt = new Date().toISOString();
       persistOrders(orders);
 
-      console.log(`[orders] ${orders[idx].id} â ${status || "(state update)"}`);
+      console.log(`[orders] ${orders[idx].id} → ${status || "(state update)"}`);
       res.json({ success: true, order: orders[idx] });
     } catch (err) {
       console.error("[patch] Error:", err.message);
@@ -453,7 +453,7 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
   });
 });
 
-// ââ POST /orders/:id/email-bill â public ââââââââââââââââââ
+// ── POST /orders/:id/email-bill — public ──────────────────
 app.post("/orders/:id/email-bill", async (req, res) => {
   try {
     const rawEmail = (req.body && req.body.email) || "";
@@ -472,7 +472,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     const itemLines = order.items
       .map(
         (i) =>
-          `  ${i.qty}x ${i.name}${i.size ? ` (${i.size})` : ""}  â  $${(i.price * i.qty).toFixed(2)}${i.notes ? `  [${i.notes}]` : ""}`
+          `  ${i.qty}x ${i.name}${i.size ? ` (${i.size})` : ""}  —  $${(i.price * i.qty).toFixed(2)}${i.notes ? `  [${i.notes}]` : ""}`
       )
       .join("\n");
 
@@ -482,8 +482,8 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     });
 
     const textBody = [
-      `Crispy Eatery â Your Bill`,
-      `âââââââââââââââââââââââââââââââ`,
+      `Crispy Eatery — Your Bill`,
+      `═══════════════════════════════`,
       ``,
       `Order: ${order.id}`,
       `Table: ${order.tableNumber}`,
@@ -492,9 +492,9 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       `Items:`,
       itemLines,
       ``,
-      `âââââââââââââââââââââââââââââââ`,
+      `───────────────────────────────`,
       `TOTAL:  $${order.total.toFixed(2)}`,
-      `âââââââââââââââââââââââââââââââ`,
+      `───────────────────────────────`,
       ``,
       `Thank you for dining with us!`,
     ].join("\n");
@@ -502,7 +502,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     const { data, error } = await resend.emails.send({
       from: "Crispy Eatery <bills@eatery.crispycatering.com>",
       to: [email],
-      subject: `Your Bill â Crispy Eatery ${order.id}`,
+      subject: `Your Bill — Crispy Eatery ${order.id}`,
       text: textBody,
     });
 
@@ -520,7 +520,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       }
     });
 
-    console.log(`[email] Bill sent for ${order.id} â ${email} (${data && data.id})`);
+    console.log(`[email] Bill sent for ${order.id} → ${email} (${data && data.id})`);
     res.json({ success: true, message: "Bill sent to " + email });
   } catch (err) {
     console.error("[email] Error:", err.message);
@@ -528,7 +528,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
   }
 });
 
-// ââ GET /customers â staff ââââââââââââââââââââââââââââââââ
+// ── GET /customers — staff ────────────────────────────────
 app.get("/customers", requireStaff, (_req, res) => {
   const customers = loadCustomers();
   res.json({
@@ -537,7 +537,7 @@ app.get("/customers", requireStaff, (_req, res) => {
   });
 });
 
-// ââ DELETE /orders â staff + extra safety ââââââââââââââââââ
+// ── DELETE /orders — staff + extra safety ──────────────────
 app.delete("/orders", requireStaff, (req, res) => {
   if (!ALLOW_DESTRUCTIVE) {
     return res.status(403).json({
@@ -556,10 +556,10 @@ app.delete("/orders", requireStaff, (req, res) => {
   });
 });
 
-// ââ Start ââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Start ──────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   const orders = loadOrders();
-  console.log(`\nð³ Crispy Eatery backend running on http://localhost:${PORT}`);
+  console.log(`\n🍳 Crispy Eatery backend running on http://localhost:${PORT}`);
   console.log(`   Mode    : Local order storage`);
   console.log(`   Orders  : ${orders.length} saved`);
   console.log(`   Auth    : ${STAFF_TOKEN ? "STAFF_TOKEN set" : "STAFF_TOKEN NOT SET (staff routes 503)"}`);
@@ -580,7 +580,7 @@ const server = app.listen(PORT, () => {
 
 // Graceful shutdown so an in-flight write completes before exit.
 function shutdown(signal) {
-  console.log(`\n[shutdown] ${signal} received, draining writesâ¦`);
+  console.log(`\n[shutdown] ${signal} received, draining writes…`);
   const t = setTimeout(() => process.exit(0), 5000);
   writeChain.finally(() => {
     clearTimeout(t);
