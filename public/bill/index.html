@@ -263,10 +263,12 @@
   <script>
     var BACKEND = window.location.origin;
     var orderId = null;
+    var billToken = null;
 
-    // Read order ID from URL params
+    // Read order ID + token from URL params
     var params = new URLSearchParams(window.location.search);
     orderId = params.get('order');
+    billToken = params.get('t');
 
     function fmt(n) {
       return '$' + Number(n).toFixed(2);
@@ -368,9 +370,21 @@
       var input = document.getElementById('orderInput');
       if (!input) return;
       var id = input.value.trim();
-      if (!id) return;
-      if (!id.startsWith('#')) id = '#' + id;
-      window.location.search = '?order=' + encodeURIComponent(id);
+      // N15: validate format strictly — only `#NNN` or `NNN` (1-4 digits) accepted.
+      // Even with valid ID format, the backend requires a billToken for new orders,
+      // so manual lookup will 404 unless the customer also has the token from the
+      // QR-menu confirmation. That's intentional: prevents enumeration.
+      var m = id.replace(/^#/, '').match(/^(\d{1,4})$/);
+      if (!m) {
+        var el = document.getElementById('orderInput');
+        if (el) {
+          el.style.borderColor = '#c25a3a';
+          el.placeholder = 'Numbers only, e.g. 001';
+          el.value = '';
+        }
+        return;
+      }
+      window.location.search = '?order=' + encodeURIComponent('#' + m[1]);
     }
 
     async function loadOrder() {
@@ -379,7 +393,9 @@
         return;
       }
       try {
-        var res = await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId));
+        var url = BACKEND + '/orders/' + encodeURIComponent(orderId);
+        if (billToken) url += '?t=' + encodeURIComponent(billToken);
+        var res = await fetch(url);
         if (!res.ok) {
           renderNotFound();
           return;
@@ -410,10 +426,12 @@
       statusMsg.innerHTML = '';
 
       try {
+        var body = { email: email };
+        if (billToken) body.token = billToken;
         var res = await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId) + '/email-bill', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email })
+          body: JSON.stringify(body)
         });
 
         var data = null;
