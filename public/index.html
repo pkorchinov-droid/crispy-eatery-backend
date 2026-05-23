@@ -1419,7 +1419,7 @@
     setTimeout(() => {
       if (card) card.remove();
       delete orderData[orderId];
-      knownOrderIds.delete(orderId);
+      // Keep orderId in knownOrderIds so polling doesn't re-add it as new
       doneCount++;
       updateStats();
     }, 400);
@@ -1452,7 +1452,7 @@
     setTimeout(() => {
       if (card) card.remove();
       delete orderData[orderId];
-      knownOrderIds.delete(orderId);
+      // Keep orderId in knownOrderIds so polling doesn't re-add it as new
       doneCount++;
       updateStats();
     }, 400);
