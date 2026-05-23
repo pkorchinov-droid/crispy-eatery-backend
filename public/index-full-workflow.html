@@ -933,6 +933,12 @@
   let isFirstLoad = true;
   let completedOrders = [];
   let currentFilter = 'all';
+  // N9: serverTimeOffset = (serverNow - clientNow) at last poll; used to compute
+  // elapsed times against the server clock so cafe iPad skew doesn't show "-2m".
+  let serverTimeOffset = 0;
+  // N3/N4: orders that markPaid is currently flushing — don't double-count or
+  // chime-resurrect them via the polling cleanup path.
+  let paidInFlight = new Set();
 
   // ── View filter ──
   window.setFilter = function(filter) {
@@ -974,6 +980,11 @@
         gain.connect(audioCtx.destination);
         osc.start(now + i * 0.15);
         osc.stop(now + i * 0.15 + 0.6);
+        // N16: explicitly disconnect after the oscillator finishes so a
+        // week-long iPad uptime doesn't accumulate stranded audio nodes.
+        osc.onended = function() {
+          try { osc.disconnect(); gain.disconnect(); } catch (_) {}
+        };
       });
     } catch(e) {
       console.log('Audio not available');
@@ -981,8 +992,11 @@
   }
 
   // ── Elapsed time ──
+  // N9: use serverTimeOffset so a wrong client clock doesn't show "-2 min ago".
+  function nowOnServer() { return Date.now() + serverTimeOffset; }
   function elapsed(iso) {
-    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    let diff = Math.floor((nowOnServer() - new Date(iso).getTime()) / 1000);
+    if (diff < 0) diff = 0; // clamp; never show negative time
     if (diff < 60) return 'just now';
     const mins = Math.floor(diff / 60);
     if (mins < 60) return mins + ' min ago';
@@ -1415,17 +1429,54 @@
       }
     }
 
-    if (orderData[orderId]) orderData[orderId].status = 'picked_up';
+    // N14: audit-trail preservation — if the cook taps PICKED UP without
+    // having marked individual items, populate pickedItems with all lineIds
+    // so the order record shows every item was handed off.
+    if (orderData[orderId]) {
+      orderData[orderId].status = 'picked_up';
+      if (!orderData[orderId].pickedItems) orderData[orderId].pickedItems = {};
+      orderData[orderId].items.forEach(function(item, idx) {
+        const key = item.lineId || String(idx);
+        orderData[orderId].pickedItems[key] = true;
+      });
+    }
     updateStats();
 
-    await syncOrder(orderId, { status: 'picked_up' });
+    await syncOrder(orderId, {
+      status: 'picked_up',
+      pickedItems: orderData[orderId] ? orderData[orderId].pickedItems : undefined,
+    });
   };
 
   // ── Mark order paid (sends to history) ──
+  // N3/N4 fix: await the PATCH, only commit local state on success. On failure
+  // restore the card and surface the error to the cook instead of silently
+  // re-adding it on the next poll (which used to look like a "new arrival"
+  // chime for an order the cook thought they'd closed).
   window.markPaid = async function(orderId) {
     const card = document.getElementById('card-' + orderId);
+    if (paidInFlight.has(orderId)) return;
+    paidInFlight.add(orderId);
+    // Visually disable both buttons in case there's a double-tap.
     if (card) card.classList.add('done');
 
+    const resp = await syncOrder(orderId, { status: 'done' });
+    if (!resp || !resp.ok) {
+      // Revert the optimistic fade and tell the cook.
+      paidInFlight.delete(orderId);
+      if (card) {
+        card.classList.remove('done');
+        const status = resp ? resp.status : 'network';
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:#f44336;color:#fff;padding:8px;text-align:center;font-size:12px;border-radius:6px;margin:6px 12px';
+        banner.textContent = "Couldn't mark paid (HTTP " + status + "). Try again.";
+        card.appendChild(banner);
+        setTimeout(function() { banner.remove(); }, 4000);
+      }
+      return;
+    }
+
+    // Server confirmed. Now archive locally.
     if (orderData[orderId]) {
       const order = orderData[orderId];
       order.completedAt = new Date().toISOString();
@@ -1433,19 +1484,16 @@
       if (completedOrders.length > 50) completedOrders.pop();
       renderHistory();
     }
-
-    await syncOrder(orderId, { status: 'done' });
-
+    doneCount++;
+    updateStats();
     setTimeout(() => {
       if (card) card.remove();
       delete orderData[orderId];
-      doneCount++;
-      updateStats();
+      paidInFlight.delete(orderId);
     }, 400);
   };
 
-  // Alias for legacy callers
-  window.markDone = window.markPaid;
+  // N13: dead-code removal — `window.markDone` was an unused legacy alias.
 
   // ── Toggle history ──
   window.toggleHistory = function() {
@@ -1546,6 +1594,12 @@
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
 
+      // N9: anchor elapsed-time math to the server clock so a wrong iPad clock
+      // doesn't produce negative or wildly inflated "X min ago" values.
+      if (data.serverTime) {
+        serverTimeOffset = new Date(data.serverTime).getTime() - Date.now();
+      }
+
       // Filter to active orders only
       const active = data.orders.filter(o => o.status !== 'done');
       let hasNew = false;
@@ -1575,9 +1629,16 @@
           if (!localOrder) return;
           const statusChanged = localOrder.status !== order.status;
 
-          // Sync per-item state from server (even if status didn't change)
-          if (order.cookedItems) localOrder.cookedItems = order.cookedItems;
-          if (order.pickedItems) localOrder.pickedItems = order.pickedItems;
+          // N6: replace (don't merge) cooked/picked state from the server, so
+          // a second dashboard tab that never observed a clear ends up clean.
+          // If the server omits the field (e.g. after a status reset), clear
+          // it locally too.
+          localOrder.cookedItems = order.cookedItems || {};
+          localOrder.pickedItems = order.pickedItems || {};
+
+          // Mirror in-flight item-count changes from /add-items so the dashboard
+          // sees newly added rows next render.
+          if (Array.isArray(order.items)) localOrder.items = order.items;
 
           const card = document.getElementById('card-' + order.id);
           if (!card) return;
@@ -1674,6 +1735,17 @@
                 paidBtn.onclick = function() { markPaid(capturedId); };
                 btnGroup.appendChild(paidBtn);
               }
+            } else if (order.status === 'received') {
+              // N2: status reverted (POST /add-items resets to received). Without
+              // this branch the card had no buttons rebuilt and became unusable
+              // until reload. Full re-render is cleanest because items may have
+              // grown and we need fresh data-key attributes for the new lines.
+              var fresh = document.createElement('div');
+              fresh.innerHTML = renderCard(order);
+              var newCard = fresh.firstChild;
+              newCard.classList.add('flash');
+              setTimeout(function() { newCard.classList.remove('flash'); }, 1500);
+              card.parentNode.replaceChild(newCard, card);
             }
           }
 
@@ -1719,23 +1791,29 @@
         }
       });
 
-      // Remove cards for orders that disappeared server-side
+      // Remove cards for orders that disappeared server-side.
+      // N3 fix: don't double-count or double-archive — if markPaid is currently
+      // handling this order (or already did), skip the archive/increment so we
+      // don't end up with "2" in the Paid stat or duplicate history entries.
       const activeIds = new Set(active.map(o => o.id));
       knownOrderIds.forEach(id => {
-        if (!activeIds.has(id)) {
-          const card = document.getElementById('card-' + id);
-          if (card) card.remove();
-          // Add to history if we have data
-          if (orderData[id]) {
-            orderData[id].completedAt = new Date().toISOString();
-            completedOrders.unshift(orderData[id]);
-            if (completedOrders.length > 50) completedOrders.pop();
-            renderHistory();
-          }
-          delete orderData[id];
+        if (activeIds.has(id)) return;
+        const card = document.getElementById('card-' + id);
+        if (card) card.remove();
+        // If markPaid owns this disappearance, do nothing else here.
+        if (paidInFlight.has(id) || !orderData[id]) {
           knownOrderIds.delete(id);
-          doneCount++;
+          return;
         }
+        // Otherwise: order disappeared via some other path (manual server
+        // edit, DELETE /orders, etc.) — archive it once.
+        orderData[id].completedAt = new Date().toISOString();
+        completedOrders.unshift(orderData[id]);
+        if (completedOrders.length > 50) completedOrders.pop();
+        renderHistory();
+        delete orderData[id];
+        knownOrderIds.delete(id);
+        doneCount++;
       });
 
       if (hasNew && !isFirstLoad) {
