@@ -185,11 +185,41 @@ function normalizeItems(items) {
     qty: clampQty(toFiniteNumber(item && (item.qty != null ? item.qty : item.quantity), 1)),
     price: clampMoney(toFiniteNumber(item && item.price, 0)),
     notes: sanitizeString(item && item.notes, 300),
-    lineId:
-      typeof item?.lineId === "string"
-        ? sanitizeString(item.lineId, 40)
-        : crypto.randomBytes(8).toString("hex"),
+    // lineId is always server-generated — never trust client input. If a
+    // customer harvested a lineId from their own bill (which exposes them)
+    // and reused it via /add-items, two rows could collide on dashboard state.
+    lineId: crypto.randomBytes(8).toString("hex"),
   }));
+}
+
+// Stable hash of an items array — used to dedup near-simultaneous /add-items submits.
+function itemsHash(items) {
+  const norm = items.map((i) =>
+    [i.name, i.size, i.qty, i.price, i.notes].join("|")
+  );
+  return crypto.createHash("sha256").update(norm.join("\n")).digest("hex").slice(0, 16);
+}
+
+// Timing-safe string compare for short tokens (24-byte hex = 48 chars).
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
+
+// Per-order bill token check. Legacy orders without billToken: token not required.
+// New orders (with billToken): require ?t= or body.token to match.
+function checkBillToken(order, req) {
+  if (!order.billToken) return true; // legacy, grandfathered
+  const supplied =
+    (req.query && typeof req.query.t === "string" && req.query.t) ||
+    (req.body && typeof req.body.token === "string" && req.body.token) ||
+    "";
+  return safeEqual(supplied, order.billToken);
 }
 
 // ── Health check ───────────────────────────────────────────
@@ -226,6 +256,7 @@ app.post("/order", (req, res) => {
       const orders = loadOrders();
       const order = {
         id: nextOrderId(orders),
+        billToken: crypto.randomBytes(24).toString("hex"),
         tableNumber: sanitizeString(String(tableNumber || "?"), 8) || "?",
         guestCount: clampQty(toFiniteNumber(guestCount, 1)),
         items: normalizedItems,
@@ -260,6 +291,7 @@ app.post("/order", (req, res) => {
       res.json({
         success: true,
         orderId: order.id,
+        billToken: order.billToken,
         message: `Order received — Table ${order.tableNumber}`,
         total: order.total,
       });
@@ -331,11 +363,33 @@ app.get("/orders/by-table/:table", (req, res) => {
 });
 
 // ── GET /orders/:id — public (for bill page lookup) ───────
+// Requires ?t=<billToken> for orders created with a token. Returns redacted
+// data (no phone, no cooked/picked state, no internal fields).
 app.get("/orders/:id", (req, res) => {
   const orders = loadOrders();
   const order = orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found" });
-  res.json(order);
+  if (!checkBillToken(order, req)) {
+    // Don't distinguish "wrong token" from "no token" — both look like 404.
+    // Prevents enumeration of valid order IDs.
+    return res.status(404).json({ error: "Order not found" });
+  }
+  res.json({
+    id: order.id,
+    tableNumber: order.tableNumber,
+    // Strip lineId from bill response — it's an internal kitchen-state key
+    // and isn't needed for rendering the bill.
+    items: order.items.map((i) => ({
+      name: i.name,
+      size: i.size,
+      qty: i.qty,
+      price: i.price,
+      notes: i.notes,
+    })),
+    total: order.total,
+    status: order.status,
+    createdAt: order.createdAt,
+  });
 });
 
 // ── POST /orders/:id/add-items — public (QR "add to order") ─
@@ -361,12 +415,32 @@ app.post("/orders/:id/add-items", (req, res) => {
         return;
       }
 
+      // N7: dedup window — if the exact same items batch arrives within 5s of
+      // the previous add (cross-tab race, accidental double-tap), no-op and
+      // return success without appending.
+      const newHash = itemsHash(newItems);
+      const lastHash = orders[idx]._lastAddHash;
+      const lastAt = orders[idx]._lastAddAt || 0;
+      if (newHash === lastHash && Date.now() - lastAt < 5000) {
+        console.log(`[add-items] DEDUP: ignoring duplicate batch for ${orders[idx].id} (${newItems.length} items, within 5s)`);
+        res.json({
+          success: true,
+          orderId: orders[idx].id,
+          message: "Items already added (duplicate within 5s)",
+          total: orders[idx].total,
+          deduped: true,
+        });
+        return;
+      }
+
       orders[idx].items = [...orders[idx].items, ...newItems];
       orders[idx].total = clampMoney(
         orders[idx].items.reduce((sum, i) => sum + (i.price || 0) * (i.qty || 1), 0)
       );
       orders[idx].status = "received";
       orders[idx].updatedAt = new Date().toISOString();
+      orders[idx]._lastAddHash = newHash;
+      orders[idx]._lastAddAt = Date.now();
       persistOrders(orders);
 
       console.log(`\n${"═".repeat(50)}`);
@@ -461,13 +535,20 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     if (!EMAIL_RE.test(email) || email.length > 254) {
       return res.status(400).json({ error: "Invalid email address" });
     }
-    if (!resend) {
-      return res.status(503).json({ error: "Email service not configured" });
-    }
 
+    // Check order existence + token BEFORE checking Resend availability,
+    // otherwise a probe (no token) would leak "email service not configured"
+    // for an order ID the caller can't see. Keep 404 to avoid enumeration.
     const orders = loadOrders();
     const order = orders.find((o) => o.id === req.params.id);
     if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!checkBillToken(order, req)) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    if (!resend) {
+      return res.status(503).json({ error: "Email service not configured" });
+    }
 
     const itemLines = order.items
       .map(
