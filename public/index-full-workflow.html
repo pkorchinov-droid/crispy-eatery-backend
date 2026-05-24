@@ -864,12 +864,12 @@
   const BACKEND = window.location.origin;
   const POLL_INTERVAL = 3000;
 
-  // ── Auth: capture staff token from URL, persist in sessionStorage ──
+  // ── Auth: capture staff token from URL, persist in localStorage ──
   (function captureToken() {
     var urlParams = new URLSearchParams(window.location.search);
     var t = urlParams.get('token');
     if (t) {
-      sessionStorage.setItem('staffToken', t);
+      localStorage.setItem('staffToken', t);
       // Strip the token from the URL bar so it's not shoulder-surfed.
       urlParams.delete('token');
       var rest = urlParams.toString();
@@ -879,7 +879,7 @@
   })();
   function authHeaders(extra) {
     var h = Object.assign({}, extra || {});
-    var t = sessionStorage.getItem('staffToken');
+    var t = localStorage.getItem('staffToken');
     if (t) h['Authorization'] = 'Bearer ' + t;
     return h;
   }
