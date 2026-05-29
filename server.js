@@ -86,11 +86,14 @@ function persistOrders(orders) {
 }
 
 function nextOrderId(orders) {
-  const today = new Date().toISOString().slice(0, 10);
-  // Use max existing today-ID + 1 instead of count, so deletions never collide.
+  // IDs must be unique across the WHOLE order log, never reset per day.
+  // orders.json survives across midnight, so a per-day counter regenerated
+  // #001 every morning. The dashboard and PATCH /orders/:id address orders by
+  // id, so duplicate #001s collapsed into a single card and PATCH always hit
+  // the oldest match — orders "reappeared" on every poll and could never be
+  // cleared. Take the max over ALL orders so the number only ever climbs.
   let max = 0;
   for (const o of orders) {
-    if (!o.createdAt || !o.createdAt.startsWith(today)) continue;
     const m = typeof o.id === "string" && o.id.match(/^#(\d+)/);
     if (m) {
       const n = parseInt(m[1], 10);
