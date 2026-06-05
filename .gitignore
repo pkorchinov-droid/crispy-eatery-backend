@@ -1,4 +1,6 @@
 node_modules/
 .env
 orders.json
+menu.json
+customers.json
 .DS_Store

@@ -1,4 +1,10 @@
 require("dotenv").config();
+// Pin the process timezone to the cafe's local zone so report day-boundaries,
+// hourly buckets and date labels are computed in NZ time, not the Render
+// container's UTC.  Setting process.env.TZ before Date is used makes Node's
+// Date use this zone (getHours/getDate/etc. become Auckland-local).
+process.env.TZ = process.env.TZ || "Pacific/Auckland";
+const IS_PROD = process.env.NODE_ENV === "production";
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
@@ -11,6 +17,10 @@ const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || ""; // comma-separated allowlist; empty = same-origin only
 const ALLOW_DESTRUCTIVE = process.env.ALLOW_DESTRUCTIVE === "true";
+// Tabs are table-shared by default (anyone at the table can add to the open
+// order — the intended QR UX). Set STRICT_TAB_TOKEN=true to require the order's
+// billToken on /add-items, locking tabs to the device that created them.
+const STRICT_TAB_TOKEN = process.env.STRICT_TAB_TOKEN === "true";
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
@@ -35,16 +45,75 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
   console.log("[storage] file-only mode (set SUPABASE_URL + SUPABASE_SERVICE_KEY to enable backup)");
 }
 
-// Fire-and-forget mirror to Supabase.  Errors are logged but don't fail the request.
+// Mirror to Supabase. Returns a promise so destructive ops can await it; never
+// rejects (errors are logged) so callers can `await` it safely.
 function mirrorToSupabase(key, value) {
-  if (!supabase) return;
-  supabase
+  if (!supabase) return Promise.resolve();
+  return supabase
     .from("state")
     .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" })
     .then(({ error }) => {
       if (error) console.warn(`[storage] mirror ${key} failed:`, error.message);
-    });
+    })
+    .catch((e) => console.warn(`[storage] mirror ${key} threw:`, e && e.message));
 }
+
+// ── Payment provider registry ────────────────────────────
+// Each provider exports:
+//   name            string identifier (e.g. "stripe", "windcave", "mock")
+//   async createIntent({ orderId, amount, currency, metadata, idempotencyKey })
+//                   → { id, provider, amount, currency, clientSecret?, hostedUrl?, raw? }
+//   verifyWebhook(rawBody, signature, secret)
+//                   → { eventType, orderId, transactionId, last4, scheme, method, raw }
+//
+// `mock` always succeeds — used to build & test the order/webhook flow before
+// wiring to a real PSP.  Real providers (stripe.js, windcave.js, worldline.js)
+// can be added to the registry without touching the route handlers.
+const PAYMENT_PROVIDERS = {
+  mock: {
+    name: "mock",
+    skipSignature: true, // mock does NOT verify HMAC — must be disabled in production
+    async createIntent({ orderId, amount, currency, metadata }) {
+      const id = "pi_mock_" + crypto.randomBytes(8).toString("hex");
+      return {
+        id, provider: "mock",
+        amount, currency,
+        // Embedded providers (e.g. Stripe Elements) return a client secret the
+        // SPA uses to confirm in-place.
+        clientSecret: id + "_secret_" + crypto.randomBytes(6).toString("hex"),
+        // Redirect-style providers (e.g. Windcave PxPay) return a URL.  Mock
+        // gives both so we can test either rendering path.
+        hostedUrl: `/dashboard/mock-pay.html?intent=${id}&order=${encodeURIComponent(orderId)}`,
+        raw: { mock: true, metadata },
+      };
+    },
+    verifyWebhook(rawBody, _signature, _secret) {
+      // Mock skips HMAC. Real providers MUST verify before trusting payload.
+      const body = typeof rawBody === "string" ? JSON.parse(rawBody) : JSON.parse(rawBody.toString("utf8"));
+      const meta = (body.data && body.data.metadata) || {};
+      return {
+        eventType: body.eventType || body.type || "payment.succeeded",
+        orderId: body.orderId || meta.orderId,
+        billToken: body.billToken || meta.billToken, // echoed from createIntent metadata
+        transactionId: body.transactionId || ("tx_mock_" + crypto.randomBytes(6).toString("hex")),
+        last4: body.last4 || "4242",
+        scheme: body.scheme || "visa",
+        method: body.method || "card",
+        raw: body,
+      };
+    },
+  },
+};
+function getPaymentProvider(name) {
+  const p = PAYMENT_PROVIDERS[name];
+  if (!p) throw new Error("Unknown payment provider: " + name);
+  return p;
+}
+
+// In-process guard: order IDs with a charge currently being created. Stops two
+// concurrent /charge calls from both reaching the PSP and minting duplicate,
+// independently-chargeable intents for one order.
+const chargeInFlight = new Set();
 
 // Pull a key from Supabase.  Used at boot to seed local files after a wipe.
 async function pullFromSupabase(key) {
@@ -81,6 +150,10 @@ app.use(
     },
   })
 );
+// Webhooks must run BEFORE express.json so the handler sees the raw bytes
+// (HMAC signature verification needs them).  Each provider's webhook handler
+// will JSON.parse the raw body itself after verifying the signature.
+app.use("/webhooks", express.raw({ type: "*/*", limit: "1mb" }));
 app.use(express.json({ limit: "64kb" }));
 
 // ── Auth middleware ────────────────────────────────────────
@@ -128,7 +201,12 @@ function loadOrders() {
 
 function persistOrders(orders) {
   atomicWriteSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-  mirrorToSupabase("orders", orders);
+  // Strip ephemeral dedup state from the backup copy (not worth mirroring).
+  const forBackup = orders.map((o) => {
+    const { _lastAddHash, _lastAddAt, ...rest } = o;
+    return rest;
+  });
+  return mirrorToSupabase("orders", forBackup);
 }
 
 function nextOrderId(orders) {
@@ -286,17 +364,77 @@ function sanitizeString(s, maxLen) {
 
 function normalizeItems(items) {
   if (!Array.isArray(items)) return [];
-  return items.slice(0, 100).map((item) => ({
-    name: sanitizeString(item && item.name, 120),
-    size: sanitizeString(item && item.size, 80),
-    qty: clampQty(toFiniteNumber(item && (item.qty != null ? item.qty : item.quantity), 1)),
-    price: clampMoney(toFiniteNumber(item && item.price, 0)),
-    notes: sanitizeString(item && item.notes, 300),
-    // lineId is always server-generated — never trust client input. If a
-    // customer harvested a lineId from their own bill (which exposes them)
-    // and reused it via /add-items, two rows could collide on dashboard state.
-    lineId: crypto.randomBytes(8).toString("hex"),
-  }));
+  return items.slice(0, 100).map((item) => {
+    const id = typeof (item && item.id) === "string" ? sanitizeString(item.id, 60) : "";
+    return {
+      // Menu item id, when the client sends one (POST /order does). Kept so the
+      // server can price-check against the authoritative menu. undefined (not "")
+      // so it's omitted from stored JSON when absent (e.g. /add-items).
+      id: id || undefined,
+      name: sanitizeString(item && item.name, 120),
+      size: sanitizeString(item && item.size, 80),
+      qty: clampQty(toFiniteNumber(item && (item.qty != null ? item.qty : item.quantity), 1)),
+      price: clampMoney(toFiniteNumber(item && item.price, 0)),
+      notes: sanitizeString(item && item.notes, 300),
+      // lineId is always server-generated — never trust client input. If a
+      // customer harvested a lineId from their own bill (which exposes them)
+      // and reused it via /add-items, two rows could collide on dashboard state.
+      lineId: crypto.randomBytes(8).toString("hex"),
+    };
+  });
+}
+
+// Authoritative minimum price for a menu item (base price, or cheapest size).
+function itemMinPrice(it) {
+  if (!it) return null;
+  if (typeof it.price === "number") return it.price;
+  if (it.sizes && typeof it.sizes === "object") {
+    const vals = Object.values(it.sizes).filter((v) => typeof v === "number");
+    if (vals.length) return Math.min(...vals);
+  }
+  return null;
+}
+
+// Resolve an order line to its menu item: by id (preferred) or by stripped name.
+function findMenuItem(menu, line) {
+  if (line.id) {
+    const f = findItem(menu, line.id);
+    if (f) return f.item;
+  }
+  if (line.name) {
+    const base = String(line.name).replace(/\s*\(.*\)\s*$/, "").trim().toLowerCase();
+    for (const slug of (menu.categoryOrder || [])) {
+      const cat = menu.categories[slug];
+      if (!cat || !Array.isArray(cat.items)) continue;
+      const hit = cat.items.find((x) => String(x.name || "").trim().toLowerCase() === base);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+// Reject client-supplied prices that fall BELOW the menu's legitimate minimum
+// (add-ons/sizes only ever ADD, so the real charged price is always >= min).
+// Returns an error string on violation, or null if all items are acceptable.
+// When the menu is empty (not yet loaded) validation is skipped so we never
+// hard-fail ordering on a cold/missing menu.
+function priceViolation(items, menu) {
+  if (!menu || !(menu.categoryOrder || []).length) return null;
+  for (const it of items) {
+    const mi = findMenuItem(menu, it);
+    if (!mi) {
+      // A client that supplied an id we can't resolve is suspicious — reject.
+      // Lines without an id (legacy /add-items) are left alone to avoid breaking
+      // the shared-tab flow on a renamed/removed dish.
+      if (it.id) return `Unknown menu item: ${it.name || it.id}`;
+      continue;
+    }
+    const min = itemMinPrice(mi);
+    if (min != null && it.price < min - 0.01) {
+      return `Price too low for "${mi.name}" (minimum $${min.toFixed(2)})`;
+    }
+  }
+  return null;
 }
 
 // Stable hash of an items array — used to dedup near-simultaneous /add-items submits.
@@ -360,11 +498,23 @@ app.post("/order", (req, res) => {
         return;
       }
 
+      // Reject forged/underpriced items against the authoritative menu.
+      const pv = priceViolation(normalizedItems, loadMenu());
+      if (pv) {
+        res.status(400).json({ error: pv });
+        return;
+      }
+
       const orders = loadOrders();
       const order = {
         id: nextOrderId(orders),
         billToken: crypto.randomBytes(24).toString("hex"),
-        tableNumber: sanitizeString(String(tableNumber || "?"), 8) || "?",
+        // Only coerce primitives; an object/array body value would otherwise
+        // become garbage like "[object " — fall back to "?" instead.
+        tableNumber: sanitizeString(
+          (typeof tableNumber === "string" || typeof tableNumber === "number") ? String(tableNumber) : "?",
+          8
+        ) || "?",
         guestCount: clampQty(toFiniteNumber(guestCount, 1)),
         items: normalizedItems,
         phoneNumber: sanitizeString(phoneNumber, 30),
@@ -374,6 +524,7 @@ app.post("/order", (req, res) => {
           0
         ),
         status: "received",
+        paymentStatus: "unpaid",   // unpaid | pending | paid | failed | refunded
         createdAt: new Date().toISOString(),
       };
       order.total = clampMoney(order.total);
@@ -464,6 +615,7 @@ app.get("/orders/by-table/:table", (req, res) => {
       itemCount: o.items.length,
       total: o.total,
       status: o.status,
+      paymentStatus: o.paymentStatus || "unpaid",
       createdAt: o.createdAt,
     })),
   });
@@ -503,9 +655,13 @@ app.patch("/menu/items/:id", requireStaff, (req, res) => {
             // If they set a fixed price, drop sizes (mutually exclusive)
             if ("price" in body && !("sizes" in body)) delete it.sizes;
           } else if (k === "sizes") {
-            if (body.sizes && typeof body.sizes === "object") {
+            if (body.sizes && typeof body.sizes === "object" && !Array.isArray(body.sizes)) {
+              const keys = Object.keys(body.sizes).filter((sk) => sk !== "__proto__" && sk !== "constructor" && sk !== "prototype");
+              if (keys.length === 0) {
+                return res.status(400).json({ error: "sizes must have at least one entry" });
+              }
               const cleaned = {};
-              for (const sk of Object.keys(body.sizes)) {
+              for (const sk of keys) {
                 const n = Number(body.sizes[sk]);
                 if (!Number.isFinite(n) || n < 0 || n > 9999) {
                   return res.status(400).json({ error: "Invalid size price for " + sk });
@@ -560,11 +716,14 @@ app.post("/menu/items", requireStaff, (req, res) => {
 
       const item = { id, name };
       // Price OR sizes
-      if (body.sizes && typeof body.sizes === "object") {
+      const sizeKeys = (body.sizes && typeof body.sizes === "object" && !Array.isArray(body.sizes))
+        ? Object.keys(body.sizes).filter((sk) => sk !== "__proto__" && sk !== "constructor" && sk !== "prototype")
+        : [];
+      if (sizeKeys.length > 0) {
         const cleaned = {};
-        for (const sk of Object.keys(body.sizes)) {
+        for (const sk of sizeKeys) {
           const n = Number(body.sizes[sk]);
-          if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "Invalid size price" });
+          if (!Number.isFinite(n) || n < 0 || n > 9999) return res.status(400).json({ error: "Invalid size price for " + sk });
           cleaned[String(sk).slice(0, 20)] = Math.round(n * 100) / 100;
         }
         item.sizes = cleaned;
@@ -790,6 +949,28 @@ app.get("/orders/:id", (req, res) => {
     total: order.total,
     status: order.status,
     createdAt: order.createdAt,
+    // Payment fields the customer SPA needs to drive a Pay button + read
+    // confirmation back.  Sensitive bits (transactionId, authCode) are kept
+    // server-side; only the user-facing slice surfaces here.
+    paymentStatus: order.paymentStatus || "unpaid",
+    paymentIntent: order.paymentIntent
+      ? {
+          id: order.paymentIntent.id,
+          provider: order.paymentIntent.provider,
+          amount: order.paymentIntent.amount,
+          currency: order.paymentIntent.currency,
+          clientSecret: order.paymentIntent.clientSecret,
+          hostedUrl: order.paymentIntent.hostedUrl,
+        }
+      : null,
+    payment: order.payment
+      ? {
+          method: order.payment.method,
+          scheme: order.payment.scheme,
+          last4: order.payment.last4,
+          capturedAt: order.payment.capturedAt,
+        }
+      : null,
   });
 });
 
@@ -810,9 +991,32 @@ app.post("/orders/:id/add-items", (req, res) => {
         return;
       }
 
+      // If a bill token is supplied it MUST match (validates the owning device);
+      // in STRICT_TAB_TOKEN mode a matching token is required for every add.
+      const tokenSupplied = !!(req.query && req.query.t) || !!(req.body && req.body.token);
+      if ((STRICT_TAB_TOKEN || tokenSupplied) && !checkBillToken(orders[idx], req)) {
+        res.status(404).json({ error: "Order not found" });
+        return;
+      }
+
+      // Can't append to an order that's mid-payment or already paid — the
+      // captured/authorised amount would no longer match the order total.
+      if (orders[idx].paymentStatus === "pending" || orders[idx].paymentStatus === "paid") {
+        res.status(409).json({ error: "Order is being paid or already paid — cannot add items" });
+        return;
+      }
+
       const newItems = normalizeItems(req.body && req.body.items);
       if (newItems.length === 0) {
         res.status(400).json({ error: "No items to add" });
+        return;
+      }
+
+      // Reject forged/underpriced additions against the menu (best-effort:
+      // /add-items lines carry no id, so this matches by name).
+      const pv = priceViolation(newItems, loadMenu());
+      if (pv) {
+        res.status(400).json({ error: pv });
         return;
       }
 
@@ -1011,6 +1215,270 @@ app.post("/orders/:id/email-bill", async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────
+// ── PAYMENTS (provider-agnostic scaffolding) ──────────────
+// ──────────────────────────────────────────────────────────
+
+// POST /orders/:id/charge — initiate a payment for an order.
+//
+// Public (gated by billToken, like the bill lookup).  Body:
+//   { provider?: "mock"|"stripe"|"windcave"|...,  returnUrl?: string }
+//
+// Idempotent: if the order already has a pending intent, returns that one
+// instead of creating a new one.  Refuses if the order is already paid.
+//
+// Response shape is provider-agnostic.  Embedded providers (Stripe Elements)
+// use `clientSecret`; redirect providers (Windcave PxPay, Worldline) use
+// `hostedUrl`.  The customer SPA picks whichever is present.
+app.post("/orders/:id/charge", async (req, res) => {
+  try {
+    const orders = loadOrders();
+    const idx = orders.findIndex((o) => o.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: "Order not found" });
+    const order = orders[idx];
+    if (!checkBillToken(order, req)) return res.status(404).json({ error: "Order not found" });
+
+    // Fast-path guards on the snapshot (re-checked authoritatively under the lock below).
+    if (order.paymentStatus === "paid") {
+      return res.status(409).json({ error: "Order already paid", paymentStatus: order.paymentStatus });
+    }
+    if (order.paymentStatus === "pending" && order.paymentIntent) {
+      return res.json({
+        success: true,
+        intent: order.paymentIntent,
+        client: { clientSecret: order.paymentIntent.clientSecret, hostedUrl: order.paymentIntent.hostedUrl },
+        reused: true,
+      });
+    }
+
+    // Concurrency guard: only one in-flight charge per order.
+    if (chargeInFlight.has(order.id)) {
+      return res.status(409).json({ error: "A charge is already in progress for this order" });
+    }
+    chargeInFlight.add(order.id);
+    try {
+      const providerName = (req.body && req.body.provider) || "mock";
+      const provider = getPaymentProvider(providerName);
+
+      const amount = Number(order.total || 0);
+      if (!(amount > 0)) return res.status(400).json({ error: "Order total must be > 0" });
+
+      const idempotencyKey = "ord_" + order.id.replace(/[^A-Za-z0-9]/g, "") + "_" +
+        (order.paymentRetryCount || 0);
+
+      const created = await provider.createIntent({
+        orderId: order.id,
+        amount,
+        currency: "NZD",
+        idempotencyKey,
+        metadata: {
+          orderId: order.id,
+          tableNumber: order.tableNumber,
+          billToken: order.billToken, // round-trip in webhook for double-check
+        },
+      });
+
+      // Persist intent under the lock, RE-CHECKING state on the fresh copy so a
+      // concurrent webhook 'paid' or an existing pending intent isn't clobbered.
+      const outcome = await new Promise((resolve, reject) => {
+        withWriteLock(() => {
+          try {
+            const all = loadOrders();
+            const j = all.findIndex((o) => o.id === order.id);
+            if (j === -1) return reject(new Error("Order disappeared"));
+            const cur = all[j];
+            if (cur.paymentStatus === "paid") return resolve({ kind: "paid" });
+            if (cur.paymentStatus === "pending" && cur.paymentIntent) {
+              return resolve({ kind: "reused", intent: cur.paymentIntent });
+            }
+            cur.paymentStatus = "pending";
+            cur.paymentIntent = {
+              id: created.id,
+              provider: created.provider,
+              amount: created.amount,
+              currency: created.currency,
+              clientSecret: created.clientSecret || null,
+              hostedUrl: created.hostedUrl || null,
+              createdAt: new Date().toISOString(),
+            };
+            cur.paymentRetryCount = (cur.paymentRetryCount || 0) + 1;
+            persistOrders(all);
+            resolve({ kind: "created" });
+          } catch (e) { reject(e); }
+        });
+      });
+
+      // NOTE: on 'paid'/'reused' the intent we just created at the PSP is now
+      // orphaned. Real adapters should cancel created.id in these branches.
+      if (outcome.kind === "paid") {
+        return res.status(409).json({ error: "Order already paid", paymentStatus: "paid" });
+      }
+      if (outcome.kind === "reused") {
+        return res.json({
+          success: true,
+          intent: outcome.intent,
+          client: { clientSecret: outcome.intent.clientSecret, hostedUrl: outcome.intent.hostedUrl },
+          reused: true,
+        });
+      }
+
+      console.log(`[pay] ${provider.name} intent ${created.id} for order ${order.id} ($${amount.toFixed(2)})`);
+      res.json({
+        success: true,
+        intent: {
+          id: created.id, provider: created.provider,
+          amount: created.amount, currency: created.currency,
+        },
+        client: { clientSecret: created.clientSecret || null, hostedUrl: created.hostedUrl || null },
+      });
+    } finally {
+      chargeInFlight.delete(order.id);
+    }
+  } catch (err) {
+    console.error("[pay] charge error:", err.message);
+    res.status(500).json({ error: "Failed to create payment intent" });
+  }
+});
+
+// POST /webhooks/:provider — receive payment confirmation.
+//
+// Public, signature-verified inside the provider adapter.  Must run BEFORE
+// express.json so the raw bytes are available for HMAC (configured at the top
+// of this file via app.use("/webhooks", express.raw(...))).
+app.post("/webhooks/:provider", (req, res) => {
+  const providerName = req.params.provider;
+  let event;
+  try {
+    const provider = getPaymentProvider(providerName);
+    // Security: a provider that skips signature verification (mock) must never
+    // be reachable in production — otherwise anyone can mark any order paid.
+    if (provider.skipSignature && IS_PROD) {
+      console.warn(`[pay] refused unsigned webhook for '${providerName}' in production`);
+      return res.status(403).json({ error: "Provider not enabled" });
+    }
+    const sig = req.get("x-webhook-signature") || req.get("stripe-signature") || "";
+    const secret = process.env[("WEBHOOK_SECRET_" + providerName).toUpperCase()] || "";
+    // Real (signature-verifying) providers must have a configured secret —
+    // refuse rather than silently accept unverified events on misconfig.
+    if (!provider.skipSignature && !secret) {
+      console.error(`[pay] webhook secret missing for '${providerName}' (set WEBHOOK_SECRET_${providerName.toUpperCase()})`);
+      return res.status(503).json({ error: "Webhook not configured" });
+    }
+    event = provider.verifyWebhook(req.body, sig, secret);
+  } catch (err) {
+    console.error(`[pay] webhook ${providerName} verify failed:`, err.message);
+    return res.status(400).json({ error: "Invalid signature" });
+  }
+
+  if (!event || !event.orderId) {
+    return res.status(400).json({ error: "No orderId in webhook payload" });
+  }
+
+  withWriteLock(() => {
+    try {
+      const all = loadOrders();
+      const j = all.findIndex((o) => o.id === event.orderId);
+      if (j === -1) {
+        console.warn(`[pay] webhook for unknown order ${event.orderId}`);
+        return res.status(200).json({ received: true, note: "unknown order" });
+      }
+      const o = all[j];
+
+      // Defense-in-depth: if the provider echoed our metadata billToken, it
+      // must match the order's. Real providers always echo it (set at
+      // createIntent); only enforce when present so mock tests can omit it.
+      if (event.billToken && o.billToken && !safeEqual(String(event.billToken), o.billToken)) {
+        console.warn(`[pay] webhook billToken mismatch for order ${o.id} — rejecting`);
+        return res.status(400).json({ error: "Token mismatch" });
+      }
+
+      if (event.eventType === "payment.succeeded" || event.eventType === "succeeded") {
+        if (o.paymentStatus === "paid") {
+          // Idempotent: already processed.
+          return res.status(200).json({ received: true, deduped: true });
+        }
+        o.paymentStatus = "paid";
+        o.payment = {
+          transactionId: event.transactionId,
+          method: event.method || "card",
+          scheme: event.scheme || null,
+          last4: event.last4 || null,
+          authCode: event.authCode || null,
+          provider: providerName,
+          capturedAt: new Date().toISOString(),
+        };
+        persistOrders(all);
+        console.log(`[pay] ${providerName} order ${o.id} → paid (${event.scheme || "card"} •••${event.last4 || "????"})`);
+        return res.status(200).json({ received: true, processed: true });
+      }
+
+      if (event.eventType === "payment.failed" || event.eventType === "failed") {
+        // Never downgrade an already-captured payment — providers can deliver
+        // a stale 'failed' after a 'succeeded' (out-of-order webhooks).
+        if (o.paymentStatus === "paid" || o.paymentStatus === "refunded") {
+          return res.status(200).json({ received: true, deduped: true, note: "already settled" });
+        }
+        o.paymentStatus = "failed";
+        if (o.paymentIntent) o.paymentIntent.failedAt = new Date().toISOString();
+        persistOrders(all);
+        console.log(`[pay] ${providerName} order ${o.id} → failed`);
+        return res.status(200).json({ received: true, processed: true });
+      }
+
+      if (event.eventType === "payment.refunded" || event.eventType === "refunded") {
+        // Only a previously-paid order can be refunded.
+        if (o.paymentStatus !== "paid") {
+          return res.status(200).json({ received: true, note: "ignored, not paid" });
+        }
+        o.paymentStatus = "refunded";
+        if (o.payment) o.payment.refundedAt = new Date().toISOString();
+        persistOrders(all);
+        return res.status(200).json({ received: true, processed: true });
+      }
+
+      // Unknown event type — log and 200 so the provider doesn't retry forever.
+      console.warn(`[pay] webhook ${providerName} unhandled eventType: ${event.eventType}`);
+      res.status(200).json({ received: true, note: "unhandled event" });
+    } catch (err) {
+      console.error("[pay] webhook handler error:", err.message);
+      res.status(500).json({ error: "Webhook handler failed" });
+    }
+  });
+});
+
+// POST /orders/:id/simulate-payment — staff-only, fakes a successful webhook.
+// Used to test the order → paid flow end-to-end before real PSP integration.
+app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
+  const orders = loadOrders();
+  const order = orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  withWriteLock(() => {
+    try {
+      const all = loadOrders();
+      const j = all.findIndex((o) => o.id === order.id);
+      if (j === -1) { res.status(404).json({ error: "Order not found" }); return; }
+      const o = all[j];
+      o.paymentStatus = "paid";
+      o.payment = {
+        transactionId: "tx_sim_" + crypto.randomBytes(6).toString("hex"),
+        method: "card",
+        scheme: req.body && req.body.scheme || "visa",
+        last4: req.body && req.body.last4 || "4242",
+        authCode: "SIM" + crypto.randomBytes(3).toString("hex").toUpperCase(),
+        provider: "simulated",
+        capturedAt: new Date().toISOString(),
+      };
+      persistOrders(all);
+      console.log(`[pay] simulated payment for ${o.id}`);
+      res.json({ success: true, order: o });
+    } catch (err) {
+      console.error("[pay] simulate error:", err.message);
+      res.status(500).json({ error: "Failed to simulate payment" });
+    }
+  });
+});
+
+// ──────────────────────────────────────────────────────────
 // ── REPORTS ────────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────
 
@@ -1127,24 +1595,48 @@ app.delete("/orders", requireStaff, (req, res) => {
       error: "Add header X-Confirm-Wipe: yes to confirm destruction",
     });
   }
-  withWriteLock(() => {
-    persistOrders([]);
+  withWriteLock(async () => {
+    await persistOrders([]); // await the Supabase mirror so the wipe is durable before we ack
     console.log("[orders] All orders cleared");
     res.json({ success: true, message: "All orders cleared" });
   });
 });
 
+// ── Terminal error handler ─────────────────────────────────
+// Maps middleware-layer errors (multer uploads, body-parser size/parse) to
+// clean JSON instead of Express's default HTML 500. Must be registered after
+// all routes.
+app.use((err, req, res, _next) => {
+  if (res.headersSent) return _next(err);
+  if (err && err.name === "MulterError") {
+    const code = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    return res.status(code).json({ error: "Upload error: " + err.message });
+  }
+  if (err && typeof err.message === "string" && /Only image files/.test(err.message)) {
+    return res.status(415).json({ error: err.message });
+  }
+  if (err && (err.type === "entity.too.large" || err.status === 413)) {
+    return res.status(413).json({ error: "Payload too large" });
+  }
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+  console.error("[error]", err && err.message);
+  res.status(500).json({ error: "Internal server error" });
+});
+
 // ── Boot-time Supabase restore ───────────────────────────
 // If Supabase is configured, pull each blob and seed the corresponding local
-// file when (a) the file doesn't exist on disk (post-Render-wipe scenario)
-// or (b) the remote is newer than the local copy. The local file remains the
-// runtime source of truth — this just gives us survival across deploys.
+// file when the local file is missing or empty (the post-Render-wipe scenario,
+// since menu.json/orders.json/customers.json are gitignored and never ship).
+// A populated local file is trusted as-is. The local file remains the runtime
+// source of truth — this just gives us survival across deploys.
 async function restoreFromSupabase() {
   if (!supabase) return;
   const targets = [
-    { key: "menu",      file: MENU_FILE },
-    { key: "orders",    file: ORDERS_FILE },
-    { key: "customers", file: CUSTOMERS_FILE },
+    { key: "menu",      file: MENU_FILE,      valid: (v) => v && typeof v === "object" && !Array.isArray(v) && v.categories } ,
+    { key: "orders",    file: ORDERS_FILE,    valid: Array.isArray },
+    { key: "customers", file: CUSTOMERS_FILE, valid: Array.isArray },
   ];
   for (const t of targets) {
     try {
@@ -1153,6 +1645,10 @@ async function restoreFromSupabase() {
       if (exists && !empty) continue; // local already has data — trust it
       const remote = await pullFromSupabase(t.key);
       if (remote == null) continue; // remote also empty — nothing to restore
+      if (!t.valid(remote)) {        // guard against a malformed/corrupt blob
+        console.warn(`[storage] restore ${t.key} skipped — remote blob has unexpected shape`);
+        continue;
+      }
       atomicWriteSync(t.file, JSON.stringify(remote, null, 2));
       console.log(`[storage] restored ${t.key} from Supabase`);
     } catch (e) {
@@ -1181,6 +1677,9 @@ async function boot() {
   console.log(`     GET    /orders/:id                    (public)  bill lookup`);
   console.log(`     GET    /orders/by-table/:table        (public)  open-tab detection (no PII)`);
   console.log(`     POST   /orders/:id/email-bill         (public)  email bill`);
+  console.log(`     POST   /orders/:id/charge             (public)  create payment intent (billToken)`);
+  console.log(`     POST   /webhooks/:provider            (public, signed)  payment confirmation`);
+  console.log(`     POST   /orders/:id/simulate-payment   (staff)   test the paid flow without a PSP`);
   console.log(`     GET    /menu                          (public)  current menu for customer SPA`);
   console.log(`     GET    /orders                        (staff)`);
   console.log(`     PATCH  /orders/:id                    (staff)`);
@@ -1209,7 +1708,10 @@ function shutdown(signal) {
   const t = setTimeout(() => process.exit(0), 5000);
   writeChain.finally(() => {
     clearTimeout(t);
-    server.close(() => process.exit(0));
+    // `server` is undefined if a signal arrives during boot() (while
+    // restoreFromSupabase awaits network) — guard before closing.
+    if (server) server.close(() => process.exit(0));
+    else process.exit(0);
   });
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
