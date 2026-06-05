@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crispy Eatery — Menu Admin</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1510; color: #f5f0e8; min-height: 100vh; padding-bottom: 60px;
+  }
+  /* ── Header ─────────────────────────────────── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; background: #2a2318; border-bottom: 2px solid #b5753a;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 22px; font-weight: 700; color: #e8c477; letter-spacing: 1px;
+  }
+  .logo span {
+    font-weight: 400; color: #c49a5c; font-size: 14px;
+    margin-left: 10px; text-transform: uppercase; letter-spacing: 3px;
+  }
+  .header-actions { display: flex; gap: 14px; align-items: center; }
+  .save-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #a09080; padding: 5px 12px;
+    background: #352c20; border-radius: 6px; min-width: 100px; justify-content: center;
+  }
+  .save-status.saving { color: #e8c477; }
+  .save-status.saved { color: #4caf50; }
+  .save-status.error { color: #ef5350; }
+  .save-status .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .save-status.saving .dot { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .header-actions a {
+    color: #c49a5c; text-decoration: none; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    padding: 7px 14px; border: 1px solid #4a3d2e; border-radius: 6px;
+    transition: all 0.2s;
+  }
+  .header-actions a:hover { border-color: #b5753a; color: #e8c477; }
+
+  /* ── Category tabs ─────────────────────────── */
+  .tabs {
+    display: flex; gap: 4px; padding: 12px 24px; background: #1a1510;
+    overflow-x: auto; border-bottom: 1px solid #2a2318;
+    position: sticky; top: 70px; z-index: 90;
+  }
+  .tab {
+    padding: 8px 18px; background: transparent; color: #a09080;
+    border: 1px solid #3d3428; border-radius: 8px;
+    font-size: 13px; cursor: pointer; white-space: nowrap;
+    text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s;
+  }
+  .tab:hover { color: #c49a5c; border-color: #4a3d2e; }
+  .tab.active { background: #b5753a; border-color: #b5753a; color: #fff; font-weight: 600; }
+
+  /* ── Category body ─────────────────────────── */
+  .category-head {
+    padding: 24px 24px 12px; display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .category-title {
+    font-family: Georgia, serif; font-size: 28px; color: #e8c477;
+    font-weight: 400; font-style: italic;
+  }
+  .category-subtitle {
+    font-size: 11px; color: #8a7a68; margin-top: 4px;
+    text-transform: uppercase; letter-spacing: 2px;
+  }
+  .btn-add {
+    background: #b5753a; color: #fff; border: none;
+    padding: 9px 18px; border-radius: 8px; font-size: 12px; font-weight: 700;
+    cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+  .btn-add:hover { background: #c4823e; transform: scale(1.02); }
+
+  /* ── Items list ─────────────────────────────── */
+  .items { padding: 0 24px; }
+  .item {
+    background: #2a2318; border: 1px solid #3d3428; border-radius: 10px;
+    margin-bottom: 8px; padding: 14px 16px; display: flex; gap: 12px;
+    transition: all 0.2s;
+  }
+  .item.dragging { opacity: 0.4; }
+  .item.drag-over { border-top: 2px solid #e8c477; }
+  .item.sold-out { opacity: 0.55; }
+  .item.editing { background: #352c20; border-color: #b5753a; }
+
+  .drag-handle {
+    cursor: grab; color: #5a4a38; font-size: 18px;
+    display: flex; align-items: center; padding: 0 4px; user-select: none;
+  }
+  .drag-handle:hover { color: #c49a5c; }
+  .drag-handle:active { cursor: grabbing; }
+
+  .item-main { flex: 1; min-width: 0; }
+  .item-row1 { display: flex; align-items: center; gap: 10px; }
+  .item-name {
+    flex: 1; font-size: 16px; font-weight: 600; color: #f0e8d8; line-height: 1.3;
+  }
+  .item-price {
+    color: #e8c477; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .item-tags { display: flex; gap: 4px; }
+  .item-tag {
+    font-size: 9px; padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700;
+  }
+  .item-tag.chef { background: #2a2318; color: #e8c477; border: 1px solid #b5753a; }
+  .item-tag.popular { background: #c25a3a; color: #fff; }
+  .item-tag.veg { color: #7a8362; border: 1px solid #7a8362; }
+
+  .item-desc {
+    font-size: 12.5px; color: #8a7a68; margin-top: 4px; line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .item-id {
+    font-size: 10px; color: #5a4a38; font-family: monospace; margin-top: 4px;
+  }
+
+  .item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .toggle-soldout {
+    display: flex; align-items: center; gap: 7px; cursor: pointer;
+    padding: 6px 10px; background: #1a1510; border: 1px solid #3d3428; border-radius: 6px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #8a7a68;
+    transition: all 0.2s;
+  }
+  .toggle-soldout:hover { border-color: #c25a3a; color: #c25a3a; }
+  .toggle-soldout.on { background: #c25a3a; border-color: #c25a3a; color: #fff; }
+  .toggle-soldout input { accent-color: #fff; }
+  .btn-icon {
+    background: transparent; border: 1px solid #3d3428; color: #8a7a68;
+    width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+  }
+  .btn-icon:hover { border-color: #c49a5c; color: #e8c477; }
+  .btn-icon.danger:hover { border-color: #ef5350; color: #ef5350; }
+
+  /* ── Inline editor ───────────────────────────── */
+  .editor { width: 100%; padding-top: 10px; border-top: 1px dashed #4a3d2e; margin-top: 10px; }
+  .field { margin-bottom: 10px; }
+  .field label {
+    display: block; font-size: 10px; color: #8a7a68; margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .field input, .field textarea {
+    width: 100%; background: #1a1510; border: 1px solid #4a3d2e; color: #f5f0e8;
+    padding: 8px 10px; border-radius: 6px; font-size: 14px;
+    font-family: inherit; resize: vertical;
+  }
+  .field input:focus, .field textarea:focus { outline: none; border-color: #b5753a; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row > .field { flex: 1; }
+  .editor-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .btn-secondary, .btn-primary {
+    padding: 7px 14px; border-radius: 6px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; cursor: pointer; border: none;
+  }
+  .btn-secondary { background: transparent; border: 1px solid #4a3d2e; color: #a09080; }
+  .btn-secondary:hover { border-color: #8a7a68; color: #f5f0e8; }
+  .btn-primary { background: #b5753a; color: #fff; }
+  .btn-primary:hover { background: #c4823e; }
+  .tag-picker { display: flex; gap: 6px; }
+  .tag-picker label {
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+    padding: 6px 10px; border: 1px solid #4a3d2e; border-radius: 6px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #a09080;
+  }
+  .tag-picker label:hover { border-color: #c49a5c; color: #e8c477; }
+  .tag-picker input { accent-color: #e8c477; }
+
+  /* ── Modal (add item) ───────────────────────── */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center; z-index: 200;
+  }
+  .modal {
+    background: #2a2318; border: 1px solid #4a3d2e; border-radius: 12px;
+    padding: 24px; max-width: 460px; width: calc(100% - 32px);
+  }
+  .modal h2 {
+    font-family: Georgia, serif; font-size: 22px; color: #e8c477;
+    font-weight: 400; font-style: italic; margin-bottom: 16px;
+  }
+  .modal .field select {
+    width: 100%; background: #1a1510; border: 1px solid #4a3d2e; color: #f5f0e8;
+    padding: 8px 10px; border-radius: 6px; font-size: 14px; font-family: inherit;
+  }
+
+  /* ── Empty state ───────────────────────────── */
+  .empty { padding: 60px 20px; text-align: center; color: #5a4a38; }
+  .empty h3 { font-family: Georgia, serif; font-size: 20px; color: #8a7a68; font-style: italic; margin-bottom: 6px; }
+
+  /* ── Notice banner ────────────────────────── */
+  .notice {
+    background: #3d3020; border-left: 3px solid #e8a040;
+    padding: 10px 16px; margin: 12px 24px 0; border-radius: 0 6px 6px 0;
+    font-size: 12px; color: #e8a040; line-height: 1.5;
+  }
+
+  @media (max-width: 768px) {
+    header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+    .tabs, .category-head, .items, .notice { padding-left: 12px; padding-right: 12px; }
+    .item { flex-wrap: wrap; }
+    .item-row1 { flex-wrap: wrap; }
+    .item-actions { width: 100%; justify-content: flex-end; margin-top: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Crispy Eatery <span>Menu Admin</span></div>
+  <div class="header-actions">
+    <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
+    <a href="../dashboard" id="kitchenLink">Kitchen ↗</a>
+    <div class="save-status saved" id="saveStatus">
+      <span class="dot"></span><span id="saveLabel">Loaded</span>
+    </div>
+  </div>
+</header>
+
+<div class="tabs" id="tabs"></div>
+
+<div class="notice">
+  ⚠️ Heads-up: menu edits live on the backend's runtime disk. They survive day-to-day,
+  but a backend redeploy resets the menu to its seed file. Tell Pavel before redeploying.
+</div>
+
+<div id="categoryHead" class="category-head"></div>
+<div id="items" class="items"></div>
+
+<script>
+(function() {
+  // ── Config & auth ─────────────────────────────
+  // Same pattern as the kitchen dashboard — token from URL ?token=, persisted to localStorage.
+  var BACKEND = window.location.origin;
+  var token = null;
+  try {
+    var url = new URL(window.location.href);
+    var fromUrl = url.searchParams.get("token");
+    if (fromUrl) {
+      token = fromUrl;
+      try { localStorage.setItem("staffToken", token); } catch (e) {}
+      url.searchParams.delete("token");
+      history.replaceState({}, "", url.pathname + (url.searchParams.toString() ? "?" + url.searchParams : ""));
+    } else {
+      try { token = localStorage.getItem("staffToken"); } catch (e) {}
+    }
+  } catch (e) {}
+
+  if (!token) {
+    document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#e8c477;font-family:Georgia,serif;font-size:18px;font-style:italic;">No staff token. Open this page via the token-bearing link from the kitchen dashboard.</div>';
+    return;
+  }
+
+  function authHeaders(extra) {
+    var h = { "Authorization": "Bearer " + token };
+    if (extra) for (var k in extra) h[k] = extra[k];
+    return h;
+  }
+
+  // Preserve the kitchen-link with token
+  var kitchenLink = document.getElementById("kitchenLink");
+  if (kitchenLink) kitchenLink.href = "../dashboard?token=" + encodeURIComponent(token);
+
+  // ── State ─────────────────────────────────────
+  var menu = null;
+  var activeSlug = null;
+
+  // ── Save status indicator ─────────────────────
+  var saveStatus = document.getElementById("saveStatus");
+  var saveLabel = document.getElementById("saveLabel");
+  function setStatus(state, label) {
+    saveStatus.classList.remove("saving", "saved", "error");
+    saveStatus.classList.add(state);
+    saveLabel.textContent = label;
+  }
+
+  // ── Fetch & render menu ───────────────────────
+  function fetchMenu() {
+    setStatus("saving", "Loading…");
+    return fetch(BACKEND + "/menu", { headers: authHeaders() })
+      .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function(m) {
+        menu = m;
+        if (!activeSlug || !menu.categories[activeSlug]) activeSlug = menu.categoryOrder[0];
+        renderTabs(); renderCategory();
+        setStatus("saved", "Loaded · v" + (menu.version || "?"));
+      })
+      .catch(function(e) { setStatus("error", "Load failed"); console.error(e); });
+  }
+
+  function renderTabs() {
+    var tabs = document.getElementById("tabs");
+    tabs.innerHTML = "";
+    menu.categoryOrder.forEach(function(slug) {
+      var c = menu.categories[slug];
+      var btn = document.createElement("button");
+      btn.className = "tab" + (slug === activeSlug ? " active" : "");
+      var n = (c && c.items ? c.items.length : 0);
+      btn.textContent = (c && c.title || slug) + " · " + n;
+      btn.onclick = function() { activeSlug = slug; renderTabs(); renderCategory(); };
+      tabs.appendChild(btn);
+    });
+  }
+
+  function renderCategory() {
+    var c = menu.categories[activeSlug];
+    var head = document.getElementById("categoryHead");
+    head.innerHTML = "";
+    var titleDiv = document.createElement("div");
+    var h = document.createElement("h2"); h.className = "category-title"; h.textContent = c.title || activeSlug;
+    titleDiv.appendChild(h);
+    if (c.subtitle) {
+      var sub = document.createElement("div"); sub.className = "category-subtitle"; sub.textContent = c.subtitle;
+      titleDiv.appendChild(sub);
+    }
+    head.appendChild(titleDiv);
+    var addBtn = document.createElement("button");
+    addBtn.className = "btn-add"; addBtn.textContent = "+ Add item";
+    addBtn.onclick = openAddModal;
+    head.appendChild(addBtn);
+
+    var items = document.getElementById("items");
+    items.innerHTML = "";
+    if (!c.items || c.items.length === 0) {
+      var e = document.createElement("div"); e.className = "empty";
+      e.innerHTML = '<h3>Empty category</h3><div>Click "Add item" to populate it.</div>';
+      items.appendChild(e);
+      return;
+    }
+    c.items.forEach(function(it, idx) { items.appendChild(renderItem(it, idx, c)); });
+  }
+
+  function fmtPrice(n) { return "$" + Number(n).toFixed(2); }
+  function priceLabel(it) {
+    if (it.sizes) {
+      var pairs = Object.keys(it.sizes).map(function(k) { return k + " " + fmtPrice(it.sizes[k]); });
+      return pairs.join(" / ");
+    }
+    if (typeof it.price === "number") return fmtPrice(it.price);
+    return "—";
+  }
+
+  // ── Render one item row ───────────────────────
+  function renderItem(it, idx, cat) {
+    var row = document.createElement("div");
+    row.className = "item" + (it.outOfStock ? " sold-out" : "");
+    row.draggable = true; row.dataset.id = it.id; row.dataset.idx = idx;
+
+    // drag-and-drop reorder
+    row.addEventListener("dragstart", function(e) {
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", it.id);
+    });
+    row.addEventListener("dragend", function() {
+      row.classList.remove("dragging");
+      document.querySelectorAll(".item.drag-over").forEach(function(el) { el.classList.remove("drag-over"); });
+    });
+    row.addEventListener("dragover", function(e) {
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      document.querySelectorAll(".item.drag-over").forEach(function(el) { el.classList.remove("drag-over"); });
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("drop", function(e) {
+      e.preventDefault();
+      var srcId = e.dataTransfer.getData("text/plain");
+      if (!srcId || srcId === it.id) return;
+      var ids = cat.items.map(function(x) { return x.id; });
+      var from = ids.indexOf(srcId), to = ids.indexOf(it.id);
+      if (from < 0 || to < 0) return;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      // Optimistic local reorder
+      var byId = {}; cat.items.forEach(function(x) { byId[x.id] = x; });
+      cat.items = ids.map(function(id) { return byId[id]; });
+      renderCategory();
+      // Sync
+      setStatus("saving", "Reordering…");
+      fetch(BACKEND + "/menu/reorder", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ categorySlug: activeSlug, itemIds: ids }),
+      })
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function() { setStatus("saved", "Saved · " + new Date().toLocaleTimeString().slice(0, 5)); })
+        .catch(function(e) { setStatus("error", "Reorder failed"); fetchMenu(); });
+    });
+
+    var handle = document.createElement("div"); handle.className = "drag-handle"; handle.textContent = "⋮⋮"; handle.title = "Drag to reorder";
+    row.appendChild(handle);
+
+    var main = document.createElement("div"); main.className = "item-main";
+    var r1 = document.createElement("div"); r1.className = "item-row1";
+    var name = document.createElement("div"); name.className = "item-name"; name.textContent = it.name;
+    r1.appendChild(name);
+    if (it.tags && it.tags.length) {
+      var tagsWrap = document.createElement("div"); tagsWrap.className = "item-tags";
+      it.tags.forEach(function(t) {
+        var span = document.createElement("span"); span.className = "item-tag " + t; span.textContent = t;
+        tagsWrap.appendChild(span);
+      });
+      r1.appendChild(tagsWrap);
+    }
+    var price = document.createElement("div"); price.className = "item-price"; price.textContent = priceLabel(it);
+    r1.appendChild(price);
+    main.appendChild(r1);
+
+    if (it.desc) {
+      var d = document.createElement("div"); d.className = "item-desc"; d.textContent = it.desc;
+      main.appendChild(d);
+    }
+    var idTag = document.createElement("div"); idTag.className = "item-id"; idTag.textContent = it.id;
+    main.appendChild(idTag);
+
+    row.appendChild(main);
+
+    var actions = document.createElement("div"); actions.className = "item-actions";
+    var toggle = document.createElement("label");
+    toggle.className = "toggle-soldout" + (it.outOfStock ? " on" : "");
+    var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!it.outOfStock;
+    cb.onchange = function() {
+      patchItem(it.id, { outOfStock: cb.checked }, function() {
+        it.outOfStock = cb.checked;
+        row.classList.toggle("sold-out", it.outOfStock);
+        toggle.classList.toggle("on", it.outOfStock);
+      });
+    };
+    toggle.appendChild(cb);
+    var lbl = document.createElement("span"); lbl.textContent = "Sold out"; toggle.appendChild(lbl);
+    actions.appendChild(toggle);
+
+    var editBtn = document.createElement("button"); editBtn.className = "btn-icon"; editBtn.title = "Edit"; editBtn.textContent = "✎";
+    editBtn.onclick = function() {
+      var existing = row.querySelector(".editor");
+      if (existing) { existing.remove(); row.classList.remove("editing"); return; }
+      row.appendChild(buildEditor(it, row));
+      row.classList.add("editing");
+    };
+    actions.appendChild(editBtn);
+
+    var delBtn = document.createElement("button"); delBtn.className = "btn-icon danger"; delBtn.title = "Delete"; delBtn.textContent = "🗑";
+    delBtn.onclick = function() {
+      if (!confirm('Delete "' + it.name + '"? This removes it from the customer menu.')) return;
+      setStatus("saving", "Deleting…");
+      fetch(BACKEND + "/menu/items/" + encodeURIComponent(it.id), {
+        method: "DELETE", headers: authHeaders(),
+      })
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function() { setStatus("saved", "Deleted"); fetchMenu(); })
+        .catch(function() { setStatus("error", "Delete failed"); });
+    };
+    actions.appendChild(delBtn);
+    row.appendChild(actions);
+
+    return row;
+  }
+
+  // ── Inline editor ─────────────────────────────
+  function buildEditor(it, row) {
+    var box = document.createElement("div"); box.className = "editor";
+
+    function input(label, value, attrs) {
+      var f = document.createElement("div"); f.className = "field";
+      var l = document.createElement("label"); l.textContent = label; f.appendChild(l);
+      var i = document.createElement("input"); i.value = (value == null ? "" : value);
+      for (var k in attrs || {}) i[k] = attrs[k];
+      f.appendChild(i); return { wrap: f, input: i };
+    }
+    function textarea(label, value) {
+      var f = document.createElement("div"); f.className = "field";
+      var l = document.createElement("label"); l.textContent = label; f.appendChild(l);
+      var t = document.createElement("textarea"); t.rows = 2; t.value = (value || "");
+      f.appendChild(t); return { wrap: f, input: t };
+    }
+
+    var nameF = input("Name", it.name);
+    box.appendChild(nameF.wrap);
+
+    var priceLabelTxt = it.sizes ? 'Sizes (S=6, M=6.5 — comma-separated)' : "Price";
+    var priceValue = it.sizes ? Object.keys(it.sizes).map(function(k) { return k + "=" + it.sizes[k]; }).join(", ") : (it.price || "");
+    var priceF = input(priceLabelTxt, priceValue);
+    box.appendChild(priceF.wrap);
+
+    var descF = textarea("Description", it.desc);
+    box.appendChild(descF.wrap);
+
+    // Tags
+    var tagF = document.createElement("div"); tagF.className = "field";
+    var tagLbl = document.createElement("label"); tagLbl.textContent = "Tags"; tagF.appendChild(tagLbl);
+    var picker = document.createElement("div"); picker.className = "tag-picker";
+    var tagInputs = {};
+    ["chef", "popular", "veg"].forEach(function(t) {
+      var l = document.createElement("label");
+      var cb = document.createElement("input"); cb.type = "checkbox";
+      cb.checked = !!(it.tags && it.tags.indexOf(t) >= 0); tagInputs[t] = cb;
+      l.appendChild(cb); l.appendChild(document.createTextNode(" " + t));
+      picker.appendChild(l);
+    });
+    tagF.appendChild(picker); box.appendChild(tagF);
+
+    var actions = document.createElement("div"); actions.className = "editor-actions";
+    var cancel = document.createElement("button"); cancel.className = "btn-secondary"; cancel.textContent = "Cancel";
+    cancel.onclick = function() { box.remove(); row.classList.remove("editing"); };
+    var save = document.createElement("button"); save.className = "btn-primary"; save.textContent = "Save";
+    save.onclick = function() {
+      var body = {};
+      var nm = nameF.input.value.trim();
+      if (nm && nm !== it.name) body.name = nm;
+      var ps = priceF.input.value.trim();
+      if (ps.indexOf("=") >= 0) {
+        // Sizes mode
+        var sizes = {};
+        ps.split(",").forEach(function(p) {
+          var m = p.trim().match(/^([^=]+)=\s*([\d.]+)$/);
+          if (m) sizes[m[1].trim()] = parseFloat(m[2]);
+        });
+        body.sizes = sizes;
+      } else if (ps) {
+        var n = parseFloat(ps);
+        if (Number.isFinite(n)) body.price = n;
+      }
+      var d = descF.input.value.trim();
+      if (d !== (it.desc || "")) body.desc = d;
+      var tags = Object.keys(tagInputs).filter(function(k) { return tagInputs[k].checked; });
+      body.tags = tags;
+      patchItem(it.id, body, function(updated) {
+        Object.assign(it, updated);
+        box.remove(); row.classList.remove("editing");
+        renderCategory(); // re-render to reflect changes
+      });
+    };
+    actions.appendChild(cancel); actions.appendChild(save);
+    box.appendChild(actions);
+
+    return box;
+  }
+
+  function patchItem(id, body, onSuccess) {
+    setStatus("saving", "Saving…");
+    return fetch(BACKEND + "/menu/items/" + encodeURIComponent(id), {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j, status: r.status }; }); })
+      .then(function(res) {
+        if (!res.ok) { setStatus("error", res.j.error || ("HTTP " + res.status)); return; }
+        setStatus("saved", "Saved · " + new Date().toLocaleTimeString().slice(0, 5));
+        if (onSuccess) onSuccess(res.j.item);
+      })
+      .catch(function(e) { setStatus("error", "Network error"); console.error(e); });
+  }
+
+  // ── Add-item modal ────────────────────────────
+  function openAddModal() {
+    var bd = document.createElement("div"); bd.className = "modal-backdrop";
+    bd.onclick = function(e) { if (e.target === bd) bd.remove(); };
+    var m = document.createElement("div"); m.className = "modal";
+    m.innerHTML =
+      '<h2>Add new item</h2>' +
+      '<div class="field"><label>Category</label><select id="m_cat"></select></div>' +
+      '<div class="field"><label>Name</label><input id="m_name" placeholder="e.g. Croissant"></div>' +
+      '<div class="field-row">' +
+      '  <div class="field"><label>Price (single)</label><input id="m_price" type="number" step="0.10" placeholder="6.80"></div>' +
+      '  <div class="field"><label>Or sizes (S=6, M=6.5)</label><input id="m_sizes" placeholder=""></div>' +
+      '</div>' +
+      '<div class="field"><label>Description</label><textarea id="m_desc" rows="2" placeholder="Short, ingredient-focused."></textarea></div>' +
+      '<div class="field"><label>Tags</label><div class="tag-picker" id="m_tags">' +
+      '<label><input type="checkbox" value="chef"> chef</label>' +
+      '<label><input type="checkbox" value="popular"> popular</label>' +
+      '<label><input type="checkbox" value="veg"> veg</label>' +
+      '</div></div>' +
+      '<div class="editor-actions">' +
+      '<button class="btn-secondary" id="m_cancel">Cancel</button>' +
+      '<button class="btn-primary" id="m_save">Create</button>' +
+      '</div>';
+    bd.appendChild(m); document.body.appendChild(bd);
+    var sel = m.querySelector("#m_cat");
+    menu.categoryOrder.forEach(function(slug) {
+      var o = document.createElement("option"); o.value = slug;
+      o.textContent = (menu.categories[slug].title || slug);
+      if (slug === activeSlug) o.selected = true;
+      sel.appendChild(o);
+    });
+    m.querySelector("#m_cancel").onclick = function() { bd.remove(); };
+    m.querySelector("#m_save").onclick = function() {
+      var body = {
+        categorySlug: sel.value,
+        name: m.querySelector("#m_name").value.trim(),
+        desc: m.querySelector("#m_desc").value.trim() || undefined,
+      };
+      var sizes = m.querySelector("#m_sizes").value.trim();
+      if (sizes) {
+        var parsed = {};
+        sizes.split(",").forEach(function(p) {
+          var mm = p.trim().match(/^([^=]+)=\s*([\d.]+)$/);
+          if (mm) parsed[mm[1].trim()] = parseFloat(mm[2]);
+        });
+        if (Object.keys(parsed).length) body.sizes = parsed;
+      }
+      if (!body.sizes) {
+        var pv = parseFloat(m.querySelector("#m_price").value);
+        if (Number.isFinite(pv)) body.price = pv;
+      }
+      var tags = [];
+      m.querySelectorAll("#m_tags input:checked").forEach(function(c) { tags.push(c.value); });
+      if (tags.length) body.tags = tags;
+      if (!body.name) { alert("Name is required"); return; }
+      if (!body.price && !body.sizes) { alert("Either a price or sizes is required"); return; }
+      setStatus("saving", "Creating…");
+      fetch(BACKEND + "/menu/items", {
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      })
+        .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j, status: r.status }; }); })
+        .then(function(res) {
+          if (!res.ok) { setStatus("error", res.j.error || ("HTTP " + res.status)); alert(res.j.error || "Failed"); return; }
+          setStatus("saved", "Created");
+          bd.remove();
+          activeSlug = res.j.categorySlug; fetchMenu();
+        })
+        .catch(function() { setStatus("error", "Network error"); });
+    };
+  }
+
+  // ── boot ──
+  fetchMenu();
+})();
+</script>
+
+</body>
+</html>
