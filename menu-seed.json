@@ -1,0 +1,1082 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-05T07:40:13.270Z",
+  "categoryOrder": [
+    "all-day",
+    "sets",
+    "mains",
+    "burgers",
+    "crepes",
+    "kids",
+    "sides",
+    "desserts",
+    "coffee",
+    "tea",
+    "signature"
+  ],
+  "categories": {
+    "all-day": {
+      "title": "All Day",
+      "subtitle": "Served from open till close",
+      "items": [
+        {
+          "id": "eggs-benedict",
+          "name": "Signature Eggs Benedict",
+          "sizes": {
+            "Salmon": 27.8,
+            "Bacon": 27.8
+          },
+          "desc": "House crepe, béarnaise, garden greens, poached eggs, dukkah crumb. Choose smoked salmon or streaky bacon.",
+          "tags": [
+            "chef"
+          ]
+        },
+        {
+          "id": "crispy-breakfast",
+          "name": "Crispy Breakfast",
+          "price": 29.8,
+          "desc": "Bacon, sausage, slow-roast tomato, mushroom, pumpkin tahini, sourdough.",
+          "eggOptions": [
+            "One Side Fried",
+            "Both Sides Fried",
+            "Scramble",
+            "Benedict"
+          ]
+        },
+        {
+          "id": "prawn-omelette",
+          "name": "Prawn Omelette",
+          "price": 27.8,
+          "desc": "Garlic prawns, parmesan, garlic chives, cream cheese, sourdough, balsamic."
+        },
+        {
+          "id": "chili-crab-eggs",
+          "name": "Chilli Crab Scramble",
+          "price": 28.9,
+          "desc": "Crab, parmesan, truffle paste, chilli oil & floss on toasted sourdough.",
+          "tags": [
+            "chef"
+          ]
+        },
+        {
+          "id": "porridge",
+          "name": "Porridge",
+          "price": 20.8,
+          "desc": "Oats, coconut milk, mango purée, raspberry compote, freeze-dried berries.",
+          "tags": [
+            "veg"
+          ]
+        },
+        {
+          "id": "granola",
+          "name": "House Granola",
+          "price": 20.8,
+          "desc": "Oats, walnut, cashew, coconut, maple, seasonal fruits, coconut yoghurt.",
+          "tags": [
+            "veg"
+          ]
+        },
+        {
+          "id": "french-toast",
+          "name": "Tiramisu Mango Toast",
+          "price": 26.9,
+          "desc": "Brioche, mascarpone, mango, coffee-soaked tiramisu, maple.",
+          "tags": [
+            "popular"
+          ],
+          "pop": 2
+        },
+        {
+          "id": "syrniki",
+          "name": "Cottage Cheese Syrniki",
+          "price": 26.8,
+          "desc": "Pan-fried, sour cream, raspberry compote, mango, freeze-dried strawberry."
+        }
+      ]
+    },
+    "mains": {
+      "title": "Mains & Pasta",
+      "subtitle": "From the kitchen, with care",
+      "items": [
+        {
+          "id": "creamy-mushroom",
+          "name": "Creamy Mushroom",
+          "price": 27.8,
+          "desc": "Field mushroom, parmesan, poached egg, almond, sourdough, broccolini.",
+          "tags": [
+            "veg"
+          ]
+        },
+        {
+          "id": "chicken-pasta",
+          "name": "Mustard Chicken Orecchiette",
+          "price": 27.9,
+          "desc": "Chicken, mushroom, spinach, whole-grain mustard, parmesan."
+        },
+        {
+          "id": "pasta-nero",
+          "name": "Pasta Nero with Prawns",
+          "price": 28.8,
+          "desc": "Squid ink linguine, prawns, broccolini, cherry tomato, garlic cream."
+        },
+        {
+          "id": "octopus-harmony",
+          "name": "Octopus Harmony",
+          "price": 35.9,
+          "desc": "Tender tentacle, crispy tofu, pickled cucumber, pumpkin curry purée, plum.",
+          "tags": [
+            "chef"
+          ]
+        },
+        {
+          "id": "scallop-potato",
+          "name": "Scallop on Potato Slab",
+          "price": 36.9,
+          "desc": "Japanese scallops, crispy potato, truffle mushroom paste, aioli.",
+          "tags": [
+            "chef"
+          ]
+        },
+        {
+          "id": "crab-pasta",
+          "name": "Crab Fettuccine",
+          "price": 39.9,
+          "desc": "Miso-truffle cream, blue swimmer & king crab, yuzu, panko crumb.",
+          "tags": [
+            "chef"
+          ],
+          "pop": 3
+        },
+        {
+          "id": "salmon-bowl",
+          "name": "Salmon Bliss Bowl",
+          "price": 35.9,
+          "desc": "Quinoa, edamame, cucumber, hot-smoked salmon, honey-yuzu dressing."
+        },
+        {
+          "id": "japanese-chicken",
+          "name": "Japanese Chicken Quinoa",
+          "price": 27.8,
+          "desc": "Kale, pickled veg, mushroom, edamame, honey mustard, dried shallot."
+        },
+        {
+          "id": "tofu-buckwheat",
+          "name": "Marinated Tofu & Buckwheat Noodles",
+          "price": 27.8,
+          "desc": "Crispy tofu, kale, pickled veg, chilli oil, honey mustard.",
+          "tags": [
+            "veg"
+          ]
+        }
+      ]
+    },
+    "burgers": {
+      "title": "Burgers & Soups",
+      "items": [
+        {
+          "id": "chicken-burger",
+          "name": "Teriyaki Chicken Burger",
+          "price": 26.9,
+          "desc": "Brioche, aioli, slaw, sesame, pickled onion, fries.",
+          "tags": [
+            "popular"
+          ],
+          "pop": 1
+        },
+        {
+          "id": "blat-burger",
+          "name": "B.L.A.T. Burger",
+          "price": 25.9,
+          "desc": "Brioche, aioli, lettuce, tomato, bacon, avocado, fries."
+        },
+        {
+          "id": "shawarma",
+          "name": "Armenian Shawarma",
+          "price": 26.9,
+          "desc": "Lavash, marinated chicken, garlic-paprika aioli, herbs, pickles.",
+          "outOfStock": true
+        },
+        {
+          "id": "borsht",
+          "name": "Borsht",
+          "price": 17.9,
+          "desc": "Chicken stock, shredded chicken, beetroot, croutons, sour cream."
+        },
+        {
+          "id": "pumpkin-soup",
+          "name": "Pumpkin Purée Soup",
+          "price": 18.9,
+          "desc": "Vegetable stock, pumpkin, cream, butter, croutons.",
+          "tags": [
+            "veg"
+          ]
+        }
+      ]
+    },
+    "crepes": {
+      "title": "Crepes",
+      "subtitle": "Daily until 12:00",
+      "items": [
+        {
+          "id": "open-crepes",
+          "name": "Open Crepes",
+          "price": 13.9,
+          "desc": "Buttered, cinnamon, icing sugar, lemon.",
+          "tags": [
+            "veg"
+          ]
+        },
+        {
+          "id": "salmon-crepe",
+          "name": "Smoked Salmon Crepes",
+          "price": 14.9,
+          "desc": "Lettuce, cream cheese, cucumber, smoked salmon."
+        },
+        {
+          "id": "ham-cheese-crepe",
+          "name": "Ham & Cheese Crepes",
+          "price": 14.9,
+          "desc": "Egg, ham, cheese."
+        },
+        {
+          "id": "mushroom-crepe",
+          "name": "Mushroom & Egg Crepes",
+          "price": 14.9,
+          "desc": "Egg, mushroom, cheese.",
+          "tags": [
+            "veg"
+          ]
+        }
+      ]
+    },
+    "sides": {
+      "title": "Sides",
+      "subtitle": "To accompany",
+      "items": [
+        {
+          "id": "side-salmon",
+          "name": "Smoked Salmon",
+          "price": 9
+        },
+        {
+          "id": "side-mushroom",
+          "name": "Mushroom",
+          "price": 7
+        },
+        {
+          "id": "side-bacon",
+          "name": "Streaky Bacon",
+          "price": 7
+        },
+        {
+          "id": "side-avocado",
+          "name": "Avocado",
+          "price": 6
+        },
+        {
+          "id": "side-tomato",
+          "name": "Roast Tomato",
+          "price": 6
+        },
+        {
+          "id": "side-halloumi",
+          "name": "Grilled Halloumi",
+          "price": 6
+        },
+        {
+          "id": "side-egg",
+          "name": "Extra Egg",
+          "price": 3,
+          "varieties": [
+            "Poached",
+            "Scrambled",
+            "1 Side Fried",
+            "Both Sides Fried"
+          ]
+        },
+        {
+          "id": "side-rosti",
+          "name": "Rosti",
+          "price": 6
+        },
+        {
+          "id": "side-sausage",
+          "name": "Beef Sausage",
+          "price": 7
+        },
+        {
+          "id": "side-gf-bread",
+          "name": "GF Bread",
+          "price": 4
+        }
+      ]
+    },
+    "coffee": {
+      "title": "Coffee",
+      "subtitle": "Locally roasted",
+      "items": [
+        {
+          "id": "short-black",
+          "name": "Short Black",
+          "price": 6,
+          "desc": "30ml"
+        },
+        {
+          "id": "long-black",
+          "name": "Long Black",
+          "price": 6
+        },
+        {
+          "id": "americano",
+          "name": "Americano",
+          "price": 6
+        },
+        {
+          "id": "macchiato",
+          "name": "Macchiato",
+          "price": 6
+        },
+        {
+          "id": "flat-white",
+          "name": "Flat White",
+          "sizes": {
+            "S": 6,
+            "M": 6.5,
+            "L": 7
+          }
+        },
+        {
+          "id": "latte",
+          "name": "Latte",
+          "sizes": {
+            "S": 6,
+            "M": 6.5,
+            "L": 7
+          },
+          "tags": [
+            "popular"
+          ],
+          "pop": 1
+        },
+        {
+          "id": "cappuccino",
+          "name": "Cappuccino",
+          "sizes": {
+            "S": 6,
+            "M": 6.5,
+            "L": 7
+          },
+          "varieties": [
+            "Plain",
+            "Chocolate",
+            "Cinnamon"
+          ]
+        },
+        {
+          "id": "mocha",
+          "name": "Mocha",
+          "sizes": {
+            "S": 6.5,
+            "M": 7,
+            "L": 7.5
+          }
+        },
+        {
+          "id": "iced-americano",
+          "name": "Iced Americano",
+          "price": 7.5
+        },
+        {
+          "id": "iced-latte",
+          "name": "Iced Latte",
+          "price": 8
+        },
+        {
+          "id": "iced-mocha",
+          "name": "Iced Mocha",
+          "price": 8.5
+        }
+      ],
+      "addOns": [
+        {
+          "label": "Milk",
+          "options": [
+            "Oat Milk",
+            "Almond Milk",
+            "Coconut Milk",
+            "Soy Milk"
+          ]
+        },
+        {
+          "label": "Extras",
+          "options": [
+            "Extra Shot",
+            "Decaf",
+            "Vanilla Syrup",
+            "Hazelnut Syrup",
+            "Caramel Syrup",
+            "Strawberry Syrup",
+            "Chocolate Syrup",
+            "Honey",
+            "Cream"
+          ]
+        }
+      ],
+      "addOnPrice": 1,
+      "freeAddOns": [
+        "Trim Milk"
+      ]
+    },
+    "tea": {
+      "title": "Tea & Other",
+      "items": [
+        {
+          "id": "hot-choc",
+          "name": "Hot Chocolate",
+          "sizes": {
+            "S": 6.5,
+            "M": 7,
+            "L": 7.5
+          }
+        },
+        {
+          "id": "chai-latte",
+          "name": "Chai Latte",
+          "price": 7.5
+        },
+        {
+          "id": "turmeric-latte",
+          "name": "Turmeric Latte",
+          "price": 7.5
+        },
+        {
+          "id": "hojicha-latte",
+          "name": "Hojicha Latte",
+          "price": 10,
+          "desc": "Roasted Japanese green tea latte.",
+          "img": "hojicha-latte.jpg"
+        },
+        {
+          "id": "matcha-latte",
+          "name": "Matcha Latte",
+          "price": 10,
+          "tags": [
+            "popular"
+          ],
+          "pop": 2
+        },
+        {
+          "id": "iced-matcha-latte",
+          "name": "Iced Matcha Latte",
+          "price": 10.5
+        },
+        {
+          "id": "milkshake",
+          "name": "Classic Milkshake",
+          "price": 10,
+          "desc": "Pick your flavour.",
+          "varieties": [
+            "Chocolate",
+            "Vanilla",
+            "Hazelnut",
+            "Strawberry"
+          ]
+        },
+        {
+          "id": "smoothie",
+          "name": "Smoothie",
+          "price": 13.5,
+          "desc": "Pick your blend.",
+          "varieties": [
+            "Banana",
+            "Mango",
+            "Green"
+          ]
+        },
+        {
+          "id": "tea-pot",
+          "name": "Tea Pot",
+          "price": 7,
+          "desc": "Loose-leaf, brewed by the pot.",
+          "varieties": [
+            "English Breakfast",
+            "Earl Grey",
+            "Japanese Sencha",
+            "Mulled Wine",
+            "Summer Miracle",
+            "Chocolate Factory",
+            "Angel Kiss",
+            "Road to Africa",
+            "Camomile Peppermint"
+          ]
+        }
+      ],
+      "addOns": [
+        {
+          "label": "Milk",
+          "options": [
+            "Oat Milk",
+            "Almond Milk",
+            "Coconut Milk",
+            "Soy Milk"
+          ]
+        }
+      ],
+      "addOnPrice": 1,
+      "freeAddOns": [
+        "Trim Milk"
+      ]
+    },
+    "signature": {
+      "title": "Signature Drinks",
+      "subtitle": "From the bar",
+      "items": [
+        {
+          "id": "rosy-coffee",
+          "name": "Hot Rosy Coffee",
+          "price": 8.5,
+          "tags": [
+            "chef"
+          ],
+          "desc": "Double espresso, rose syrup, almond milk, freeze-dried raspberry."
+        },
+        {
+          "id": "hot-ferrero",
+          "name": "Hot Ferrero Latte",
+          "price": 9,
+          "desc": "Double espresso, dark chocolate, hazelnut syrup, milk, whipped cream, crushed hazelnut."
+        },
+        {
+          "id": "iced-ferrero",
+          "name": "Iced Ferrero Latte",
+          "price": 10,
+          "desc": "Double espresso, dark chocolate, hazelnut syrup, milk, whipped cream, crushed hazelnut, ice."
+        },
+        {
+          "id": "very-unusual",
+          "name": "Iced Very Unusual Latte",
+          "price": 10,
+          "tags": [
+            "chef"
+          ],
+          "desc": "Double espresso, dairy milk, watermelon syrup, full cream, strawberry purée, raspberry crunch, ice.",
+          "img": "very-unusual.jpg"
+        },
+        {
+          "id": "peach-parade",
+          "name": "Iced Peach Parade",
+          "price": 9,
+          "desc": "Single espresso, peach purée, tonic water, ice."
+        },
+        {
+          "id": "berry-black",
+          "name": "Iced Berry Black Coffee",
+          "price": 10,
+          "desc": "Double espresso, raspberry purée, hibiscus syrup, tonic water, ice."
+        },
+        {
+          "id": "iced-coconut-americano",
+          "name": "Iced Coconut Water Americano",
+          "price": 9,
+          "desc": "Double espresso, coconut water, ice."
+        },
+        {
+          "id": "mango-matcha",
+          "name": "Iced Mango Matcha",
+          "price": 10.5,
+          "desc": "Matcha, mango purée, coconut milk, ice."
+        },
+        {
+          "id": "strawberry-matcha",
+          "name": "Iced Strawberry Matcha",
+          "price": 10.5,
+          "desc": "Matcha, strawberry purée, coconut milk, ice."
+        },
+        {
+          "id": "yuzu-matcha",
+          "name": "Iced Yuzu Matcha",
+          "price": 11,
+          "tags": [
+            "chef"
+          ],
+          "desc": "Yuzu purée, orange syrup, tonic water, matcha, ice."
+        },
+        {
+          "id": "lychee-matcha",
+          "name": "Iced Lychee Matcha",
+          "price": 11,
+          "desc": "Lychee syrup, coconut water, matcha foam (cream, matcha, milk), ice."
+        },
+        {
+          "id": "london-fog-matcha",
+          "name": "Iced London Fog Matcha",
+          "price": 11.5,
+          "desc": "Earl Grey tea, caramel syrup, oat milk, matcha shot, ice."
+        },
+        {
+          "id": "auckland-green",
+          "name": "Iced Auckland Green Matcha",
+          "price": 11.5,
+          "tags": [
+            "popular"
+          ],
+          "pop": 3,
+          "desc": "Kiwi syrup, dairy milk, matcha foam (cream, milk, matcha), ice, manuka honey crumble."
+        }
+      ]
+    },
+    "sets": {
+      "title": "Set Menu",
+      "subtitle": "For two — served all day",
+      "items": [
+        {
+          "id": "set-breakfast",
+          "name": "Breakfast Set for Two",
+          "sizes": {
+            "Ham Cheese Crepe": 39.5,
+            "Mushroom Crepe": 39.5
+          },
+          "tags": [
+            "chef"
+          ],
+          "desc": "Porridge (split for two) + your choice of crepe (cut half to share) + your choice of drinks.",
+          "varieties": [
+            "2 Teas",
+            "1 Tea + 1 Coffee",
+            "2 Coffees",
+            "Change to Matcha (+$6)",
+            "Change to Small Coffee (+$2)"
+          ],
+          "drinkOpts": {
+            "2 Teas": {
+              "picks": 2,
+              "options": [
+                "English Breakfast",
+                "Earl Grey",
+                "Japanese Sencha",
+                "Mulled Wine",
+                "Summer Miracle",
+                "Chocolate Factory",
+                "Angel Kiss",
+                "Road to Africa",
+                "Camomile Peppermint"
+              ]
+            },
+            "1 Tea + 1 Coffee": {
+              "picks": 2,
+              "groups": [
+                {
+                  "label": "Pick a Tea",
+                  "options": [
+                    "English Breakfast",
+                    "Earl Grey",
+                    "Japanese Sencha",
+                    "Mulled Wine",
+                    "Summer Miracle",
+                    "Chocolate Factory",
+                    "Angel Kiss",
+                    "Road to Africa",
+                    "Camomile Peppermint"
+                  ]
+                },
+                {
+                  "label": "Pick a Coffee",
+                  "options": [
+                    "Espresso",
+                    "Americano",
+                    "Long Black",
+                    "Iced Americano"
+                  ]
+                }
+              ]
+            },
+            "2 Coffees": {
+              "picks": 2,
+              "options": [
+                "Espresso",
+                "Americano",
+                "Long Black",
+                "Iced Americano"
+              ]
+            },
+            "Change to Matcha (+$6)": {
+              "picks": 2,
+              "options": [
+                "Hot Matcha Latte",
+                "Iced Matcha Latte",
+                "Hot Matcha Tea",
+                "Iced Matcha Tea",
+                "Iced Mango Matcha",
+                "Iced Strawberry Matcha",
+                "Iced Yuzu Matcha",
+                "Iced Lychee Matcha",
+                "Iced London Fog Matcha",
+                "Iced Auckland Green Matcha"
+              ]
+            },
+            "Change to Small Coffee (+$2)": {
+              "picks": 2,
+              "options": [
+                "Flat White",
+                "Latte",
+                "Cappuccino",
+                "Mocha",
+                "Piccolo"
+              ]
+            }
+          },
+          "halves": [
+            {
+              "name": "Porridge",
+              "img": "porridge.jpg"
+            },
+            {
+              "name": "Ham Cheese Crepe",
+              "img": "ham-cheese-crepe.jpg"
+            },
+            {
+              "name": "Tea for Two",
+              "img": "tea-pot.jpg"
+            }
+          ]
+        },
+        {
+          "id": "set-big-breakfast",
+          "name": "Big Breakfast Set for Two",
+          "price": 49.5,
+          "tags": [],
+          "desc": "Big Breakfast to Share + Sweet Crepes (one of each unit) + your choice of drinks.",
+          "varieties": [
+            "2 Teas",
+            "1 Tea + 1 Coffee",
+            "2 Coffees",
+            "Change to Matcha (+$6)",
+            "Change to Small Coffee (+$2)"
+          ],
+          "drinkOpts": {
+            "2 Teas": {
+              "picks": 2,
+              "options": [
+                "English Breakfast",
+                "Earl Grey",
+                "Japanese Sencha",
+                "Mulled Wine",
+                "Summer Miracle",
+                "Chocolate Factory",
+                "Angel Kiss",
+                "Road to Africa",
+                "Camomile Peppermint"
+              ]
+            },
+            "1 Tea + 1 Coffee": {
+              "picks": 2,
+              "groups": [
+                {
+                  "label": "Pick a Tea",
+                  "options": [
+                    "English Breakfast",
+                    "Earl Grey",
+                    "Japanese Sencha",
+                    "Mulled Wine",
+                    "Summer Miracle",
+                    "Chocolate Factory",
+                    "Angel Kiss",
+                    "Road to Africa",
+                    "Camomile Peppermint"
+                  ]
+                },
+                {
+                  "label": "Pick a Coffee",
+                  "options": [
+                    "Espresso",
+                    "Americano",
+                    "Long Black",
+                    "Iced Americano"
+                  ]
+                }
+              ]
+            },
+            "2 Coffees": {
+              "picks": 2,
+              "options": [
+                "Espresso",
+                "Americano",
+                "Long Black",
+                "Iced Americano"
+              ]
+            },
+            "Change to Matcha (+$6)": {
+              "picks": 2,
+              "options": [
+                "Hot Matcha Latte",
+                "Iced Matcha Latte",
+                "Hot Matcha Tea",
+                "Iced Matcha Tea",
+                "Iced Mango Matcha",
+                "Iced Strawberry Matcha",
+                "Iced Yuzu Matcha",
+                "Iced Lychee Matcha",
+                "Iced London Fog Matcha",
+                "Iced Auckland Green Matcha"
+              ]
+            },
+            "Change to Small Coffee (+$2)": {
+              "picks": 2,
+              "options": [
+                "Flat White",
+                "Latte",
+                "Cappuccino",
+                "Mocha",
+                "Piccolo"
+              ]
+            }
+          },
+          "halves": [
+            {
+              "name": "Crispy Breakfast",
+              "img": "crispy-breakfast.jpg"
+            },
+            {
+              "name": "Sweet Crepes",
+              "img": "open-crepes.jpg"
+            },
+            {
+              "name": "Tea for Two",
+              "img": "tea-pot.jpg"
+            }
+          ]
+        },
+        {
+          "id": "set-sweet",
+          "name": "Sweet Set for Two",
+          "price": 35,
+          "tags": [
+            "popular"
+          ],
+          "pop": 1,
+          "desc": "Any Two Desserts (available in the cabinet) + your choice of drinks.",
+          "varieties": [
+            "2 Teas",
+            "1 Tea + 1 Coffee",
+            "2 Coffees",
+            "Change to Matcha (+$6)",
+            "Change to Small Coffee (+$2)"
+          ],
+          "drinkOpts": {
+            "2 Teas": {
+              "picks": 2,
+              "options": [
+                "English Breakfast",
+                "Earl Grey",
+                "Japanese Sencha",
+                "Mulled Wine",
+                "Summer Miracle",
+                "Chocolate Factory",
+                "Angel Kiss",
+                "Road to Africa",
+                "Camomile Peppermint"
+              ]
+            },
+            "1 Tea + 1 Coffee": {
+              "picks": 2,
+              "groups": [
+                {
+                  "label": "Pick a Tea",
+                  "options": [
+                    "English Breakfast",
+                    "Earl Grey",
+                    "Japanese Sencha",
+                    "Mulled Wine",
+                    "Summer Miracle",
+                    "Chocolate Factory",
+                    "Angel Kiss",
+                    "Road to Africa",
+                    "Camomile Peppermint"
+                  ]
+                },
+                {
+                  "label": "Pick a Coffee",
+                  "options": [
+                    "Espresso",
+                    "Americano",
+                    "Long Black",
+                    "Iced Americano"
+                  ]
+                }
+              ]
+            },
+            "2 Coffees": {
+              "picks": 2,
+              "options": [
+                "Espresso",
+                "Americano",
+                "Long Black",
+                "Iced Americano"
+              ]
+            },
+            "Change to Matcha (+$6)": {
+              "picks": 2,
+              "options": [
+                "Hot Matcha Latte",
+                "Iced Matcha Latte",
+                "Hot Matcha Tea",
+                "Iced Matcha Tea",
+                "Iced Mango Matcha",
+                "Iced Strawberry Matcha",
+                "Iced Yuzu Matcha",
+                "Iced Lychee Matcha",
+                "Iced London Fog Matcha",
+                "Iced Auckland Green Matcha"
+              ]
+            },
+            "Change to Small Coffee (+$2)": {
+              "picks": 2,
+              "options": [
+                "Flat White",
+                "Latte",
+                "Cappuccino",
+                "Mocha",
+                "Piccolo"
+              ]
+            }
+          },
+          "halves": [
+            {
+              "name": "French Toast",
+              "img": "french-toast.jpg"
+            },
+            {
+              "name": "Syrniki",
+              "img": "syrniki.jpg"
+            },
+            {
+              "name": "Cappuccino",
+              "img": "cappuccino.jpg"
+            }
+          ]
+        }
+      ]
+    },
+    "kids": {
+      "title": "Kid's Specials",
+      "subtitle": "For our smallest guests",
+      "items": [
+        {
+          "id": "kid-egg",
+          "name": "Scrambled Egg",
+          "price": 6,
+          "desc": "Just scrambled egg. Add rosti +$6 · sausage +$8 · toast +$3."
+        },
+        {
+          "id": "kid-mac",
+          "name": "Mac and Cheese",
+          "price": 12,
+          "desc": "Pasta, mozzarella, parmesan, cream. Add chicken +$4 · bacon +$7."
+        },
+        {
+          "id": "kid-fries-nuggets",
+          "name": "Fries and Nuggets",
+          "price": 15,
+          "desc": "Fries, nuggets, tomato sauce.",
+          "tags": [
+            "popular"
+          ],
+          "pop": 4
+        },
+        {
+          "id": "kid-fries",
+          "name": "Just Fries",
+          "price": 7
+        },
+        {
+          "id": "kid-crepes",
+          "name": "Crepes (2 pc)",
+          "price": 12,
+          "desc": "With butter and strawberry jam or honey."
+        }
+      ]
+    },
+    "desserts": {
+      "title": "Desserts",
+      "subtitle": "From the cabinet",
+      "items": [
+        {
+          "id": "honeycake-classic",
+          "name": "Classic Honeycake",
+          "price": 11.4,
+          "desc": "Honey sponge, sour cream, caramelised crumble.",
+          "imgRight": "0%"
+        },
+        {
+          "id": "honeycake-blueberry",
+          "name": "Blueberry Honeycake",
+          "price": 12,
+          "desc": "Honey sponge, blueberry compote, cream.",
+          "imgRight": "0%"
+        },
+        {
+          "id": "honeycake-chocolate-vanilla",
+          "name": "Chocolate Vanilla Honeycake",
+          "price": 12.4,
+          "desc": "Chocolate honey sponge, vanilla cream, dark chocolate.",
+          "imgRight": "0%"
+        },
+        {
+          "id": "honeycake-blackforest",
+          "name": "Black Forest Honeycake",
+          "price": 13.4,
+          "desc": "Chocolate sponge, cherry compote, dark chocolate shavings.",
+          "imgRight": "0%"
+        },
+        {
+          "id": "tiramisu-classic",
+          "name": "Classic Tiramisu",
+          "price": 14.4,
+          "desc": "Mascarpone, ladyfingers, coffee, cocoa dust."
+        },
+        {
+          "id": "tiramisu-matcha-strawberry",
+          "name": "Matcha Strawberry Tiramisu",
+          "price": 16.4,
+          "desc": "Matcha sponge, mascarpone, fresh strawberries."
+        },
+        {
+          "id": "tiramisu-pistachio",
+          "name": "Pistachio Tiramisu",
+          "price": 16.4,
+          "desc": "Pistachio cream, mascarpone, crushed pistachios."
+        },
+        {
+          "id": "tiramisu-mango-matcha",
+          "name": "Mango Matcha Tiramisu",
+          "price": 16.4,
+          "desc": "Matcha sponge, mango cubes, almond flakes."
+        },
+        {
+          "id": "napoleon-classic",
+          "name": "Classic Napoleon",
+          "price": 14.4,
+          "desc": "Layered puff pastry, vanilla cream, crumble top."
+        },
+        {
+          "id": "napoleon-raspberry",
+          "name": "Raspberry Napoleon",
+          "price": 15.4,
+          "desc": "Layered puff pastry, raspberry cream, fresh raspberries."
+        },
+        {
+          "id": "muffin-blueberry",
+          "name": "Blueberry Muffin",
+          "price": 6.8,
+          "desc": "Fresh blueberries, white chocolate chips."
+        },
+        {
+          "id": "muffin-raspberry",
+          "name": "Raspberry Muffin",
+          "price": 6.8,
+          "desc": "Fresh raspberries, white chocolate chips."
+        }
+      ]
+    }
+  }
+}

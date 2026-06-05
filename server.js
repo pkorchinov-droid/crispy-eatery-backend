@@ -103,6 +103,62 @@ function nextOrderId(orders) {
   return `#${String(max + 1).padStart(3, "0")}`;
 }
 
+// ── Menu storage ───────────────────────────────────────────
+// menu-seed.json ships with the repo and is the canonical default; menu.json
+// is the runtime mutable copy. On Render free-tier the disk is ephemeral, so
+// edits made via the backoffice survive UNTIL the next backend deploy (same
+// caveat as orders.json — fix later with a real DB).
+const MENU_FILE = path.join(__dirname, "menu.json");
+const MENU_SEED_FILE = path.join(__dirname, "menu-seed.json");
+
+function loadMenu() {
+  // Boot path: if menu.json missing, seed from menu-seed.json
+  if (!fs.existsSync(MENU_FILE) && fs.existsSync(MENU_SEED_FILE)) {
+    try {
+      const seed = fs.readFileSync(MENU_SEED_FILE, "utf8");
+      atomicWriteSync(MENU_FILE, seed);
+      console.log("[menu] seeded menu.json from menu-seed.json");
+    } catch (e) {
+      console.error("[menu] Failed to seed:", e.message);
+    }
+  }
+  try {
+    if (fs.existsSync(MENU_FILE)) {
+      const raw = fs.readFileSync(MENU_FILE, "utf8");
+      if (raw.trim()) return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("[menu] Error loading menu file:", e.message);
+  }
+  // Last-resort empty menu — shouldn't happen if seed file is present
+  return { version: 1, updatedAt: new Date().toISOString(), categoryOrder: [], categories: {} };
+}
+
+function persistMenu(menu) {
+  menu.version = (menu.version || 0) + 1;
+  menu.updatedAt = new Date().toISOString();
+  atomicWriteSync(MENU_FILE, JSON.stringify(menu, null, 2));
+}
+
+function slugify(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "item";
+}
+
+function findItem(menu, id) {
+  for (const slug of menu.categoryOrder) {
+    const cat = menu.categories[slug];
+    if (!cat || !Array.isArray(cat.items)) continue;
+    const idx = cat.items.findIndex((it) => it && it.id === id);
+    if (idx >= 0) return { categorySlug: slug, category: cat, index: idx, item: cat.items[idx] };
+  }
+  return null;
+}
+
 // ── Customer email storage ─────────────────────────────────
 const CUSTOMERS_FILE = path.join(__dirname, "customers.json");
 
@@ -362,6 +418,181 @@ app.get("/orders/by-table/:table", (req, res) => {
       status: o.status,
       createdAt: o.createdAt,
     })),
+  });
+});
+
+// ──────────────────────────────────────────────────────────
+// ── MENU API ───────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────
+
+// GET /menu — public, returns the current menu.  The customer SPA fetches
+// this on boot and falls back to the bundled menu if we're unreachable.
+app.get("/menu", (_req, res) => {
+  const menu = loadMenu();
+  res.set("Cache-Control", "no-cache");
+  res.json(menu);
+});
+
+// PATCH /menu/items/:id — staff, update any subset of an item's fields.
+// Allowed fields: name, desc, price, sizes, tags, outOfStock, imgRight, img.
+app.patch("/menu/items/:id", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const found = findItem(menu, req.params.id);
+      if (!found) return res.status(404).json({ error: "Item not found" });
+      const body = req.body || {};
+      const ALLOWED = ["name", "desc", "price", "sizes", "tags", "outOfStock", "imgRight", "img"];
+      const it = found.item;
+      for (const k of ALLOWED) {
+        if (k in body) {
+          if (k === "price") {
+            const n = Number(body.price);
+            if (!Number.isFinite(n) || n < 0 || n > 9999) {
+              return res.status(400).json({ error: "Invalid price" });
+            }
+            it.price = Math.round(n * 100) / 100;
+            // If they set a fixed price, drop sizes (mutually exclusive)
+            if ("price" in body && !("sizes" in body)) delete it.sizes;
+          } else if (k === "sizes") {
+            if (body.sizes && typeof body.sizes === "object") {
+              const cleaned = {};
+              for (const sk of Object.keys(body.sizes)) {
+                const n = Number(body.sizes[sk]);
+                if (!Number.isFinite(n) || n < 0 || n > 9999) {
+                  return res.status(400).json({ error: "Invalid size price for " + sk });
+                }
+                cleaned[String(sk).slice(0, 20)] = Math.round(n * 100) / 100;
+              }
+              it.sizes = cleaned;
+              delete it.price; // mutually exclusive
+            } else {
+              delete it.sizes;
+            }
+          } else if (k === "tags") {
+            if (Array.isArray(body.tags)) {
+              it.tags = body.tags.map((t) => String(t).slice(0, 24)).slice(0, 6);
+            }
+          } else if (k === "outOfStock") {
+            it.outOfStock = Boolean(body.outOfStock);
+          } else if (k === "name" || k === "desc" || k === "imgRight" || k === "img") {
+            const v = body[k];
+            if (v === null || v === undefined || v === "") delete it[k];
+            else it[k] = String(v).slice(0, 500);
+          }
+        }
+      }
+      persistMenu(menu);
+      console.log(`[menu] PATCH item ${req.params.id} → ${Object.keys(body).join(", ")}`);
+      res.json({ success: true, item: it, version: menu.version });
+    } catch (err) {
+      console.error("[menu] PATCH error:", err.message);
+      res.status(500).json({ error: "Failed to update item" });
+    }
+  });
+});
+
+// POST /menu/items — staff, add a new item to a category.
+// Body: { categorySlug, name, price (or sizes), desc?, tags?, img?, imgRight? }
+app.post("/menu/items", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const body = req.body || {};
+      const slug = String(body.categorySlug || "").trim();
+      const cat = menu.categories[slug];
+      if (!cat) return res.status(400).json({ error: "Unknown category: " + slug });
+      const name = String(body.name || "").trim();
+      if (!name || name.length > 80) return res.status(400).json({ error: "Name required (≤80 chars)" });
+
+      // Generate a unique id from the name
+      let id = slugify(name);
+      let suffix = 1;
+      while (findItem(menu, id)) { suffix += 1; id = `${slugify(name)}-${suffix}`; }
+
+      const item = { id, name };
+      // Price OR sizes
+      if (body.sizes && typeof body.sizes === "object") {
+        const cleaned = {};
+        for (const sk of Object.keys(body.sizes)) {
+          const n = Number(body.sizes[sk]);
+          if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "Invalid size price" });
+          cleaned[String(sk).slice(0, 20)] = Math.round(n * 100) / 100;
+        }
+        item.sizes = cleaned;
+      } else {
+        const n = Number(body.price);
+        if (!Number.isFinite(n) || n < 0 || n > 9999) return res.status(400).json({ error: "Price required (or sizes)" });
+        item.price = Math.round(n * 100) / 100;
+      }
+      if (body.desc) item.desc = String(body.desc).slice(0, 500);
+      if (Array.isArray(body.tags)) {
+        item.tags = body.tags.map((t) => String(t).slice(0, 24)).slice(0, 6);
+      }
+      if (body.img) item.img = String(body.img).slice(0, 200);
+      if (body.imgRight) item.imgRight = String(body.imgRight).slice(0, 20);
+
+      if (!Array.isArray(cat.items)) cat.items = [];
+      cat.items.push(item);
+      persistMenu(menu);
+      console.log(`[menu] POST item ${id} → ${slug}`);
+      res.json({ success: true, item, categorySlug: slug, version: menu.version });
+    } catch (err) {
+      console.error("[menu] POST error:", err.message);
+      res.status(500).json({ error: "Failed to add item" });
+    }
+  });
+});
+
+// DELETE /menu/items/:id — staff, remove an item from the menu.
+app.delete("/menu/items/:id", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const found = findItem(menu, req.params.id);
+      if (!found) return res.status(404).json({ error: "Item not found" });
+      found.category.items.splice(found.index, 1);
+      persistMenu(menu);
+      console.log(`[menu] DELETE item ${req.params.id}`);
+      res.json({ success: true, version: menu.version });
+    } catch (err) {
+      console.error("[menu] DELETE error:", err.message);
+      res.status(500).json({ error: "Failed to delete item" });
+    }
+  });
+});
+
+// POST /menu/reorder — staff, replace the item order within a category.
+// Body: { categorySlug, itemIds: ["id-1", "id-2", ...] }
+// Must list every item currently in the category (no add/remove via this endpoint).
+app.post("/menu/reorder", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const body = req.body || {};
+      const slug = String(body.categorySlug || "").trim();
+      const cat = menu.categories[slug];
+      if (!cat) return res.status(400).json({ error: "Unknown category: " + slug });
+      const ids = Array.isArray(body.itemIds) ? body.itemIds.map(String) : null;
+      if (!ids) return res.status(400).json({ error: "itemIds required (array of ids)" });
+      const existing = new Set((cat.items || []).map((it) => it.id));
+      const incoming = new Set(ids);
+      if (ids.length !== existing.size || [...existing].some((id) => !incoming.has(id))) {
+        return res.status(400).json({
+          error: "itemIds must exactly match the current items in the category",
+          expected: [...existing],
+          got: ids,
+        });
+      }
+      const byId = new Map(cat.items.map((it) => [it.id, it]));
+      cat.items = ids.map((id) => byId.get(id));
+      persistMenu(menu);
+      console.log(`[menu] reorder ${slug} (${ids.length} items)`);
+      res.json({ success: true, version: menu.version });
+    } catch (err) {
+      console.error("[menu] reorder error:", err.message);
+      res.status(500).json({ error: "Failed to reorder" });
+    }
   });
 });
 
@@ -643,23 +874,33 @@ app.delete("/orders", requireStaff, (req, res) => {
 // ── Start ──────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   const orders = loadOrders();
+  const menu = loadMenu();
+  const itemCount = (menu.categoryOrder || []).reduce(
+    (n, slug) => n + ((menu.categories[slug] && menu.categories[slug].items) || []).length, 0);
   console.log(`\n🍳 Crispy Eatery backend running on http://localhost:${PORT}`);
-  console.log(`   Mode    : Local order storage`);
+  console.log(`   Mode    : Local storage (orders + menu)`);
   console.log(`   Orders  : ${orders.length} saved`);
+  console.log(`   Menu    : v${menu.version || "?"} · ${(menu.categoryOrder || []).length} categories · ${itemCount} items`);
   console.log(`   Auth    : ${STAFF_TOKEN ? "STAFF_TOKEN set" : "STAFF_TOKEN NOT SET (staff routes 503)"}`);
   console.log(`   CORS    : ${allowedOrigins.length ? allowedOrigins.join(", ") : "same-origin only (set FRONTEND_ORIGIN to allow browsers)"}`);
   console.log(`\n   Endpoints:`);
-  console.log(`     POST  /order                         (public)  receive order from QR menu`);
-  console.log(`     POST  /orders/:id/add-items          (public)  add items to open tab`);
-  console.log(`     GET   /orders/:id                    (public)  bill lookup`);
-  console.log(`     GET   /orders/by-table/:table        (public)  open-tab detection (no PII)`);
-  console.log(`     POST  /orders/:id/email-bill         (public)  email bill`);
-  console.log(`     GET   /orders                        (staff)`);
-  console.log(`     PATCH /orders/:id                    (staff)`);
-  console.log(`     GET   /customers                     (staff)`);
-  console.log(`     DELETE /orders                       (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
-  console.log(`     GET   /dashboard                     (staff, token via ?token= or Bearer)`);
-  console.log(`     GET   /health                        (public)\n`);
+  console.log(`     POST   /order                         (public)  receive order from QR menu`);
+  console.log(`     POST   /orders/:id/add-items          (public)  add items to open tab`);
+  console.log(`     GET    /orders/:id                    (public)  bill lookup`);
+  console.log(`     GET    /orders/by-table/:table        (public)  open-tab detection (no PII)`);
+  console.log(`     POST   /orders/:id/email-bill         (public)  email bill`);
+  console.log(`     GET    /menu                          (public)  current menu for customer SPA`);
+  console.log(`     GET    /orders                        (staff)`);
+  console.log(`     PATCH  /orders/:id                    (staff)`);
+  console.log(`     PATCH  /menu/items/:id                (staff)   edit / toggle outOfStock`);
+  console.log(`     POST   /menu/items                    (staff)   add new dish`);
+  console.log(`     DELETE /menu/items/:id                (staff)   remove dish`);
+  console.log(`     POST   /menu/reorder                  (staff)   reorder items in a category`);
+  console.log(`     GET    /customers                     (staff)`);
+  console.log(`     DELETE /orders                        (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
+  console.log(`     GET    /dashboard                     (staff, token via ?token= or Bearer)`);
+  console.log(`     GET    /dashboard/menu-admin.html     (staff)   backoffice — edit menu`);
+  console.log(`     GET    /health                        (public)\n`);
 });
 
 // Graceful shutdown so an in-flight write completes before exit.
