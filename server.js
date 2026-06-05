@@ -15,6 +15,51 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
+// ── Supabase mirror (optional persistence layer) ─────────
+// The runtime source of truth is still the local JSON file, so all handlers
+// stay synchronous.  Supabase is a write-through backup that survives Render's
+// ephemeral disk wipe — if it's configured AND the local file is missing on
+// boot, we pull from Supabase to seed the file.  Disabled when env vars absent.
+let supabase = null;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+  try {
+    const { createClient } = require("@supabase/supabase-js");
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    console.log("[storage] Supabase mirroring active");
+  } catch (e) {
+    console.error("[storage] Supabase init failed:", e.message);
+  }
+} else {
+  console.log("[storage] file-only mode (set SUPABASE_URL + SUPABASE_SERVICE_KEY to enable backup)");
+}
+
+// Fire-and-forget mirror to Supabase.  Errors are logged but don't fail the request.
+function mirrorToSupabase(key, value) {
+  if (!supabase) return;
+  supabase
+    .from("state")
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" })
+    .then(({ error }) => {
+      if (error) console.warn(`[storage] mirror ${key} failed:`, error.message);
+    });
+}
+
+// Pull a key from Supabase.  Used at boot to seed local files after a wipe.
+async function pullFromSupabase(key) {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("state").select("value").eq("key", key).maybeSingle();
+    if (error) { console.warn(`[storage] pull ${key} failed:`, error.message); return null; }
+    return data ? data.value : null;
+  } catch (e) {
+    console.warn(`[storage] pull ${key} threw:`, e.message);
+    return null;
+  }
+}
+
 if (!STAFF_TOKEN) {
   console.warn(
     "[boot] STAFF_TOKEN is not set. Staff endpoints (/orders, /customers, PATCH, add-items, DELETE) will refuse all requests. Set STAFF_TOKEN in .env to use the dashboard."
@@ -83,6 +128,7 @@ function loadOrders() {
 
 function persistOrders(orders) {
   atomicWriteSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+  mirrorToSupabase("orders", orders);
 }
 
 function nextOrderId(orders) {
@@ -138,6 +184,7 @@ function persistMenu(menu) {
   menu.version = (menu.version || 0) + 1;
   menu.updatedAt = new Date().toISOString();
   atomicWriteSync(MENU_FILE, JSON.stringify(menu, null, 2));
+  mirrorToSupabase("menu", menu);
 }
 
 function slugify(s) {
@@ -177,6 +224,7 @@ function loadCustomers() {
 
 function persistCustomers(customers) {
   atomicWriteSync(CUSTOMERS_FILE, JSON.stringify(customers, null, 2));
+  mirrorToSupabase("customers", customers);
 }
 
 function saveCustomerEmail(email, orderId, tableNumber, total) {
@@ -442,7 +490,7 @@ app.patch("/menu/items/:id", requireStaff, (req, res) => {
       const found = findItem(menu, req.params.id);
       if (!found) return res.status(404).json({ error: "Item not found" });
       const body = req.body || {};
-      const ALLOWED = ["name", "desc", "price", "sizes", "tags", "outOfStock", "imgRight", "img"];
+      const ALLOWED = ["name", "desc", "price", "sizes", "tags", "outOfStock", "imgRight", "img", "imgUrl"];
       const it = found.item;
       for (const k of ALLOWED) {
         if (k in body) {
@@ -475,7 +523,7 @@ app.patch("/menu/items/:id", requireStaff, (req, res) => {
             }
           } else if (k === "outOfStock") {
             it.outOfStock = Boolean(body.outOfStock);
-          } else if (k === "name" || k === "desc" || k === "imgRight" || k === "img") {
+          } else if (k === "name" || k === "desc" || k === "imgRight" || k === "img" || k === "imgUrl") {
             const v = body[k];
             if (v === null || v === undefined || v === "") delete it[k];
             else it[k] = String(v).slice(0, 500);
@@ -544,6 +592,75 @@ app.post("/menu/items", requireStaff, (req, res) => {
   });
 });
 
+// POST /menu/items/:id/image — staff, upload an image for an item.
+// Multipart: field "image" carries the file (jpeg/png/webp/heic, ≤10 MB).
+// Sharp resizes to ≤1024 wide, encodes JPEG q85, uploads to Supabase Storage
+// bucket "menu-images" and saves the public URL as item.imgUrl.
+const multer = require("multer");
+const sharp  = require("sharp");
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (req, file, cb) => {
+    if (!/^image\/(jpeg|jpg|png|webp|heic|heif)/i.test(file.mimetype)) {
+      return cb(new Error("Only image files (jpeg/png/webp/heic) are allowed"));
+    }
+    cb(null, true);
+  },
+});
+
+app.post("/menu/items/:id/image", requireStaff, imageUpload.single("image"), async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({
+        error: "Image upload requires Supabase Storage. Set SUPABASE_URL + SUPABASE_SERVICE_KEY and create a public 'menu-images' bucket.",
+      });
+    }
+    if (!req.file) return res.status(400).json({ error: "No image file provided (field 'image')" });
+    const found = findItem(loadMenu(), req.params.id);
+    if (!found) return res.status(404).json({ error: "Item not found" });
+
+    // Resize + re-encode
+    const resized = await sharp(req.file.buffer)
+      .rotate()  // auto-orient based on EXIF
+      .resize({ width: 1024, withoutEnlargement: true })
+      .jpeg({ quality: 85, progressive: true })
+      .toBuffer();
+
+    const fileName = `${req.params.id}-${Date.now()}.jpg`;
+    const { error: upErr } = await supabase.storage
+      .from("menu-images")
+      .upload(fileName, resized, { contentType: "image/jpeg", upsert: false });
+    if (upErr) {
+      console.error("[menu] supabase upload error:", upErr.message);
+      return res.status(502).json({ error: "Upload failed: " + upErr.message });
+    }
+    const { data: { publicUrl } } = supabase.storage
+      .from("menu-images")
+      .getPublicUrl(fileName);
+
+    // Save URL onto the item
+    await new Promise((resolve, reject) => {
+      withWriteLock(() => {
+        try {
+          const menu = loadMenu();
+          const f = findItem(menu, req.params.id);
+          if (!f) return reject(new Error("Item disappeared mid-upload"));
+          f.item.imgUrl = publicUrl;
+          persistMenu(menu);
+          resolve();
+        } catch (e) { reject(e); }
+      });
+    });
+
+    console.log(`[menu] image uploaded for ${req.params.id} → ${publicUrl}`);
+    res.json({ success: true, imgUrl: publicUrl });
+  } catch (err) {
+    console.error("[menu] image upload error:", err.message);
+    res.status(500).json({ error: "Failed to upload image: " + err.message });
+  }
+});
+
 // DELETE /menu/items/:id — staff, remove an item from the menu.
 app.delete("/menu/items/:id", requireStaff, (req, res) => {
   withWriteLock(() => {
@@ -558,6 +675,56 @@ app.delete("/menu/items/:id", requireStaff, (req, res) => {
     } catch (err) {
       console.error("[menu] DELETE error:", err.message);
       res.status(500).json({ error: "Failed to delete item" });
+    }
+  });
+});
+
+// PATCH /menu/specials — staff, set or clear the "today's specials" banner.
+// Body: { text: "..." } to set, { text: null } or { text: "" } to clear.
+// Banner is part of the menu payload returned to customers via GET /menu.
+app.patch("/menu/specials", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const text = req.body && req.body.text != null ? String(req.body.text).slice(0, 240).trim() : "";
+      if (text) {
+        menu.specials = { text, updatedAt: new Date().toISOString() };
+      } else {
+        delete menu.specials;
+      }
+      persistMenu(menu);
+      console.log(`[menu] specials ${text ? "set" : "cleared"}`);
+      res.json({ success: true, specials: menu.specials || null, version: menu.version });
+    } catch (err) {
+      console.error("[menu] specials error:", err.message);
+      res.status(500).json({ error: "Failed to update specials" });
+    }
+  });
+});
+
+// POST /menu/categories/:slug/sold-out-all — staff, flip every item in a
+// category to outOfStock (or back). Useful for shift handover when a section
+// (e.g. breakfast) closes for the day.
+// Body: { soldOut: boolean }  (default true)
+app.post("/menu/categories/:slug/sold-out-all", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const slug = req.params.slug;
+      const cat = menu.categories[slug];
+      if (!cat) return res.status(404).json({ error: "Unknown category: " + slug });
+      const soldOut = req.body && req.body.soldOut === false ? false : true;
+      const items = Array.isArray(cat.items) ? cat.items : [];
+      let changed = 0;
+      for (const it of items) {
+        if ((!!it.outOfStock) !== soldOut) { it.outOfStock = soldOut; changed += 1; }
+      }
+      persistMenu(menu);
+      console.log(`[menu] category ${slug} bulk soldOut=${soldOut} (${changed} changed)`);
+      res.json({ success: true, slug, soldOut, changed, version: menu.version });
+    } catch (err) {
+      console.error("[menu] bulk sold-out error:", err.message);
+      res.status(500).json({ error: "Failed to bulk sold-out" });
     }
   });
 });
@@ -843,6 +1010,102 @@ app.post("/orders/:id/email-bill", async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────
+// ── REPORTS ────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────
+
+// Helpers: build a date range filter, aggregate orders into report shape.
+function ordersBetween(orders, fromIso, toIso) {
+  const from = new Date(fromIso).getTime();
+  const to = new Date(toIso).getTime();
+  return orders.filter((o) => {
+    if (!o.createdAt) return false;
+    const t = new Date(o.createdAt).getTime();
+    return t >= from && t < to;
+  });
+}
+
+function aggregateReport(orders) {
+  const items = new Map();         // name → { qty, revenue }
+  const hourly = new Array(24).fill(0).map((_, h) => ({ hour: h, orders: 0, revenue: 0 }));
+  const tableSet = new Set();
+  let totalRevenue = 0;
+  for (const o of orders) {
+    const h = new Date(o.createdAt).getHours();
+    hourly[h].orders += 1;
+    hourly[h].revenue += Number(o.total || 0);
+    totalRevenue += Number(o.total || 0);
+    if (o.tableNumber != null) tableSet.add(String(o.tableNumber));
+    for (const it of (o.items || [])) {
+      const key = it.name || "(unknown)";
+      const cur = items.get(key) || { name: key, qty: 0, revenue: 0 };
+      const qty = Number(it.qty || it.quantity || 1);
+      const price = Number(it.price || 0);
+      cur.qty += qty;
+      cur.revenue += qty * price;
+      items.set(key, cur);
+    }
+  }
+  const itemsSold = Array.from(items.values()).sort((a, b) => b.revenue - a.revenue);
+  // Round currency to 2dp
+  itemsSold.forEach((i) => { i.revenue = Math.round(i.revenue * 100) / 100; });
+  hourly.forEach((h) => { h.revenue = Math.round(h.revenue * 100) / 100; });
+  return {
+    totalOrders: orders.length,
+    totalRevenue: Math.round(totalRevenue * 100) / 100,
+    avgOrder: orders.length ? Math.round((totalRevenue / orders.length) * 100) / 100 : 0,
+    tableCount: tableSet.size,
+    itemsSold,
+    hourly,
+  };
+}
+
+// GET /reports/today — sales for "today" in the server's timezone.
+app.get("/reports/today", requireStaff, (_req, res) => {
+  const all = loadOrders();
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  const orders = ordersBetween(all, dayStart.toISOString(), dayEnd.toISOString());
+  const agg = aggregateReport(orders);
+  res.json({
+    date: dayStart.toISOString().slice(0, 10),
+    serverTime: now.toISOString(),
+    ...agg,
+  });
+});
+
+// GET /reports/week — last 7 days incl. today; daily totals + aggregated top items.
+app.get("/reports/week", requireStaff, (_req, res) => {
+  const all = loadOrders();
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekStart = new Date(dayStart.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const orders = ordersBetween(all, weekStart.toISOString(), new Date(dayStart.getTime() + 24 * 60 * 60 * 1000).toISOString());
+  // Per-day buckets
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart.getTime() + i * 24 * 60 * 60 * 1000);
+    const next = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+    const dayOrders = ordersBetween(orders, d.toISOString(), next.toISOString());
+    const revenue = dayOrders.reduce((s, o) => s + Number(o.total || 0), 0);
+    days.push({
+      date: d.toISOString().slice(0, 10),
+      label: d.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric" }),
+      orders: dayOrders.length,
+      revenue: Math.round(revenue * 100) / 100,
+    });
+  }
+  const agg = aggregateReport(orders);
+  res.json({
+    from: weekStart.toISOString().slice(0, 10),
+    to: dayStart.toISOString().slice(0, 10),
+    serverTime: now.toISOString(),
+    days,
+    ...agg,
+  });
+});
+
 // ── GET /customers — staff ────────────────────────────────
 app.get("/customers", requireStaff, (_req, res) => {
   const customers = loadCustomers();
@@ -871,8 +1134,37 @@ app.delete("/orders", requireStaff, (req, res) => {
   });
 });
 
-// ── Start ──────────────────────────────────────────────────
-const server = app.listen(PORT, () => {
+// ── Boot-time Supabase restore ───────────────────────────
+// If Supabase is configured, pull each blob and seed the corresponding local
+// file when (a) the file doesn't exist on disk (post-Render-wipe scenario)
+// or (b) the remote is newer than the local copy. The local file remains the
+// runtime source of truth — this just gives us survival across deploys.
+async function restoreFromSupabase() {
+  if (!supabase) return;
+  const targets = [
+    { key: "menu",      file: MENU_FILE },
+    { key: "orders",    file: ORDERS_FILE },
+    { key: "customers", file: CUSTOMERS_FILE },
+  ];
+  for (const t of targets) {
+    try {
+      const exists = fs.existsSync(t.file);
+      const empty  = exists && !fs.readFileSync(t.file, "utf8").trim();
+      if (exists && !empty) continue; // local already has data — trust it
+      const remote = await pullFromSupabase(t.key);
+      if (remote == null) continue; // remote also empty — nothing to restore
+      atomicWriteSync(t.file, JSON.stringify(remote, null, 2));
+      console.log(`[storage] restored ${t.key} from Supabase`);
+    } catch (e) {
+      console.warn(`[storage] restore ${t.key} failed:`, e.message);
+    }
+  }
+}
+
+let server;
+async function boot() {
+  await restoreFromSupabase();
+  server = app.listen(PORT, () => {
   const orders = loadOrders();
   const menu = loadMenu();
   const itemCount = (menu.categoryOrder || []).reduce(
@@ -896,12 +1188,20 @@ const server = app.listen(PORT, () => {
   console.log(`     POST   /menu/items                    (staff)   add new dish`);
   console.log(`     DELETE /menu/items/:id                (staff)   remove dish`);
   console.log(`     POST   /menu/reorder                  (staff)   reorder items in a category`);
+  console.log(`     POST   /menu/items/:id/image          (staff)   upload + resize image (Supabase Storage)`);
+  console.log(`     PATCH  /menu/specials                 (staff)   set/clear today's specials banner`);
+  console.log(`     POST   /menu/categories/:slug/sold-out-all  (staff)  bulk sold-out toggle`);
+  console.log(`     GET    /reports/today                 (staff)   today's sales report`);
+  console.log(`     GET    /reports/week                  (staff)   last 7 days report`);
+  console.log(`     GET    /dashboard/reports.html        (staff)   reports admin page`);
   console.log(`     GET    /customers                     (staff)`);
   console.log(`     DELETE /orders                        (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
   console.log(`     GET    /dashboard                     (staff, token via ?token= or Bearer)`);
   console.log(`     GET    /dashboard/menu-admin.html     (staff)   backoffice — edit menu`);
   console.log(`     GET    /health                        (public)\n`);
-});
+  });
+}
+boot().catch((err) => { console.error("[boot] failed:", err); process.exit(1); });
 
 // Graceful shutdown so an in-flight write completes before exit.
 function shutdown(signal) {
