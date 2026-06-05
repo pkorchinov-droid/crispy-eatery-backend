@@ -97,6 +97,25 @@
     align-items: center;
   }
 
+  /* ── Header nav buttons ─────────────────────────── */
+  .header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .header-actions a {
+    color: #c49a5c;
+    text-decoration: none;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 7px 14px;
+    border: 1px solid #4a3d2e;
+    border-radius: 6px;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .header-actions a:hover { border-color: #b5753a; color: #e8c477; }
+
   /* ── Order grid ─────────────────────────────────── */
   .orders-grid {
     display: grid;
@@ -794,6 +813,8 @@
     }
     header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
     .logo span { display: block; margin-left: 0; }
+    .header-actions { order: 3; width: 100%; justify-content: flex-start; }
+    .header-actions a { padding: 6px 10px; font-size: 11px; letter-spacing: 1px; }
     .filter-bar { padding: 10px 12px 0; }
     .filter-btn { padding: 8px 14px; font-size: 13px; }
     .history-section { padding: 0 12px 30px; }
@@ -805,6 +826,10 @@
 <header>
   <div>
     <div class="logo">Crispy Eatery <span>Kitchen</span></div>
+  </div>
+  <div class="header-actions">
+    <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
+    <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
   </div>
   <div class="stats">
     <div class="stat">
@@ -876,6 +901,14 @@
       var clean = window.location.pathname + (rest ? '?' + rest : '') + window.location.hash;
       window.history.replaceState(null, '', clean);
     }
+  })();
+
+  // ── Propagate token to the menu-admin link so it can capture on first visit ──
+  (function wireNavLinks() {
+    var t = localStorage.getItem('staffToken');
+    if (!t) return;
+    var menuAdminLink = document.getElementById('menuAdminLink');
+    if (menuAdminLink) menuAdminLink.href = 'menu-admin.html?token=' + encodeURIComponent(t);
   })();
   function authHeaders(extra) {
     var h = Object.assign({}, extra || {});
