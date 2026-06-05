@@ -124,6 +124,25 @@
   .item-id {
     font-size: 10px; color: #5a4a38; font-family: monospace; margin-top: 4px;
   }
+  .item-thumb {
+    width: 56px; height: 56px; border-radius: 8px; object-fit: cover;
+    background: #1a1510; border: 1px solid #3d3428; flex-shrink: 0;
+  }
+  .item-thumb-placeholder {
+    width: 56px; height: 56px; border-radius: 8px; flex-shrink: 0;
+    background: repeating-linear-gradient(135deg, #2a2318 0 6px, #1a1510 6px 12px);
+    border: 1px dashed #3d3428;
+    display: flex; align-items: center; justify-content: center;
+    color: #5a4a38; font-size: 18px;
+  }
+  .btn-upload {
+    background: transparent; border: 1px solid #3d3428; color: #8a7a68;
+    width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+    position: relative;
+  }
+  .btn-upload:hover { border-color: #c49a5c; color: #e8c477; }
+  .btn-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
   .item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .toggle-soldout {
@@ -205,6 +224,46 @@
     font-size: 12px; color: #e8a040; line-height: 1.5;
   }
 
+  /* ── Specials editor card ──────────────────── */
+  .specials {
+    margin: 16px 24px; background: linear-gradient(180deg, #3d2818 0%, #2a2318 100%);
+    border: 1px solid #b5753a; border-radius: 10px; padding: 14px 16px;
+  }
+  .specials-head {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;
+  }
+  .specials-title {
+    font-family: Georgia, serif; font-size: 16px; color: #e8c477;
+    font-style: italic; font-weight: 500;
+  }
+  .specials-meta { font-size: 11px; color: #8a7a68; }
+  .specials textarea {
+    width: 100%; min-height: 56px; background: #1a1510; border: 1px solid #4a3d2e;
+    color: #f5f0e8; padding: 10px 12px; border-radius: 6px; font-size: 14px;
+    font-family: inherit; resize: vertical; line-height: 1.4;
+  }
+  .specials textarea:focus { outline: none; border-color: #e8c477; }
+  .specials-actions {
+    display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;
+  }
+  .btn-clear {
+    background: transparent; border: 1px solid #4a3d2e; color: #a09080;
+    padding: 7px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .btn-clear:hover { border-color: #ef5350; color: #ef5350; }
+
+  /* ── Category-head bulk action ─────────────── */
+  .category-head-actions { display: flex; gap: 8px; align-items: center; }
+  .btn-bulk {
+    background: transparent; border: 1px solid #c25a3a; color: #c25a3a;
+    padding: 7px 14px; border-radius: 8px; font-size: 11px; font-weight: 600;
+    cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s;
+  }
+  .btn-bulk:hover { background: #c25a3a; color: #fff; }
+  .btn-bulk.restore { border-color: #4caf50; color: #4caf50; }
+  .btn-bulk.restore:hover { background: #4caf50; color: #fff; }
+
   @media (max-width: 768px) {
     header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
     .tabs, .category-head, .items, .notice { padding-left: 12px; padding-right: 12px; }
@@ -219,6 +278,7 @@
 <header>
   <div class="logo">Crispy Eatery <span>Menu Admin</span></div>
   <div class="header-actions">
+    <a href="reports.html" id="reportsLink">Reports ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="../dashboard" id="kitchenLink">Kitchen ↗</a>
     <div class="save-status saved" id="saveStatus">
@@ -232,6 +292,20 @@
 <div class="notice">
   ⚠️ Heads-up: menu edits live on the backend's runtime disk. They survive day-to-day,
   but a backend redeploy resets the menu to its seed file. Tell Pavel before redeploying.
+</div>
+
+<div class="specials" id="specialsCard">
+  <div class="specials-head">
+    <div class="specials-title">Today's specials banner</div>
+    <div class="specials-meta" id="specialsMeta"></div>
+  </div>
+  <textarea id="specialsText"
+    placeholder="Leave blank to hide the banner. E.g. 'Today: Iced Auckland Green Matcha — limited batch.'"
+    maxlength="240"></textarea>
+  <div class="specials-actions">
+    <button class="btn-clear" id="specialsClear">Clear</button>
+    <button class="btn-primary" id="specialsSave">Save banner</button>
+  </div>
 </div>
 
 <div id="categoryHead" class="category-head"></div>
@@ -267,9 +341,11 @@
     return h;
   }
 
-  // Preserve the kitchen-link with token
+  // Preserve token in cross-page links
   var kitchenLink = document.getElementById("kitchenLink");
   if (kitchenLink) kitchenLink.href = "../dashboard?token=" + encodeURIComponent(token);
+  var reportsLink = document.getElementById("reportsLink");
+  if (reportsLink) reportsLink.href = "reports.html?token=" + encodeURIComponent(token);
 
   // ── State ─────────────────────────────────────
   var menu = null;
@@ -292,11 +368,47 @@
       .then(function(m) {
         menu = m;
         if (!activeSlug || !menu.categories[activeSlug]) activeSlug = menu.categoryOrder[0];
-        renderTabs(); renderCategory();
+        renderSpecials(); renderTabs(); renderCategory();
         setStatus("saved", "Loaded · v" + (menu.version || "?"));
       })
       .catch(function(e) { setStatus("error", "Load failed"); console.error(e); });
   }
+
+  // ── Specials banner editor ─────────────────────
+  function renderSpecials() {
+    var sp = menu.specials || null;
+    document.getElementById("specialsText").value = sp ? sp.text : "";
+    var meta = document.getElementById("specialsMeta");
+    if (sp && sp.updatedAt) {
+      var d = new Date(sp.updatedAt);
+      meta.textContent = "Last updated " + d.toLocaleString();
+    } else {
+      meta.textContent = "Not active";
+    }
+  }
+  function saveSpecials(text) {
+    setStatus("saving", text ? "Saving banner…" : "Clearing…");
+    return fetch(BACKEND + "/menu/specials", {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ text: text || "" }),
+    })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j, status: r.status }; }); })
+      .then(function(res) {
+        if (!res.ok) { setStatus("error", res.j.error || ("HTTP " + res.status)); return; }
+        menu.specials = res.j.specials || null;
+        renderSpecials();
+        setStatus("saved", text ? "Banner saved" : "Banner cleared");
+      })
+      .catch(function() { setStatus("error", "Network error"); });
+  }
+  document.getElementById("specialsSave").onclick = function() {
+    saveSpecials(document.getElementById("specialsText").value.trim());
+  };
+  document.getElementById("specialsClear").onclick = function() {
+    document.getElementById("specialsText").value = "";
+    saveSpecials("");
+  };
 
   function renderTabs() {
     var tabs = document.getElementById("tabs");
@@ -324,10 +436,41 @@
       titleDiv.appendChild(sub);
     }
     head.appendChild(titleDiv);
+
+    var actions = document.createElement("div"); actions.className = "category-head-actions";
+
+    // Bulk sold-out toggle (reads category state — all currently out → "Restore all")
+    var allOut = (c.items || []).length > 0 && c.items.every(function(it) { return it.outOfStock; });
+    var bulkBtn = document.createElement("button");
+    bulkBtn.className = "btn-bulk" + (allOut ? " restore" : "");
+    bulkBtn.textContent = allOut ? "Restore all" : "Sold out all";
+    bulkBtn.title = allOut ? "Mark every item back in stock" : "Mark every item sold out — useful at shift end";
+    bulkBtn.onclick = function() {
+      var msg = allOut
+        ? 'Mark all items in "' + (c.title || activeSlug) + '" back in stock?'
+        : 'Mark ALL items in "' + (c.title || activeSlug) + '" as sold out?';
+      if (!confirm(msg)) return;
+      setStatus("saving", allOut ? "Restoring…" : "Marking sold out…");
+      fetch(BACKEND + "/menu/categories/" + encodeURIComponent(activeSlug) + "/sold-out-all", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ soldOut: !allOut }),
+      })
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function() {
+          setStatus("saved", "Saved · " + new Date().toLocaleTimeString().slice(0, 5));
+          fetchMenu();
+        })
+        .catch(function() { setStatus("error", "Bulk update failed"); });
+    };
+    actions.appendChild(bulkBtn);
+
     var addBtn = document.createElement("button");
     addBtn.className = "btn-add"; addBtn.textContent = "+ Add item";
     addBtn.onclick = openAddModal;
-    head.appendChild(addBtn);
+    actions.appendChild(addBtn);
+
+    head.appendChild(actions);
 
     var items = document.getElementById("items");
     items.innerHTML = "";
@@ -398,6 +541,18 @@
     var handle = document.createElement("div"); handle.className = "drag-handle"; handle.textContent = "⋮⋮"; handle.title = "Drag to reorder";
     row.appendChild(handle);
 
+    // Thumbnail (imgUrl wins, then bundled image lookup, then placeholder)
+    var thumbWrap;
+    if (it.imgUrl) {
+      thumbWrap = document.createElement("img");
+      thumbWrap.className = "item-thumb"; thumbWrap.src = it.imgUrl; thumbWrap.alt = "";
+    } else {
+      thumbWrap = document.createElement("div");
+      thumbWrap.className = "item-thumb-placeholder";
+      thumbWrap.textContent = "🖼";
+    }
+    row.appendChild(thumbWrap);
+
     var main = document.createElement("div"); main.className = "item-main";
     var r1 = document.createElement("div"); r1.className = "item-row1";
     var name = document.createElement("div"); name.className = "item-name"; name.textContent = it.name;
@@ -437,6 +592,20 @@
     toggle.appendChild(cb);
     var lbl = document.createElement("span"); lbl.textContent = "Sold out"; toggle.appendChild(lbl);
     actions.appendChild(toggle);
+
+    // Upload button (icon + hidden file input overlay)
+    var uploadBtn = document.createElement("label");
+    uploadBtn.className = "btn-upload"; uploadBtn.title = "Upload image";
+    uploadBtn.innerHTML = "📷";
+    var fileInput = document.createElement("input");
+    fileInput.type = "file"; fileInput.accept = "image/*";
+    fileInput.onchange = function() {
+      var f = fileInput.files && fileInput.files[0]; if (!f) return;
+      uploadImage(it.id, f);
+      fileInput.value = "";
+    };
+    uploadBtn.appendChild(fileInput);
+    actions.appendChild(uploadBtn);
 
     var editBtn = document.createElement("button"); editBtn.className = "btn-icon"; editBtn.title = "Edit"; editBtn.textContent = "✎";
     editBtn.onclick = function() {
@@ -542,6 +711,28 @@
     box.appendChild(actions);
 
     return box;
+  }
+
+  function uploadImage(id, file) {
+    setStatus("saving", "Uploading image…");
+    var fd = new FormData();
+    fd.append("image", file);
+    return fetch(BACKEND + "/menu/items/" + encodeURIComponent(id) + "/image", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token },  // do NOT set Content-Type — FormData sets the boundary
+      body: fd,
+    })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j, status: r.status }; }); })
+      .then(function(res) {
+        if (!res.ok) {
+          setStatus("error", (res.j && res.j.error) || ("HTTP " + res.status));
+          alert((res.j && res.j.error) || ("Upload failed (HTTP " + res.status + ")"));
+          return;
+        }
+        setStatus("saved", "Image uploaded");
+        fetchMenu(); // refresh to show new thumbnail
+      })
+      .catch(function(e) { setStatus("error", "Network error"); console.error(e); });
   }
 
   function patchItem(id, body, onSuccess) {
