@@ -499,7 +499,8 @@ app.post("/order", (req, res) => {
       }
 
       // Reject forged/underpriced items against the authoritative menu.
-      const pv = priceViolation(normalizedItems, loadMenu());
+      const menu = loadMenu();
+      const pv = priceViolation(normalizedItems, menu);
       if (pv) {
         res.status(400).json({ error: pv });
         return;
@@ -528,6 +529,7 @@ app.post("/order", (req, res) => {
         createdAt: new Date().toISOString(),
       };
       order.total = clampMoney(order.total);
+      order.onlineSurcharge = orderSurcharge(normalizedItems, menu);
 
       orders.push(order);
       persistOrders(orders);
@@ -665,6 +667,36 @@ function withOnlineSurcharge(menu) {
   }
   out.onlineSurcharge = { drink: ONLINE_SURCHARGE.coffee, food: ONLINE_SURCHARGE.mains, sides: ONLINE_SURCHARGE.sides };
   return out;
+}
+
+// Which category an order line belongs to (by id, then stripped name).
+function findItemCategory(menu, line) {
+  if (!menu || !Array.isArray(menu.categoryOrder)) return null;
+  if (line && line.id) {
+    for (const slug of menu.categoryOrder) {
+      const cat = menu.categories[slug];
+      if (cat && Array.isArray(cat.items) && cat.items.some((x) => x.id === line.id)) return slug;
+    }
+  }
+  if (line && line.name) {
+    const base = String(line.name).replace(/\s*\(.*\)\s*$/, "").trim().toLowerCase();
+    for (const slug of menu.categoryOrder) {
+      const cat = menu.categories[slug];
+      if (cat && Array.isArray(cat.items) && cat.items.some((x) => String(x.name || "").trim().toLowerCase() === base)) return slug;
+    }
+  }
+  return null;
+}
+// Online-surcharge INCOME earned on a set of order lines (the per-category fee
+// × qty). This is the "developer fee" the owner keeps from online ordering.
+function orderSurcharge(items, menu) {
+  let s = 0;
+  for (const it of (items || [])) {
+    const slug = findItemCategory(menu, it);
+    if (slug == null) continue;
+    s += categorySurcharge(slug) * (Number(it.qty) || 1);
+  }
+  return Math.round(s * 100) / 100;
 }
 
 // GET /menu — public, returns the current menu.  The customer SPA fetches
@@ -1087,6 +1119,7 @@ app.post("/orders/:id/add-items", (req, res) => {
       orders[idx].total = clampMoney(
         orders[idx].items.reduce((sum, i) => sum + (i.price || 0) * (i.qty || 1), 0)
       );
+      orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu()));
       orders[idx].status = "received";
       orders[idx].updatedAt = new Date().toISOString();
       orders[idx]._lastAddHash = newHash;
