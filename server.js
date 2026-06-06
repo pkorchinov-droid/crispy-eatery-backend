@@ -1576,11 +1576,13 @@ function aggregateReport(orders) {
   const hourly = new Array(24).fill(0).map((_, h) => ({ hour: h, orders: 0, revenue: 0 }));
   const tableSet = new Set();
   let totalRevenue = 0;
+  let onlineIncome = 0;
   for (const o of orders) {
     const h = new Date(o.createdAt).getHours();
     hourly[h].orders += 1;
     hourly[h].revenue += Number(o.total || 0);
     totalRevenue += Number(o.total || 0);
+    onlineIncome += Number(o.onlineSurcharge || 0);
     if (o.tableNumber != null) tableSet.add(String(o.tableNumber));
     for (const it of (o.items || [])) {
       const key = it.name || "(unknown)";
@@ -1599,6 +1601,7 @@ function aggregateReport(orders) {
   return {
     totalOrders: orders.length,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
+    onlineIncome: Math.round(onlineIncome * 100) / 100,
     avgOrder: orders.length ? Math.round((totalRevenue / orders.length) * 100) / 100 : 0,
     tableCount: tableSet.size,
     itemsSold,
