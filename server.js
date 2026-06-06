@@ -625,12 +625,57 @@ app.get("/orders/by-table/:table", (req, res) => {
 // ── MENU API ───────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────
 
+// ── Online ordering surcharge ──────────────────────────────
+// A few cents added to each item's price ON THE CUSTOMER MENU ONLY. It is baked
+// into the displayed (GST-inclusive) price — NOT a separate checkout fee — per
+// NZ Fair Trading guidance (avoids "drip pricing"). Base prices in menu.json,
+// the admin (/menu?raw=1) and the in-store/Lightspeed flow are untouched.
+// Tune per category here; set a value to 0 to exempt a category.
+const ONLINE_SURCHARGE = {
+  // drinks
+  coffee: 0.20, tea: 0.20, signature: 0.20,
+  // food
+  "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60,
+  // cheap add-on sides — keep light
+  sides: 0.20,
+};
+const ONLINE_SURCHARGE_DEFAULT = 0.60; // any future/unknown category
+function categorySurcharge(slug) {
+  const v = ONLINE_SURCHARGE[slug];
+  return typeof v === "number" ? v : ONLINE_SURCHARGE_DEFAULT;
+}
+function bumpPrice(n, add) {
+  return typeof n === "number" ? Math.round((n + add) * 100) / 100 : n;
+}
+// Return a COPY of the menu with the per-category surcharge added to every
+// price/size. Never mutates the cached base menu.
+function withOnlineSurcharge(menu) {
+  const out = JSON.parse(JSON.stringify(menu || {}));
+  for (const slug of (out.categoryOrder || [])) {
+    const cat = out.categories && out.categories[slug];
+    if (!cat || !Array.isArray(cat.items)) continue;
+    const add = categorySurcharge(slug);
+    if (!add) continue;
+    for (const it of cat.items) {
+      if (typeof it.price === "number") it.price = bumpPrice(it.price, add);
+      if (it.sizes && typeof it.sizes === "object") {
+        for (const k of Object.keys(it.sizes)) it.sizes[k] = bumpPrice(it.sizes[k], add);
+      }
+    }
+  }
+  out.onlineSurcharge = { drink: ONLINE_SURCHARGE.coffee, food: ONLINE_SURCHARGE.mains, sides: ONLINE_SURCHARGE.sides };
+  return out;
+}
+
 // GET /menu — public, returns the current menu.  The customer SPA fetches
 // this on boot and falls back to the bundled menu if we're unreachable.
-app.get("/menu", (_req, res) => {
+// ?raw=1 returns BASE prices (used by the staff menu admin); the default
+// response has the online surcharge baked into each price.
+app.get("/menu", (req, res) => {
   const menu = loadMenu();
   res.set("Cache-Control", "no-cache");
-  res.json(menu);
+  const raw = req.query && (req.query.raw === "1" || req.query.raw === "true");
+  res.json(raw ? menu : withOnlineSurcharge(menu));
 });
 
 // PATCH /menu/items/:id — staff, update any subset of an item's fields.
