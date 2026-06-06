@@ -838,6 +838,12 @@
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.err { border-color: #ef5350; color: #ffd9d7; }
   #toast.ok  { border-color: #4caf50; color: #dff5df; }
+  /* online ordering income (your developer fee) per order */
+  .online-income {
+    margin-top: 3px; font-size: 12px; font-weight: 700; letter-spacing: .3px;
+    color: #6ee7a8; background: #14321f; border: 1px solid #2f6b45;
+    padding: 1px 7px; border-radius: 6px; display: inline-block;
+  }
 </style>
 </head>
 <body>
@@ -1510,6 +1516,7 @@
           '<div class="order-time">' + escHtml(formatTime(order.createdAt)) + '</div>' +
           '<div class="elapsed" data-created="' + escAttr(order.createdAt) + '">' + escHtml(elapsed(order.createdAt)) + '</div>' +
           phoneHtml +
+          (Number(order.onlineSurcharge) > 0 ? '<div class="online-income" title="Your online ordering fee earned on this order">💰 +$' + Number(order.onlineSurcharge).toFixed(2) + '</div>' : '') +
         '</div>' +
       '</div>' +
       '<div class="card-body">' + itemsHtml + orderNotes + cookHint + pickupHint + '</div>' +
