@@ -217,6 +217,7 @@
         statCard("Revenue", fmt(d.totalRevenue), d.totalOrders ? "since 00:00" : "no orders yet") +
         statCard("Avg order", fmt(d.avgOrder), "per ticket") +
         statCard("Tables served", fmtInt(d.tableCount), "unique") +
+        statCard("Online income", fmt(d.onlineIncome || 0), "your online fee today") +
         '</div>';
     } else {
       html += '<div class="stats">' +
@@ -224,6 +225,7 @@
         statCard("Revenue", fmt(d.totalRevenue), "") +
         statCard("Avg order", fmt(d.avgOrder), "per ticket") +
         statCard("Daily avg revenue", fmt(d.totalRevenue / 7), "") +
+        statCard("Online income", fmt(d.onlineIncome || 0), "your online fee, 7 days") +
         '</div>';
     }
 
