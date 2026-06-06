@@ -363,7 +363,8 @@
   // ── Fetch & render menu ───────────────────────
   function fetchMenu() {
     setStatus("saving", "Loading…");
-    return fetch(BACKEND + "/menu", { headers: authHeaders() })
+    // ?raw=1 → base prices (the online surcharge is added only on the customer menu)
+    return fetch(BACKEND + "/menu?raw=1", { headers: authHeaders() })
       .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function(m) {
         menu = m;

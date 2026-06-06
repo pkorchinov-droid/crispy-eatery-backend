@@ -850,6 +850,7 @@
     <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print">🖨 Printer</a>
+    <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts">🧾 Receipt info</a>
   </div>
   <div class="stats">
     <div class="stat">
@@ -1187,6 +1188,127 @@
     if (confirm('Saved ' + ip + '. Run a TEST print now?')) window.testPrint();
   };
 
+  // ────────────────────────────────────────────────────────────
+  // ── GST receipt / customer bill — full order WITH prices ──
+  //    Mirrors the Lightspeed tax invoice. Prices are GST-inclusive (NZ 15%).
+  //    GST is derived from the total and subtotal is the residual, so the
+  //    three printed figures always reconcile to the cent.
+  // ────────────────────────────────────────────────────────────
+  function getReceiptInfo() {
+    var d = {
+      name: 'Crispy Eatery',
+      legal: 'Twopeople Ltd',
+      addr: '341 Remuera Road, Auckland 1050',
+      gst: '136-528-536',
+      web: 'www.crispyeatery.co.nz'
+    };
+    try {
+      var s = localStorage.getItem('receiptInfo');
+      if (s) { var o = JSON.parse(s); for (var k in d) { if (o && o[k] != null && o[k] !== '') d[k] = o[k]; } }
+    } catch (e) {}
+    return d;
+  }
+  // NZ GST 15%, prices GST-inclusive. Derive GST from the total (round half-up on
+  // integer cents), then subtotal = total - GST so subtotal + GST === total exactly.
+  function gstBreakdown(total) {
+    var cents = Math.round((Number(total) || 0) * 100);
+    var gst = Math.round(cents * 3 / 23);
+    return { subtotal: (cents - gst) / 100, gst: gst / 100, total: cents / 100 };
+  }
+  function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+  function eposRuleEq() { return '<text>' + new Array(PRINT_LINE_WIDTH + 1).join('=') + '&#10;</text>'; }
+  // left text + right text, right flush to the line edge (manual pad — no tab stops)
+  function padRow(left, right) {
+    left = String(left); right = String(right);
+    var maxLeft = PRINT_LINE_WIDTH - right.length - 1;
+    if (left.length > maxLeft) left = left.slice(0, Math.max(0, maxLeft - 1)) + '.';
+    var gap = PRINT_LINE_WIDTH - left.length - right.length;
+    if (gap < 1) gap = 1;
+    return left + new Array(gap + 1).join(' ') + right;
+  }
+
+  function buildReceiptXml(order) {
+    var info = getReceiptInfo();
+    var rawTotal = (typeof order.total === 'number' && isFinite(order.total))
+      ? order.total
+      : (order.items || []).reduce(function (s, i) { return s + (Number(i.price) || 0) * (Number(i.qty) || 1); }, 0);
+    var b = gstBreakdown(rawTotal);
+    var when = new Date(order.createdAt || Date.now());
+    var dateStr = when.toLocaleDateString('en-NZ', { day: '2-digit', month: 'short', year: 'numeric' });
+    var timeStr = when.toLocaleTimeString('en-NZ', { hour: '2-digit', minute: '2-digit', hour12: false });
+    var L = [];
+    // header (centered)
+    L.push('<text align="center"/>');
+    L.push('<text dw="true" dh="true" em="true">' + eposEsc(info.name) + '&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">' + eposEsc(info.legal) + '&#10;</text>');
+    if (info.addr) L.push('<text>' + eposEsc(info.addr) + '&#10;</text>');
+    L.push('<text>GST No: ' + eposEsc(info.gst) + '&#10;</text>');
+    if (info.web) L.push('<text>' + eposEsc(info.web) + '&#10;</text>');
+    L.push('<text align="left"/>');
+    L.push(eposRule());
+    L.push('<text align="center"/>');
+    L.push('<text em="true">TAX INVOICE / RECEIPT&#10;</text>');
+    L.push('<text em="false"/>');
+    L.push('<text align="left"/>');
+    L.push(eposRule());
+    // meta
+    L.push('<text>' + eposEsc(padRow('Order: ' + order.id, 'Table: ' + order.tableNumber)) + '&#10;</text>');
+    L.push('<text>' + eposEsc(dateStr + '  ' + timeStr) + '&#10;</text>');
+    L.push(eposRule());
+    // items (line price is GST-inclusive and already includes any add-ons)
+    (order.items || []).forEach(function (it) {
+      var qty = Number(it.qty) || 1;
+      var name = qty + 'x ' + (it.name || '') + (it.size ? ' (' + it.size + ')' : '');
+      var lineTotal = (Number(it.price) || 0) * qty;
+      L.push('<text>' + eposEsc(padRow(name, money(lineTotal))) + '&#10;</text>');
+      if (it.notes) L.push('<text>' + eposEsc('  + ' + it.notes) + '&#10;</text>');
+    });
+    L.push(eposRule());
+    // totals
+    L.push('<text>' + eposEsc(padRow('Subtotal (excl GST)', money(b.subtotal))) + '&#10;</text>');
+    L.push('<text>' + eposEsc(padRow('GST 15%', money(b.gst))) + '&#10;</text>');
+    L.push(eposRuleEq());
+    L.push('<text dh="true" em="true">' + eposEsc(padRow('TOTAL (incl GST)', money(b.total))) + '&#10;</text>');
+    L.push('<text dh="false" em="false"/>');
+    L.push(eposRuleEq());
+    L.push('<text>Prices include GST (15%) at the&#10;</text>');
+    L.push('<text>standard rate. Amounts in NZD.&#10;</text>');
+    L.push('<feed line="1"/>');
+    var paid = order.paymentStatus === 'paid';
+    L.push('<text align="center"/>');
+    L.push('<text dh="true" em="true">*** ' + (paid ? 'PAID' : 'UNPAID') + ' ***&#10;</text>');
+    L.push('<text dh="false" em="false"/>');
+    L.push('<feed line="1"/>');
+    L.push('<text>Thank you - see you again!&#10;</text>');
+    L.push('<text align="left"/>');
+    L.push('<feed line="2"/>');
+    L.push('<cut type="feed"/>');
+    var body = '<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">' + L.join('') + '</epos-print>';
+    return '<?xml version="1.0" encoding="utf-8"?>' +
+      '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>' +
+      body + '</s:Body></s:Envelope>';
+  }
+
+  window.printReceipt = function (orderId) {
+    var order = orderData[orderId];
+    if (!order) { toast('Order not found', 'err'); return; }
+    toast('Printing receipt for ' + order.id + '…');
+    sendEpos(buildReceiptXml(order))
+      .then(function (res) { toast(res.ok ? '🧾 Receipt printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err'); })
+      .catch(function () { toast(printerHelp(), 'err'); });
+  };
+
+  window.receiptSetup = function () {
+    var info = getReceiptInfo();
+    var fields = [['name', 'Business / trading name'], ['legal', 'Legal entity name'], ['addr', 'Address'], ['gst', 'GST number'], ['web', 'Website']];
+    for (var i = 0; i < fields.length; i++) {
+      var v = window.prompt('Receipt — ' + fields[i][1] + ':\n(Cancel keeps current value)', info[fields[i][0]] || '');
+      if (v !== null) info[fields[i][0]] = v.trim();
+    }
+    try { localStorage.setItem('receiptInfo', JSON.stringify(info)); } catch (e) {}
+    toast('Receipt details saved', 'ok');
+  };
+
   function renderCard(order) {
     const isPreparing = order.status === 'preparing';
     const isReady = order.status === 'ready';
@@ -1315,7 +1437,8 @@
         '<div style="display:flex;align-items:center">' +
           '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>' +
           '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + escHtml(badgeText) + '</span>' +
-          '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket">&#128424;</button>' +
+          '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)">&#128424;</button>' +
+          '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)">&#129534;</button>' +
         '</div>' +
         '<div class="order-meta">' +
           '<div class="order-id">' + escHtml(order.id) + '</div>' +
