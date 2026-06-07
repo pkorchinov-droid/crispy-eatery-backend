@@ -1617,10 +1617,22 @@ app.get("/reports/today", requireStaff, (_req, res) => {
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   const orders = ordersBetween(all, dayStart.toISOString(), dayEnd.toISOString());
   const agg = aggregateReport(orders);
+  // Per-bill list (newest first) for the "Today's bills" view + day report.
+  const bills = orders.slice().reverse().map((o) => ({
+    id: o.id,
+    billToken: o.billToken,
+    createdAt: o.createdAt,
+    tableNumber: o.tableNumber,
+    total: Number(o.total) || 0,
+    onlineSurcharge: Number(o.onlineSurcharge) || 0,
+    paymentStatus: o.paymentStatus || "unpaid",
+    items: (o.items || []).map((i) => ({ qty: Number(i.qty) || 1, name: i.name, size: i.size || "" })),
+  }));
   res.json({
     date: dayStart.toISOString().slice(0, 10),
     serverTime: now.toISOString(),
     ...agg,
+    bills,
   });
 });
 
