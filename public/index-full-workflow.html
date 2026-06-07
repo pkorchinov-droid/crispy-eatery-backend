@@ -1075,10 +1075,11 @@
   const PRINT_LINE_WIDTH = 42; // 80mm Font A ≈ 48 cols; 42 is tidy & safe
   // Two print stations, each its own printer. Barista IP blank → one combined
   // ticket goes to the kitchen printer (original behaviour).
-  // Kitchen/food ticket -> the dashboard-owned TM-m30 (.210). NOT .101: Lightspeed
-  // holds .101's mechanism, so ePOS-Print there times out. .210 is uncontended.
+  // Kitchen/food ticket -> the dedicated WiFi kitchen printer (.160). NOT .101:
+  // Lightspeed holds .101's mechanism, so ePOS-Print there times out. .160 is
+  // dashboard-owned (uncontended).
   function getKitchenPrinterIP() {
-    try { return localStorage.getItem('kitchenPrinterIP') || '192.168.1.210'; } catch (e) { return '192.168.1.210'; }
+    try { return localStorage.getItem('kitchenPrinterIP') || '192.168.1.160'; } catch (e) { return '192.168.1.160'; }
   }
   function getBaristaPrinterIP() {
     try { return (localStorage.getItem('baristaPrinterIP') || '192.168.1.76').trim(); } catch (e) { return '192.168.1.76'; }
