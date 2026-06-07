@@ -135,6 +135,36 @@
     header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
     .stats, .hourly, .items-table, .week-bars, .hour-labels { margin-left: 12px; margin-right: 12px; }
   }
+
+  /* PAID/UNPAID pills + bills rows */
+  .pill { display:inline-block; padding:1px 7px; border-radius:5px; font-size:11px; font-weight:700; letter-spacing:.5px; border:1px solid; }
+  .pill.paid { color:#6ee7a8; border-color:#2f6b45; }
+  .pill.unpaid { color:#e8b96e; border-color:#6b542f; }
+  .bill-row { cursor:pointer; }
+  .bill-row:hover td { background:#332a1d; }
+  .bill-items { max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bbab98; font-size:12px; }
+  .print-only { display:none; }
+  .print-title { text-align:center; font-family:Georgia,serif; font-size:22px; font-weight:700; color:#000; margin:14px 0 4px; }
+  .print-title .pt-sub { font-size:13px; font-weight:400; color:#444; margin-top:4px; }
+
+  /* Printable end-of-day report */
+  @media print {
+    body { background:#fff !important; color:#000 !important; padding:0; }
+    header, .tabs, .header-actions, #printBtn, .hourly, .week-bars, .hour-labels, .section-head .sub { display:none !important; }
+    .print-only { display:block !important; }
+    .stats { grid-template-columns:repeat(4,1fr) !important; padding:8px 16px; gap:8px; }
+    .stat { background:#fff !important; border:1px solid #999 !important; padding:8px 10px; }
+    .stat .value { color:#000 !important; font-size:22px; }
+    .stat .label, .stat .sub { color:#333 !important; }
+    .section-head { padding:12px 16px 4px; }
+    .section-head h2 { color:#000 !important; }
+    .items-table { margin:0 16px; }
+    .items-table table, .items-table th, .items-table td { color:#000 !important; background:#fff !important; border-color:#bbb !important; }
+    .bill-items { max-width:none; white-space:normal; color:#000 !important; }
+    .pill.paid { color:#1b7a3d !important; } .pill.unpaid { color:#b00 !important; }
+    tr { page-break-inside:avoid; }
+    a { color:#000 !important; text-decoration:none; }
+  }
 </style>
 </head>
 <body>
@@ -145,6 +175,7 @@
     <a href="menu-admin.html" id="menuLink">Menu admin ↗</a>
     <a href="index-full-workflow.html" id="kitchenLink">Kitchen ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
+    <a href="#" id="printBtn" onclick="window.print();return false;" title="Print today's end-of-day report">🖨 Print day</a>
   </div>
 </header>
 
@@ -184,6 +215,7 @@
   function fmt(n) { return "$" + Number(n).toFixed(2); }
   function fmtInt(n) { return Number(n).toLocaleString(); }
   function pad(h) { return String(h).padStart(2, "0"); }
+  function timeOf(iso) { try { return new Date(iso).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", hour12: true }); } catch (e) { return ""; } }
 
   var view = "today";
   var data = { today: null, week: null };
@@ -210,6 +242,7 @@
     var d = data[view];
     if (!d) { document.getElementById("content").innerHTML = '<div class="loading">Loading…</div>'; return; }
     var html = "";
+    if (view === "today") html += '<div class="print-only print-title">CRISPY EATERY &mdash; End of Day Report<div class="pt-sub">' + escapeHtml(d.date || "") + '</div></div>';
     // Stats row
     if (view === "today") {
       html += '<div class="stats">' +
@@ -278,6 +311,34 @@
           '</tr>';
       });
       html += '</tbody></table></div>';
+    }
+
+    // Today's bills list (today view only)
+    if (view === "today") {
+      var bills = d.bills || [];
+      html += '<div class="section-head"><h2>Today\'s bills</h2><div class="sub">' + bills.length + ' orders, newest first — tap a row to view / reprint</div></div>';
+      if (!bills.length) {
+        html += '<div class="empty">No bills today yet.</div>';
+      } else {
+        html += '<div class="items-table"><table><thead><tr>' +
+          '<th>Bill</th><th>Time</th><th>Table</th><th>Items</th><th class="num">Total</th><th>Status</th><th class="num">Fee</th>' +
+          '</tr></thead><tbody>';
+        bills.forEach(function(b) {
+          var itemsStr = (b.items || []).map(function(i){ return (i.qty || 1) + "x " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", ");
+          var paid = b.paymentStatus === "paid";
+          var url = "bill/?order=" + encodeURIComponent(b.id) + (b.billToken ? "&t=" + encodeURIComponent(b.billToken) : "");
+          html += '<tr class="bill-row" onclick="window.open(\'' + url + '\',\'_blank\')">' +
+            '<td>' + escapeHtml(b.id) + '</td>' +
+            '<td>' + escapeHtml(timeOf(b.createdAt)) + '</td>' +
+            '<td>T' + escapeHtml(b.tableNumber) + '</td>' +
+            '<td class="bill-items">' + escapeHtml(itemsStr) + '</td>' +
+            '<td class="num">' + fmt(b.total) + '</td>' +
+            '<td>' + (paid ? '<span class="pill paid">PAID</span>' : '<span class="pill unpaid">UNPAID</span>') + '</td>' +
+            '<td class="num rev">' + fmt(b.onlineSurcharge || 0) + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table></div>';
+      }
     }
     document.getElementById("content").innerHTML = html;
   }
