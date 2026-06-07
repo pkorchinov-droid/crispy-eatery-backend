@@ -326,7 +326,7 @@
         bills.forEach(function(b) {
           var itemsStr = (b.items || []).map(function(i){ return (i.qty || 1) + "x " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", ");
           var paid = b.paymentStatus === "paid";
-          var url = "bill/?order=" + encodeURIComponent(b.id) + (b.billToken ? "&t=" + encodeURIComponent(b.billToken) : "");
+          var url = "/bill/?order=" + encodeURIComponent(b.id) + (b.billToken ? "&t=" + encodeURIComponent(b.billToken) : "");
           html += '<tr class="bill-row" onclick="window.open(\'' + url + '\',\'_blank\')">' +
             '<td>' + escapeHtml(b.id) + '</td>' +
             '<td>' + escapeHtml(timeOf(b.createdAt)) + '</td>' +
