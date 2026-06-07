@@ -1085,9 +1085,14 @@
     try { return (localStorage.getItem('baristaPrinterIP') || '192.168.1.76').trim(); } catch (e) { return '192.168.1.76'; }
   }
   // GST receipt prints to the dedicated GST/receipt printer (.66), separate from
-  // the order-ticket printer (.210).
+  // the order-ticket printers.
   function getReceiptPrinterIP() {
     try { return localStorage.getItem('receiptPrinterIP') || '192.168.1.66'; } catch (e) { return '192.168.1.66'; }
+  }
+  // Full combined order ticket (food + drinks together) prints to the expo/pass
+  // printer (.210), alongside the split kitchen (.160) / barista (.76) slips.
+  function getFullPrinterIP() {
+    try { return (localStorage.getItem('fullPrinterIP') || '192.168.1.210').trim(); } catch (e) { return '192.168.1.210'; }
   }
   function getPrinterIP() { return getKitchenPrinterIP(); } // back-compat default (test)
   function eposEsc(s) {
@@ -1201,9 +1206,11 @@
     }
     var food = items.filter(function (i) { return !isDrink(i.name || ''); });
     var drinks = items.filter(function (i) { return isDrink(i.name || ''); });
+    var fIp = getFullPrinterIP();
     var jobs = [];
     if (food.length) jobs.push({ label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
     if (drinks.length) jobs.push({ label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
+    if (fIp && items.length) jobs.push({ label: 'full', ip: fIp, xml: buildStationTicketXml(order, items, 'FULL ORDER') });
     if (!jobs.length) { toast('Nothing to print', 'err'); return; }
     toast('Printing ' + order.id + '…');
     Promise.all(jobs.map(function (j) {
