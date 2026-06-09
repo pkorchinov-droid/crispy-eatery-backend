@@ -227,6 +227,66 @@ function nextOrderId(orders) {
   return `#${String(max + 1).padStart(3, "0")}`;
 }
 
+// ── Group (corporate pre-order) storage ────────────────────
+// A "group" is one booking (company + date + arrival time) that many people join
+// by code and add their own NAMED order to — one combined bill. Mirrored to
+// Supabase (key "groups") like orders, so a booking survives a redeploy.
+const GROUPS_FILE = path.join(__dirname, "groups.json");
+function loadGroups() {
+  try {
+    if (fs.existsSync(GROUPS_FILE)) {
+      const raw = fs.readFileSync(GROUPS_FILE, "utf8");
+      if (!raw.trim()) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    }
+  } catch (e) { console.error("[groups] load error:", e.message); }
+  return [];
+}
+function persistGroups(groups) {
+  atomicWriteSync(GROUPS_FILE, JSON.stringify(groups, null, 2));
+  return mirrorToSupabase("groups", groups);
+}
+const GROUP_CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L ambiguity
+function genGroupCode(groups) {
+  const taken = new Set(groups.map((g) => g.code));
+  for (let tries = 0; tries < 80; tries++) {
+    let c = "";
+    for (let i = 0; i < 4; i++) c += GROUP_CODE_CHARS[crypto.randomInt(GROUP_CODE_CHARS.length)];
+    if (!taken.has(c)) return c;
+  }
+  return crypto.randomBytes(3).toString("hex").toUpperCase();
+}
+function groupTotal(g) { return clampMoney((g.members || []).reduce((s, m) => s + (Number(m.total) || 0), 0)); }
+function groupSurcharge(g) { return clampMoney((g.members || []).reduce((s, m) => s + (Number(m.onlineSurcharge) || 0), 0)); }
+function publicGroupView(g) {
+  return {
+    code: g.code, company: g.company, date: g.date, arrivalTime: g.arrivalTime,
+    status: g.status, guestCount: g.guestCount,
+    organizerName: (g.organizer && g.organizer.name) || "",
+    memberCount: (g.members || []).length,
+    members: (g.members || []).map((m) => ({ name: m.name, itemCount: (m.items || []).reduce((n, i) => n + (i.qty || 1), 0) })),
+    total: groupTotal(g),
+  };
+}
+function fullGroupView(g) { return Object.assign({}, g, { total: groupTotal(g), onlineSurcharge: groupSurcharge(g) }); }
+function isStaffReq(req) {
+  if (!STAFF_TOKEN) return false;
+  const h = req.get("authorization") || "";
+  const tok = h.startsWith("Bearer ") ? h.slice(7) : req.query.token;
+  return !!tok && tok === STAFF_TOKEN;
+}
+function validGroupDate(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(v + "T00:00:00");
+  if (isNaN(d.getTime())) return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const min = new Date(today.getTime() - 86400000);  // small tz slack
+  const max = new Date(today); max.setDate(max.getDate() + 180);
+  return d >= min && d <= max;
+}
+function validGroupTime(v) { return typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v); }
+
 // ── Menu storage ───────────────────────────────────────────
 // menu-seed.json ships with the repo and is the canonical default; menu.json
 // is the runtime mutable copy. On Render free-tier the disk is ephemeral, so
@@ -1699,6 +1759,170 @@ app.delete("/orders", requireStaff, (req, res) => {
 // Maps middleware-layer errors (multer uploads, body-parser size/parse) to
 // clean JSON instead of Express's default HTML 500. Must be registered after
 // all routes.
+// ── Corporate / group pre-orders ───────────────────────────
+// Create a group. Public (self-serve via the corporate QR); staff may also create.
+app.post("/groups", (req, res) => {
+  withWriteLock(() => {
+    try {
+      const b = req.body || {};
+      const company = sanitizeString(b.company, 80);
+      if (!company) { res.status(400).json({ error: "Group / company name is required" }); return; }
+      if (!validGroupDate(b.date)) { res.status(400).json({ error: "A valid date (YYYY-MM-DD, today or later) is required" }); return; }
+      if (!validGroupTime(b.arrivalTime)) { res.status(400).json({ error: "A valid arrival time (HH:MM) is required" }); return; }
+      const groups = loadGroups();
+      const now = new Date().toISOString();
+      const group = {
+        id: "g-" + crypto.randomBytes(8).toString("hex"),
+        code: genGroupCode(groups),
+        company,
+        date: b.date,
+        arrivalTime: b.arrivalTime,
+        guestCount: clampQty(toFiniteNumber(b.guestCount, 0)),
+        tableNumbers: sanitizeString(b.tableNumbers, 40),
+        organizer: { name: sanitizeString(b.organizerName, 60), phone: sanitizeString(b.organizerPhone, 30) },
+        status: "open",            // open | locked | preparing | done | cancelled
+        members: [],
+        source: isStaffReq(req) ? "staff" : "self",
+        createdAt: now,
+        updatedAt: now,
+      };
+      groups.push(group);
+      persistGroups(groups);
+      console.log(`\n👥 NEW GROUP ${group.code} — ${group.company} · ${group.date} ${group.arrivalTime} (${group.source})`);
+      res.json({ success: true, code: group.code, id: group.id, joinPath: "/?group=" + group.code, group: publicGroupView(group) });
+    } catch (e) {
+      console.error("[groups] create error:", e.message);
+      res.status(500).json({ error: "Failed to create group" });
+    }
+  });
+});
+
+// Look up a group by code. Public → redacted view; staff token → full (with items).
+app.get("/groups/:code", (req, res) => {
+  const code = String(req.params.code || "").toUpperCase();
+  const g = loadGroups().find((x) => x.code === code);
+  if (!g) { res.status(404).json({ error: "Group not found" }); return; }
+  res.json(isStaffReq(req) ? fullGroupView(g) : publicGroupView(g));
+});
+
+// A person joins a group with their NAME + order. Public.
+app.post("/groups/:code/join", (req, res) => {
+  withWriteLock(() => {
+    try {
+      const code = String(req.params.code || "").toUpperCase();
+      const groups = loadGroups();
+      const g = groups.find((x) => x.code === code);
+      if (!g) { res.status(404).json({ error: "Group not found" }); return; }
+      if (g.status !== "open") { res.status(409).json({ error: "This group is locked — orders are closed" }); return; }
+      const b = req.body || {};
+      const name = sanitizeString(b.name, 40);
+      if (!name) { res.status(400).json({ error: "Your name is required" }); return; }
+      const items = normalizeItems(b.items);
+      if (items.length === 0) { res.status(400).json({ error: "No items in your order" }); return; }
+      const menu = loadMenu();
+      const pv = priceViolation(items, menu);
+      if (pv) { res.status(400).json({ error: pv }); return; }
+      const member = {
+        memberId: crypto.randomBytes(6).toString("hex"),
+        name,
+        items,
+        notes: sanitizeString(b.notes, 300),
+        total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0)),
+        onlineSurcharge: orderSurcharge(items, menu),
+        createdAt: new Date().toISOString(),
+      };
+      g.members.push(member);
+      g.updatedAt = new Date().toISOString();
+      persistGroups(groups);
+      console.log(`   ➕ ${g.code}: ${name} added ${items.length} item(s) — $${member.total.toFixed(2)}`);
+      res.json({ success: true, memberId: member.memberId, name: member.name, total: member.total, groupTotal: groupTotal(g), memberCount: g.members.length });
+    } catch (e) {
+      console.error("[groups] join error:", e.message);
+      res.status(500).json({ error: "Failed to add your order" });
+    }
+  });
+});
+
+// List all groups (staff) — powers the dashboard "Upcoming" view.
+app.get("/groups", requireStaff, (_req, res) => {
+  const groups = loadGroups().map(fullGroupView);
+  groups.sort((a, b) => String((a.date || "") + (a.arrivalTime || "")).localeCompare(String((b.date || "") + (b.arrivalTime || ""))));
+  res.json(groups);
+});
+
+// Edit a group (staff): company/date/time/table/guestCount/status.
+app.patch("/groups/:id", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const key = String(req.params.id || "");
+      const groups = loadGroups();
+      const g = groups.find((x) => x.id === key || x.code === key.toUpperCase());
+      if (!g) { res.status(404).json({ error: "Group not found" }); return; }
+      const b = req.body || {};
+      if (b.company != null) g.company = sanitizeString(b.company, 80) || g.company;
+      if (b.date != null) { if (!validGroupDate(b.date)) { res.status(400).json({ error: "Invalid date" }); return; } g.date = b.date; }
+      if (b.arrivalTime != null) { if (!validGroupTime(b.arrivalTime)) { res.status(400).json({ error: "Invalid time" }); return; } g.arrivalTime = b.arrivalTime; }
+      if (b.tableNumbers != null) g.tableNumbers = sanitizeString(b.tableNumbers, 40);
+      if (b.guestCount != null) g.guestCount = clampQty(toFiniteNumber(b.guestCount, 0));
+      if (b.organizerName != null || b.organizerPhone != null) {
+        g.organizer = g.organizer || {};
+        if (b.organizerName != null) g.organizer.name = sanitizeString(b.organizerName, 60);
+        if (b.organizerPhone != null) g.organizer.phone = sanitizeString(b.organizerPhone, 30);
+      }
+      if (b.status != null) {
+        const allowed = ["open", "locked", "preparing", "done", "cancelled"];
+        if (!allowed.includes(b.status)) { res.status(400).json({ error: "Invalid status" }); return; }
+        g.status = b.status;
+      }
+      g.updatedAt = new Date().toISOString();
+      persistGroups(groups);
+      res.json({ success: true, group: fullGroupView(g) });
+    } catch (e) {
+      console.error("[groups] patch error:", e.message);
+      res.status(500).json({ error: "Failed to update group" });
+    }
+  });
+});
+
+// Remove one member from a group (staff) — fix a mistake / no-show.
+app.delete("/groups/:id/members/:memberId", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const key = String(req.params.id || "");
+      const groups = loadGroups();
+      const g = groups.find((x) => x.id === key || x.code === key.toUpperCase());
+      if (!g) { res.status(404).json({ error: "Group not found" }); return; }
+      const before = (g.members || []).length;
+      g.members = (g.members || []).filter((m) => m.memberId !== req.params.memberId);
+      if (g.members.length === before) { res.status(404).json({ error: "Member not found" }); return; }
+      g.updatedAt = new Date().toISOString();
+      persistGroups(groups);
+      res.json({ success: true, memberCount: g.members.length, total: groupTotal(g) });
+    } catch (e) {
+      console.error("[groups] member delete error:", e.message);
+      res.status(500).json({ error: "Failed to remove member" });
+    }
+  });
+});
+
+// Delete a whole group (staff) — cleanup test/cancelled bookings.
+app.delete("/groups/:id", requireStaff, (req, res) => {
+  withWriteLock(() => {
+    try {
+      const key = String(req.params.id || "");
+      const groups = loadGroups();
+      const idx = groups.findIndex((x) => x.id === key || x.code === key.toUpperCase());
+      if (idx < 0) { res.status(404).json({ error: "Group not found" }); return; }
+      const removed = groups.splice(idx, 1)[0];
+      persistGroups(groups);
+      res.json({ success: true, removed: removed.code });
+    } catch (e) {
+      console.error("[groups] delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete group" });
+    }
+  });
+});
+
 app.use((err, req, res, _next) => {
   if (res.headersSent) return _next(err);
   if (err && err.name === "MulterError") {
@@ -1730,6 +1954,7 @@ async function restoreFromSupabase() {
     { key: "menu",      file: MENU_FILE,      valid: (v) => v && typeof v === "object" && !Array.isArray(v) && v.categories } ,
     { key: "orders",    file: ORDERS_FILE,    valid: Array.isArray },
     { key: "customers", file: CUSTOMERS_FILE, valid: Array.isArray },
+    { key: "groups",    file: GROUPS_FILE,    valid: Array.isArray },
   ];
   for (const t of targets) {
     try {
