@@ -974,9 +974,43 @@
     'iced bumblebee', 'milkshake'
   ];
 
+  // Strip a trailing " (size / options ...)" so set lines like
+  // "Breakfast Set for Two (Mushroom Crepe • Long Black)" match on the base name only.
+  function baseName(name) {
+    var s = String(name == null ? '' : name);
+    var p = s.indexOf(' (');
+    return p >= 0 ? s.slice(0, p) : s;
+  }
   function isDrink(itemName) {
-    const lower = itemName.toLowerCase();
+    var lower = baseName(itemName).toLowerCase();
     return DRINK_KEYWORDS.some(function(kw) { return lower.indexOf(kw) !== -1; });
+  }
+
+  // Authoritative barista/kitchen routing by MENU CATEGORY (not fuzzy name). Order
+  // items keep their menu id, so we map id -> category from /menu; items in these
+  // categories go to the barista, everything else (incl. SETS & desserts) is kitchen
+  // food. Add a slug here if a new drink category is created.
+  var DRINK_CATEGORIES = { coffee: 1, tea: 1, signature: 1 };
+  var ITEM_CATEGORY = {}; // menuItemId -> categorySlug
+  function loadMenuCategories() {
+    try {
+      fetch(BACKEND + '/menu').then(function (r) { return r.json(); }).then(function (m) {
+        var cats = (m && m.categories) || {};
+        Object.keys(cats).forEach(function (slug) {
+          (cats[slug].items || []).forEach(function (it) { if (it && it.id) ITEM_CATEGORY[it.id] = slug; });
+        });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  loadMenuCategories();
+
+  // Classify a whole order ITEM (object): category wins; fall back to base-name
+  // keywords for items without a known id/category.
+  function isDrinkItem(item) {
+    if (!item) return false;
+    var cat = item && item.id ? ITEM_CATEGORY[item.id] : null;
+    if (cat) return !!DRINK_CATEGORIES[cat];
+    return isDrink((item && item.name) || '');
   }
 
   // ── State ──
@@ -1204,8 +1238,8 @@
         .catch(function () { toast(printerHelp(kIp), 'err'); });
       return;
     }
-    var food = items.filter(function (i) { return !isDrink(i.name || ''); });
-    var drinks = items.filter(function (i) { return isDrink(i.name || ''); });
+    var food = items.filter(function (i) { return !isDrinkItem(i); });
+    var drinks = items.filter(function (i) { return isDrinkItem(i); });
     var fIp = getFullPrinterIP();
     var jobs = [];
     if (food.length) jobs.push({ label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
@@ -1433,12 +1467,12 @@
     const kitchenIndices = [];
     const baristaIndices = [];
     order.items.forEach(function(item, idx) {
-      if (isDrink(item.name)) { baristaIndices.push(idx); }
+      if (isDrinkItem(item)) { baristaIndices.push(idx); }
       else { kitchenIndices.push(idx); }
     });
 
     function renderItemRow(item, idx) {
-      const itemType = isDrink(item.name) ? 'barista' : 'kitchen';
+      const itemType = isDrinkItem(item) ? 'barista' : 'kitchen';
       const key = item.lineId || String(idx); // stable key for cooked/picked state
       const variant = item.size ? '<span class="item-variant"> &middot; ' + escHtml(item.size) + '</span>' : '';
       const notes = item.notes ? '<div class="item-notes">' + escHtml(item.notes) + '</div>' : '';
@@ -1587,7 +1621,7 @@
     // Otherwise, batch-cook only items matching the current filter (keyed by lineId)
     if (!order.cookedItems) order.cookedItems = {};
     order.items.forEach(function(item, idx) {
-      var itemIsDrink = isDrink(item.name);
+      var itemIsDrink = isDrinkItem(item);
       if ((currentFilter === 'barista' && itemIsDrink) || (currentFilter === 'kitchen' && !itemIsDrink)) {
         order.cookedItems[itemKey(item, idx)] = true;
       }
@@ -1971,8 +2005,8 @@
       if (!orderData[id]) return;
       const order = orderData[id];
       // Filter check: skip orders that don't match current view
-      if (currentFilter === 'kitchen' && !order.items.some(function(i) { return !isDrink(i.name); })) return;
-      if (currentFilter === 'barista' && !order.items.some(function(i) { return isDrink(i.name); })) return;
+      if (currentFilter === 'kitchen' && !order.items.some(function(i) { return !isDrinkItem(i); })) return;
+      if (currentFilter === 'barista' && !order.items.some(function(i) { return isDrinkItem(i); })) return;
       if (order.status === 'preparing') prepC++;
       if (order.status === 'ready') readyC++;
       if (order.status === 'picked_up') pickedUpC++;
