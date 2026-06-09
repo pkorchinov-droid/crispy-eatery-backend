@@ -838,6 +838,28 @@
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.err { border-color: #ef5350; color: #ffd9d7; }
   #toast.ok  { border-color: #4caf50; color: #dff5df; }
+
+  /* ── Group / corporate Upcoming overlay ── */
+  #groupsOverlay{position:fixed;inset:0;z-index:3000;background:rgba(24,18,12,.62);overflow:auto;}
+  .g-panel{max-width:780px;margin:26px auto;background:#fffdf8;border-radius:16px;padding:20px 22px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);}
+  .g-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  .g-head h2{font-size:20px;margin:0;color:#2b1f17;}
+  .g-x{border:none;background:#eee;border-radius:999px;width:34px;height:34px;font-size:15px;cursor:pointer;}
+  .g-newform{display:flex;gap:8px;flex-wrap:wrap;background:#f6efe2;border-radius:12px;padding:12px;margin-bottom:16px;}
+  .g-newform input{flex:1;min-width:120px;border:1px solid #e6dcc7;border-radius:8px;padding:9px 11px;font-size:14px;}
+  .g-card{border:1px solid #e6dcc7;border-radius:12px;padding:14px;margin-bottom:14px;background:#fff;}
+  .g-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .g-co{font-weight:700;font-size:17px;color:#2b1f17;}
+  .g-meta{color:#8a7558;font-size:13px;margin-top:2px;}
+  .g-code{color:#b7a994;font-size:11px;letter-spacing:.08em;margin-top:2px;}
+  .g-status{color:#fff;border-radius:999px;padding:3px 11px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;height:fit-content;}
+  .g-mems{margin:10px 0;}
+  .g-mem{padding:6px 0;font-size:13.5px;color:#4a3c2e;border-top:1px dashed #f0e9da;}
+  .g-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+  .g-btn{border:1px solid #e6dcc7;background:#fff;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;color:#2b1f17;}
+  .g-btn-primary{background:#c25a3a;border-color:#c25a3a;color:#fff;}
+  .g-btn-danger{color:#b04a3a;}
+  .g-empty{padding:30px;text-align:center;color:#999;}
 </style>
 </head>
 <body>
@@ -851,6 +873,7 @@
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print">🖨 Printer</a>
     <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts">🧾 Receipt info</a>
+    <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders">👥 Groups</a>
   </div>
   <div class="stats">
     <div class="stat">
@@ -885,6 +908,8 @@
   <button class="filter-btn" onclick="setFilter('kitchen')" data-filter="kitchen">Kitchen</button>
   <button class="filter-btn" onclick="setFilter('barista')" data-filter="barista">Barista</button>
 </div>
+
+<div id="groupsOverlay" style="display:none"></div>
 
 <main class="orders-grid" id="ordersGrid">
   <div class="empty-state" id="emptyState">
@@ -1225,6 +1250,132 @@
   // Tap 🖨 → food items print to the kitchen printer, coffee/drinks to the barista
   // printer. If no barista printer is set, the whole order prints as one ticket
   // to the kitchen printer (original behaviour).
+  // ── Corporate / group pre-orders (staff "Upcoming" view) ──────
+  var GROUPS_CACHE = [];
+  function gMoney(n){ return '$' + (Number(n)||0).toFixed(2); }
+  function gStatusColor(s){ return ({open:'#5b7553',locked:'#b0832f',preparing:'#c25a3a',done:'#7d7d7d',cancelled:'#a23b2a'})[s] || '#777'; }
+  function gReq(method, path, body){
+    return fetch(BACKEND + path, { method: method, headers: Object.assign({ 'Content-Type':'application/json' }, authHeaders()), body: body ? JSON.stringify(body) : undefined })
+      .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, status:r.status, d:d }; }, function(){ return { ok:r.ok, status:r.status, d:{} }; }); });
+  }
+  window.openGroups = function(){
+    var ov = document.getElementById('groupsOverlay');
+    ov.innerHTML =
+      '<div class="g-panel">' +
+        '<div class="g-head"><h2>Upcoming group orders</h2><button class="g-x" onclick="closeGroups()">&#10005;</button></div>' +
+        '<div class="g-newform">' +
+          '<input id="gNewCompany" placeholder="Company / group name">' +
+          '<input id="gNewDate" type="date">' +
+          '<input id="gNewTime" type="time">' +
+          '<input id="gNewTable" placeholder="Table(s)">' +
+          '<button class="g-btn g-btn-primary" onclick="groupCreate()">+ New group</button>' +
+        '</div>' +
+        '<div id="groupsList"></div>' +
+      '</div>';
+    ov.style.display = 'block';
+    loadGroups();
+  };
+  window.closeGroups = function(){ var ov = document.getElementById('groupsOverlay'); if (ov) ov.style.display = 'none'; };
+  function loadGroups(){
+    var list = document.getElementById('groupsList');
+    if (list) list.innerHTML = '<div class="g-empty">Loading…</div>';
+    fetch(BACKEND + '/groups', { headers: authHeaders() })
+      .then(function(r){ if (r.status === 401) throw new Error('auth'); return r.json(); })
+      .then(function(data){ GROUPS_CACHE = Array.isArray(data) ? data : []; renderGroups(); })
+      .catch(function(){ if (list) list.innerHTML = '<div class="g-empty" style="color:#b04a3a">Could not load groups — check the ?token= in the URL.</div>'; });
+  }
+  function renderGroups(){
+    var list = document.getElementById('groupsList');
+    if (!list) return;
+    if (!GROUPS_CACHE.length){ list.innerHTML = '<div class="g-empty">No group bookings yet. Create one above, or share the Group QR with customers.</div>'; return; }
+    list.innerHTML = GROUPS_CACHE.map(function(g){
+      var members = (g.members||[]);
+      var memHtml = members.length ? members.map(function(m){
+        var items = (m.items||[]).map(function(it){ return (Number(it.qty)||1) + '&#215; ' + escHtml(it.name) + (it.size ? ' (' + escHtml(it.size) + ')' : ''); }).join(', ');
+        return '<div class="g-mem"><b>' + escHtml(m.name) + '</b> &mdash; ' + (items || '<i>no items</i>') + '</div>';
+      }).join('') : '<div class="g-mem" style="color:#999">No one has ordered yet.</div>';
+      var locked = g.status !== 'open';
+      return '<div class="g-card">' +
+        '<div class="g-card-top">' +
+          '<div><div class="g-co">' + escHtml(g.company) + '</div>' +
+            '<div class="g-meta">' + escHtml(g.date) + ' &middot; ' + escHtml(g.arrivalTime) + (g.tableNumbers ? (' &middot; T' + escHtml(g.tableNumbers)) : '') + ' &middot; ' + members.length + (g.guestCount ? ('/' + g.guestCount) : '') + ' ordered &middot; ' + gMoney(g.total) + '</div>' +
+            '<div class="g-code">CODE ' + escHtml(g.code) + '</div></div>' +
+          '<span class="g-status" style="background:' + gStatusColor(g.status) + '">' + escHtml(g.status) + '</span>' +
+        '</div>' +
+        '<div class="g-mems">' + memHtml + '</div>' +
+        '<div class="g-actions">' +
+          '<button class="g-btn g-btn-primary" onclick="groupStartPrep(\'' + g.id + '\')">&#128424; Start prep</button>' +
+          '<button class="g-btn" onclick="groupToggleLock(\'' + g.id + '\')">' + (locked ? 'Unlock' : 'Lock') + '</button>' +
+          '<button class="g-btn" onclick="groupEditTable(\'' + g.id + '\')">Table&#8230;</button>' +
+          '<button class="g-btn g-btn-danger" onclick="groupDelete(\'' + g.id + '\')">Delete</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  window.groupCreate = function(){
+    var company = (document.getElementById('gNewCompany').value||'').trim();
+    var date = document.getElementById('gNewDate').value;
+    var time = document.getElementById('gNewTime').value;
+    var table = (document.getElementById('gNewTable').value||'').trim();
+    if (!company || !date || !time){ toast('Company, date and time are required', 'err'); return; }
+    gReq('POST','/groups',{ company:company, date:date, arrivalTime:time, tableNumbers:table }).then(function(res){
+      if (!res.ok){ toast((res.d&&res.d.error)||'Could not create group','err'); return; }
+      toast('Group ' + res.d.code + ' created', 'ok');
+      document.getElementById('gNewCompany').value=''; document.getElementById('gNewTable').value='';
+      loadGroups();
+    }).catch(function(){ toast('Could not create group','err'); });
+  };
+  window.groupToggleLock = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ status: (g.status==='open'?'locked':'open') }).then(function(res){ if(!res.ok){toast('Update failed','err');return;} loadGroups(); });
+  };
+  window.groupEditTable = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    var t = prompt('Table number(s) for ' + g.company + ':', g.tableNumbers||''); if (t===null) return;
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ tableNumbers: t }).then(function(res){ if(!res.ok){toast('Update failed','err');return;} loadGroups(); });
+  };
+  window.groupDelete = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    if (!confirm('Delete group "' + g.company + '" (' + g.code + ')? This cannot be undone.')) return;
+    gReq('DELETE','/groups/'+encodeURIComponent(id)).then(function(res){ if(!res.ok){toast('Delete failed','err');return;} toast('Group deleted','ok'); loadGroups(); });
+  };
+  window.groupStartPrep = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    if (!(g.members||[]).length){ toast('No orders to print yet','err'); return; }
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ status:'preparing' }).then(function(){ printGroupTickets(g); loadGroups(); }).catch(function(){ printGroupTickets(g); });
+  };
+  function buildGroupTicketXml(group, mode, stationLabel){
+    var L=[];
+    L.push('<text align="center"/><text dw="true" dh="true" em="true">CRISPY EATERY&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">* ' + eposEsc(stationLabel) + ' &#8212; GROUP *&#10;</text><feed line="1"/><text align="left"/>');
+    L.push(eposRule());
+    L.push('<text dw="true" dh="true" em="true">' + eposEsc(group.company) + '&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">' + eposEsc((group.tableNumbers?('TABLE '+group.tableNumbers+'   '):'') + group.date + '  ' + group.arrivalTime) + '&#10;</text>');
+    L.push(eposRule()); L.push('<feed line="1"/>');
+    var any=false;
+    (group.members||[]).forEach(function(m){
+      var items=(m.items||[]).filter(function(it){ if(mode==='food') return !isDrinkItem(it); if(mode==='drink') return isDrinkItem(it); return true; });
+      if(!items.length) return;
+      any=true;
+      L.push('<text dh="true" em="true">' + eposEsc(m.name) + '&#10;</text>');
+      items.forEach(function(it){ var q=Number(it.qty)||1; L.push('<text dh="true" em="false">' + eposEsc('  ' + q + ' x ' + (it.name||'') + (it.size?(' ('+it.size+')'):'')) + '&#10;</text>'); if(it.notes) L.push('<text em="false">' + eposEsc('      >> ' + it.notes) + '&#10;</text>'); });
+      L.push('<feed line="1"/>');
+    });
+    if(!any) return null;
+    L.push(eposRule()); L.push('<feed line="2"/><cut type="feed"/>');
+    var body='<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">'+L.join('')+'</epos-print>';
+    return '<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'+body+'</s:Body></s:Envelope>';
+  }
+  function printGroupTickets(group){
+    var jobs=[];
+    var k=buildGroupTicketXml(group,'food','KITCHEN'); if(k) jobs.push({ip:getKitchenPrinterIP(),xml:k,label:'kitchen'});
+    var b=buildGroupTicketXml(group,'drink','BARISTA'); var bip=getBaristaPrinterIP(); if(b&&bip) jobs.push({ip:bip,xml:b,label:'barista'});
+    var f=buildGroupTicketXml(group,'all','FULL ORDER'); var fip=getFullPrinterIP(); if(f&&fip) jobs.push({ip:fip,xml:f,label:'full'});
+    if(!jobs.length){ toast('Nothing to print','err'); return; }
+    toast('Printing group tickets for ' + group.company + '…');
+    (function next(i){ if(i>=jobs.length){ toast('Group tickets sent','ok'); return; } sendEpos(jobs[i].xml,jobs[i].ip).then(function(res){ if(!res.ok) toast(jobs[i].label+': '+(res.reason||'error'),'err'); }).catch(function(){ toast(jobs[i].label+' failed','err'); }).then(function(){ next(i+1); }); })(0);
+  }
+
   window.printTicket = function (orderId) {
     var order = orderData[orderId];
     if (!order) { toast('Order not found', 'err'); return; }
