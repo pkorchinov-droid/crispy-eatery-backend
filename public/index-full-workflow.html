@@ -839,6 +839,30 @@
   #toast.err { border-color: #ef5350; color: #ffd9d7; }
   #toast.ok  { border-color: #4caf50; color: #dff5df; }
 
+  /* Print-failure alert bar — persistent until retried or dismissed.
+     Sticky at the very top, ABOVE the sticky header (z 100) and the groups
+     overlay (z 3000), so a missed ticket stays visible wherever staff are.
+     Capped height + inner scroll so a bad rush can't swallow the screen. */
+  #printFailBar { display:none; position:sticky; top:0; z-index:3500; background:#3a1410;
+    border:1px solid #ef5350; border-left:6px solid #ef5350; border-radius:12px;
+    margin:10px 16px; padding:10px 16px; color:#ffd9d7; font-size:14px;
+    max-height:40vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  #printFailBar .pf-head { font-weight:700; letter-spacing:.05em; color:#ff8a80; }
+  #printFailBar .pf-dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+    background:#ef5350; margin-right:7px; animation:pfPulse 1.2s infinite; }
+  @keyframes pfPulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+  #printFailBar .pf-row { display:flex; align-items:center; gap:12px; padding:6px 0;
+    border-top:1px dashed rgba(239,83,80,.35); flex-wrap:wrap; }
+  #printFailBar .pf-row b { color:#fff; }
+  #printFailBar .pf-time { opacity:.75; font-size:12px; }
+  #printFailBar .pf-reason { opacity:.85; font-size:12px; font-style:italic; }
+  #printFailBar button { background:#c62828; color:#fff; border:none; border-radius:10px;
+    min-height:44px; min-width:76px; padding:10px 18px; font-weight:600; cursor:pointer; font-size:14px; }
+  #printFailBar button.ghost { background:transparent; border:1px solid rgba(255,217,215,.5); color:#ffd9d7; }
+  #printFailBar .pf-btns { margin-left:auto; display:flex; gap:16px; }
+  #printFailBar .pf-actions { margin-top:10px; display:flex; gap:16px; justify-content:flex-end; }
+
   /* ── Group / corporate Upcoming overlay ── */
   #groupsOverlay{position:fixed;inset:0;z-index:3000;background:rgba(24,18,12,.62);overflow:auto;}
   .g-panel{max-width:780px;margin:26px auto;background:#fffdf8;border-radius:16px;padding:20px 22px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);}
@@ -902,6 +926,8 @@
     </div>
   </div>
 </header>
+
+<div id="printFailBar" style="display:none"></div>
 
 <div class="filter-bar" id="filterBar">
   <button class="filter-btn active" onclick="setFilter('all')" data-filter="all">All</button>
@@ -1052,6 +1078,10 @@
   // N3/N4: orders that markPaid is currently flushing — don't double-count or
   // chime-resurrect them via the polling cleanup path.
   let paidInFlight = new Set();
+  // Done-order ids already considered for Order History hydration — without
+  // this, once the server holds >50 done orders every poll re-pushes the
+  // overflow, re-sorts and re-renders history in a permanent 3s loop.
+  let hydratedDoneIds = new Set();
 
   // ── View filter ──
   window.setFilter = function(filter) {
@@ -1247,6 +1277,160 @@
       'If you just finished setup, fully close this tab and reopen it. Quick check: open https://' + ip + ' in Safari — it should load with no certificate warning.';
   }
 
+  // ── Print-failure alert bar ─────────────────────────────────────
+  // Failed prints land here and STAY VISIBLE (sticky red bar under the header)
+  // until retried successfully or dismissed — so upstairs staff can see that a
+  // ticket never reached a station even if they missed the toast. Persisted in
+  // localStorage so a page refresh doesn't hide a missing ticket.
+  var PRINT_FAILS_KEY = 'printFailures.v1';
+  var PF_STATION_LABEL = { KITCHEN: 'Kitchen', BARISTA: 'Barista', FULL: 'Expo (full order)', ORDER: 'Kitchen (combined)', RECEIPT: 'GST receipt' };
+  var printFails = (function () {
+    try {
+      var v = JSON.parse(localStorage.getItem(PRINT_FAILS_KEY)) || [];
+      var cutoff = Date.now() - 12 * 3600 * 1000;   // drop stale entries (>12h)
+      return v.filter(function (f) { return f && f.at > cutoff; });
+    } catch (e) { return []; }
+  })();
+  function pfPersist() {
+    try {
+      localStorage.setItem(PRINT_FAILS_KEY, JSON.stringify(printFails.slice(-20).map(function (f) {
+        var c = Object.assign({}, f); delete c.busy; return c;   // busy is transient
+      })));
+    } catch (e) {}
+  }
+  function pfEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function recordPrintFail(e) {
+    e.key = e.kind + ':' + e.refId + ':' + e.station;
+    e.at = Date.now();
+    printFails = printFails.filter(function (f) { return f.key !== e.key; });
+    printFails.push(e);
+    if (printFails.length > 20) printFails = printFails.slice(-20);
+    pfPersist(); renderPrintFails();
+  }
+  function resolvePrintFailKey(key) {
+    var before = printFails.length;
+    printFails = printFails.filter(function (f) { return f.key !== key; });
+    if (printFails.length !== before) { pfPersist(); renderPrintFails(); }
+  }
+  function renderPrintFails() {
+    var el = document.getElementById('printFailBar');
+    if (!el) return;
+    // Re-apply the 12h expiry on every render — an always-on iPad never reloads,
+    // so the load-time filter alone would let stale entries sit forever.
+    var cutoff = Date.now() - 12 * 3600 * 1000;
+    var fresh = printFails.filter(function (f) { return f.at > cutoff; });
+    if (fresh.length !== printFails.length) { printFails = fresh; pfPersist(); }
+    if (!printFails.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    var rows = printFails.map(function (f) {
+      var when = new Date(f.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      var who = f.kind === 'group' ? 'Group: ' + pfEsc(f.table) : 'Table ' + pfEsc(f.table) + ' · ' + pfEsc(f.refId);
+      return '<div class="pf-row" data-key="' + pfEsc(f.key) + '">' +
+        '<span>⚠ <b>' + pfEsc(PF_STATION_LABEL[f.station] || f.station) + '</b> — ' + who + '</span>' +
+        '<span class="pf-time">' + when + '</span>' +
+        (f.reason ? '<span class="pf-reason">' + pfEsc(f.reason) + '</span>' : '') +
+        '<span class="pf-btns">' +
+        '<button data-pf-retry="' + pfEsc(f.key) + '">Retry</button>' +
+        '<button class="ghost" data-pf-dismiss="' + pfEsc(f.key) + '">Dismiss</button></span></div>';
+    }).join('');
+    el.innerHTML =
+      '<div class="pf-head"><span class="pf-dot"></span>' + printFails.length +
+      ' PRINT ' + (printFails.length === 1 ? 'FAILURE' : 'FAILURES') +
+      ' — a ticket may be missing at a station</div>' + rows +
+      '<div class="pf-actions"><button data-pf-retryall="1">Retry all</button>' +
+      '<button class="ghost" data-pf-dismissall="1">Dismiss all</button></div>';
+    el.style.display = 'block';
+    el.querySelectorAll('[data-pf-retry]').forEach(function (b) { b.onclick = function () { retryPrintFail(b.getAttribute('data-pf-retry')); }; });
+    el.querySelectorAll('[data-pf-dismiss]').forEach(function (b) {
+      b.onclick = function () {
+        if (!window.confirm('Dismiss this print failure without reprinting?')) return;
+        resolvePrintFailKey(b.getAttribute('data-pf-dismiss'));
+      };
+    });
+    var ra = el.querySelector('[data-pf-retryall]');
+    if (ra) ra.onclick = function () {
+      // Serialize: these TM printers handle one job at a time (same reason
+      // printGroupTickets chains its jobs) — parallel retries just contend.
+      printFails.slice().reduce(function (p, f) {
+        return p.then(function () { return retryPrintFail(f.key); });
+      }, Promise.resolve());
+    };
+    var da = el.querySelector('[data-pf-dismissall]');
+    if (da) da.onclick = function () {
+      if (!window.confirm('Dismiss ALL ' + printFails.length + ' print failures without reprinting?')) return;
+      printFails = []; pfPersist(); renderPrintFails();
+    };
+  }
+  function pfFindOrder(id) {
+    if (orderData[id]) return orderData[id];
+    var hist = (typeof completedOrders !== 'undefined' && completedOrders) || [];
+    for (var i = 0; i < hist.length; i++) if (hist[i].id === id) return hist[i];
+    return null;
+  }
+  // Rebuild the exact ticket for a failed job from current data (no stale XML
+  // kept). Station headers carry a REPRINT marker so a retried slip — possibly
+  // long after the original order — can't be mistaken for a fresh order.
+  function pfRebuildJob(f) {
+    if (f.kind === 'order') {
+      var o = pfFindOrder(f.refId); if (!o) return null;
+      var items = o.items || [];
+      if (f.station === 'KITCHEN') return { ip: getKitchenPrinterIP(), xml: buildStationTicketXml(o, items.filter(function (i) { return !isDrinkItem(i); }), 'KITCHEN · REPRINT') };
+      if (f.station === 'BARISTA') { var bIp = getBaristaPrinterIP(); return bIp ? { ip: bIp, xml: buildStationTicketXml(o, items.filter(isDrinkItem), 'BARISTA · REPRINT') } : null; }
+      if (f.station === 'FULL') { var fIp = getFullPrinterIP(); return fIp ? { ip: fIp, xml: buildStationTicketXml(o, items, 'FULL ORDER · REPRINT') } : null; }
+      if (f.station === 'ORDER') return { ip: getKitchenPrinterIP(), xml: buildStationTicketXml(o, items, 'ORDER · REPRINT') };
+      return null;
+    }
+    if (f.kind === 'receipt') {
+      var ro = pfFindOrder(f.refId); if (!ro) return null;
+      return { ip: getReceiptPrinterIP(), xml: buildReceiptXml(ro) };
+    }
+    if (f.kind === 'group') {
+      var g = null;
+      for (var j = 0; j < GROUPS_CACHE.length; j++) if (GROUPS_CACHE[j].id === f.refId) g = GROUPS_CACHE[j];
+      if (!g) return null;
+      var mode = f.station === 'KITCHEN' ? 'food' : f.station === 'BARISTA' ? 'drink' : 'all';
+      var label = (f.station === 'KITCHEN' ? 'KITCHEN' : f.station === 'BARISTA' ? 'BARISTA' : 'FULL ORDER') + ' · REPRINT';
+      var xml = buildGroupTicketXml(g, mode, label); if (!xml) return null;
+      var gip = f.station === 'KITCHEN' ? getKitchenPrinterIP() : f.station === 'BARISTA' ? getBaristaPrinterIP() : getFullPrinterIP();
+      return gip ? { ip: gip, xml: xml } : null;
+    }
+    return null;
+  }
+  function retryPrintFail(key) {
+    var f = null;
+    for (var i = 0; i < printFails.length; i++) if (printFails[i].key === key) f = printFails[i];
+    if (!f || f.busy) return Promise.resolve();
+    f.busy = true;
+    function finish() { f.busy = false; }
+    function attempt() {
+      var job = pfRebuildJob(f);
+      if (!job) {
+        if (isFirstLoad) toast('Orders are still loading from the server — try Retry again in a few seconds', 'err');
+        else if (f.kind === 'group') toast('Group not found on the server — it may have been deleted. Check 👥 Groups.', 'err');
+        else toast('Cannot rebuild this ticket (order no longer on this screen) — reprint it from the order card or reports', 'err');
+        return Promise.resolve();
+      }
+      toast('Retrying ' + (PF_STATION_LABEL[f.station] || f.station) + '…');
+      return sendEpos(job.xml, job.ip).then(function (res) {
+        if (res.ok) { resolvePrintFailKey(key); toast('🖨 ' + (PF_STATION_LABEL[f.station] || f.station) + ' OK', 'ok'); }
+        else { f.at = Date.now(); f.reason = res.reason || 'printer error'; pfPersist(); renderPrintFails(); toast((PF_STATION_LABEL[f.station] || f.station) + ' still failing', 'err'); }
+      }).catch(function () {
+        f.at = Date.now(); f.reason = 'unreachable'; pfPersist(); renderPrintFails();
+        toast((PF_STATION_LABEL[f.station] || f.station) + ' unreachable (' + job.ip + ')', 'err');
+      });
+    }
+    // Group tickets: refresh the groups list first — GROUPS_CACHE is empty after
+    // a reload (it's only filled when the 👥 overlay opens) and may be stale if
+    // the group changed from another device.
+    var pre = (f.kind === 'group')
+      ? fetch(BACKEND + '/groups', { headers: authHeaders() })
+          .then(function (r) { return r.json(); })
+          .then(function (data) { if (Array.isArray(data)) GROUPS_CACHE = data; })
+          .catch(function () {})
+      : Promise.resolve();
+    return pre.then(attempt).then(function (r) { finish(); return r; }, function (e) { finish(); throw e; });
+  }
+  renderPrintFails();   // restore any persisted failures on load
+
   // Tap 🖨 → food items print to the kitchen printer, coffee/drinks to the barista
   // printer. If no barista printer is set, the whole order prints as one ticket
   // to the kitchen printer (original behaviour).
@@ -1373,7 +1557,15 @@
     var f=buildGroupTicketXml(group,'all','FULL ORDER'); var fip=getFullPrinterIP(); if(f&&fip) jobs.push({ip:fip,xml:f,label:'full'});
     if(!jobs.length){ toast('Nothing to print','err'); return; }
     toast('Printing group tickets for ' + group.company + '…');
-    (function next(i){ if(i>=jobs.length){ toast('Group tickets sent','ok'); return; } sendEpos(jobs[i].xml,jobs[i].ip).then(function(res){ if(!res.ok) toast(jobs[i].label+': '+(res.reason||'error'),'err'); }).catch(function(){ toast(jobs[i].label+' failed','err'); }).then(function(){ next(i+1); }); })(0);
+    (function next(i){ if(i>=jobs.length){ toast('Group tickets sent','ok'); return; }
+      var st = jobs[i].label === 'full' ? 'FULL' : jobs[i].label.toUpperCase();
+      sendEpos(jobs[i].xml,jobs[i].ip).then(function(res){
+        if(res.ok) resolvePrintFailKey('group:'+group.id+':'+st);
+        else { recordPrintFail({ kind:'group', refId:group.id, station:st, ip:jobs[i].ip, table:group.company || group.tableNumbers, reason:res.reason||'printer error' }); toast(jobs[i].label+': '+(res.reason||'error'),'err'); }
+      }).catch(function(){
+        recordPrintFail({ kind:'group', refId:group.id, station:st, ip:jobs[i].ip, table:group.company || group.tableNumbers, reason:'unreachable' });
+        toast(jobs[i].label+' failed','err');
+      }).then(function(){ next(i+1); }); })(0);
   }
 
   window.printTicket = function (orderId) {
@@ -1385,8 +1577,19 @@
     if (!bIp) {
       toast('Printing ticket for ' + order.id + '…');
       sendEpos(buildStationTicketXml(order, items, 'ORDER'), kIp)
-        .then(function (res) { toast(res.ok ? '🖨 Printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err'); })
-        .catch(function () { toast(printerHelp(kIp), 'err'); });
+        .then(function (res) {
+          if (res.ok) {
+            // a successful combined ticket supersedes any per-station failures
+            // recorded under the other print mode (barista IP set vs cleared)
+            ['ORDER', 'KITCHEN', 'BARISTA', 'FULL'].forEach(function (st) { resolvePrintFailKey('order:' + order.id + ':' + st); });
+          }
+          else recordPrintFail({ kind: 'order', refId: order.id, station: 'ORDER', ip: kIp, table: order.tableNumber, reason: res.reason || 'printer error' });
+          toast(res.ok ? '🖨 Printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err');
+        })
+        .catch(function () {
+          recordPrintFail({ kind: 'order', refId: order.id, station: 'ORDER', ip: kIp, table: order.tableNumber, reason: 'unreachable' });
+          toast(printerHelp(kIp), 'err');
+        });
       return;
     }
     var food = items.filter(function (i) { return !isDrinkItem(i); });
@@ -1403,8 +1606,14 @@
         .then(function (res) { return { j: j, ok: res.ok, reason: res.reason }; })
         .catch(function () { return { j: j, ok: false, reason: 'unreachable' }; });
     })).then(function (rs) {
+      rs.forEach(function (r) {
+        var st = r.j.label === 'full' ? 'FULL' : r.j.label.toUpperCase();
+        if (r.ok) resolvePrintFailKey('order:' + order.id + ':' + st);
+        else recordPrintFail({ kind: 'order', refId: order.id, station: st, ip: r.j.ip, table: order.tableNumber, reason: r.reason || 'printer error' });
+      });
       var ok = rs.filter(function (r) { return r.ok; }).map(function (r) { return r.j.label; });
       var bad = rs.filter(function (r) { return !r.ok; });
+      if (!bad.length) resolvePrintFailKey('order:' + order.id + ':ORDER');   // supersedes old combined-mode failures
       if (!bad.length) toast('🖨 ' + order.id + ' → ' + ok.join(' + '), 'ok');
       else toast((ok.length ? ok.join(' + ') + ' OK; ' : '') + bad[0].j.label + ' FAILED (' + bad[0].j.ip + ')', 'err');
     });
@@ -1595,8 +1804,15 @@
     if (!order) { toast('Order not found', 'err'); return; }
     toast('Printing receipt for ' + order.id + '…');
     sendEpos(buildReceiptXml(order), getReceiptPrinterIP())
-      .then(function (res) { toast(res.ok ? '🧾 Receipt printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err'); })
-      .catch(function () { toast(printerHelp(getReceiptPrinterIP()), 'err'); });
+      .then(function (res) {
+        if (res.ok) resolvePrintFailKey('receipt:' + order.id + ':RECEIPT');
+        else recordPrintFail({ kind: 'receipt', refId: order.id, station: 'RECEIPT', ip: getReceiptPrinterIP(), table: order.tableNumber, reason: res.reason || 'printer error' });
+        toast(res.ok ? '🧾 Receipt printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err');
+      })
+      .catch(function () {
+        recordPrintFail({ kind: 'receipt', refId: order.id, station: 'RECEIPT', ip: getReceiptPrinterIP(), table: order.tableNumber, reason: 'unreachable' });
+        toast(printerHelp(getReceiptPrinterIP()), 'err');
+      });
   };
 
   window.receiptSetup = function () {
@@ -2081,9 +2297,11 @@
     if (orderData[orderId]) {
       const order = orderData[orderId];
       order.completedAt = new Date().toISOString();
-      completedOrders.unshift(order);
-      if (completedOrders.length > 50) completedOrders.pop();
-      renderHistory();
+      if (!completedOrders.some(c => c.id === order.id)) {   // poll hydration may have archived it already
+        completedOrders.unshift(order);
+        if (completedOrders.length > 50) completedOrders.pop();
+        renderHistory();
+      }
     }
     doneCount++;
     updateStats();
@@ -2203,6 +2421,38 @@
 
       // Filter to active orders only
       const active = data.orders.filter(o => o.status !== 'done');
+
+      // Hydrate Order History from the server's completed orders so it survives a
+      // page refresh / redeploy. completedOrders is otherwise only filled during
+      // the current browser session (markPaid / live status transitions), so a
+      // reload showed an empty history even though the orders were safe on the
+      // server (and still in the reports). Dedup by id, newest first, cap 50.
+      (function () {
+        var changed = false;
+        var todayStr = new Date().toDateString();
+        data.orders.forEach(function (o) {
+          if (o.status !== 'done' || hydratedDoneIds.has(o.id)) return;
+          hydratedDoneIds.add(o.id);
+          // Orders this tab is (or was) tracking are archived by markPaid or the
+          // disappeared-order cleanup — hydrating them too would duplicate the
+          // history row (same race the N3 paidInFlight guard exists for).
+          if (knownOrderIds.has(o.id) || paidInFlight.has(o.id)) return;
+          if (completedOrders.some(function (c) { return c.id === o.id; })) return;
+          completedOrders.push(o);
+          // keep the "Paid" header stat consistent with the hydrated history
+          if (new Date(o.completedAt || o.createdAt || 0).toDateString() === todayStr) doneCount++;
+          changed = true;
+        });
+        if (changed) {
+          completedOrders.sort(function (a, b) {
+            return new Date(b.completedAt || b.createdAt || 0) - new Date(a.completedAt || a.createdAt || 0);
+          });
+          if (completedOrders.length > 50) completedOrders.length = 50;
+          renderHistory();
+          updateStats();
+        }
+      })();
+
       let hasNew = false;
 
       active.forEach(order => {
@@ -2409,9 +2659,11 @@
         // Otherwise: order disappeared via some other path (manual server
         // edit, DELETE /orders, etc.) — archive it once.
         orderData[id].completedAt = new Date().toISOString();
-        completedOrders.unshift(orderData[id]);
-        if (completedOrders.length > 50) completedOrders.pop();
-        renderHistory();
+        if (!completedOrders.some(c => c.id === id)) {   // poll hydration may have archived it already
+          completedOrders.unshift(orderData[id]);
+          if (completedOrders.length > 50) completedOrders.pop();
+          renderHistory();
+        }
         delete orderData[id];
         knownOrderIds.delete(id);
         doneCount++;
