@@ -17,10 +17,19 @@ const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || ""; // comma-separated allowlist; empty = same-origin only
 const ALLOW_DESTRUCTIVE = process.env.ALLOW_DESTRUCTIVE === "true";
-// Tabs are table-shared by default (anyone at the table can add to the open
-// order — the intended QR UX). Set STRICT_TAB_TOKEN=true to require the order's
-// billToken on /add-items, locking tabs to the device that created them.
-const STRICT_TAB_TOKEN = process.env.STRICT_TAB_TOKEN === "true";
+// /add-items requires the order's billToken by default, locking a tab to the
+// device that opened it. This closes unauthenticated bill-inflation: order IDs
+// are public (via by-table) and guessable, so a tokenless add let anyone append
+// items to a stranger's tab. The customer SPA always creates new orders (its
+// add-to-tab path is currently unwired), so this default breaks nothing live.
+// Set STRICT_TAB_TOKEN=false to restore the old shared-tab behaviour (only do
+// this once a trusted client resends the billToken on add).
+const STRICT_TAB_TOKEN = process.env.STRICT_TAB_TOKEN !== "false";
+// The "mock" payment provider (and /simulate-payment) skip signature checks and
+// can mark orders paid with no real money. They must be EXPLICITLY enabled and
+// are never trusted on NODE_ENV alone — an unset NODE_ENV must not open a free
+// payment path. Default off → the mock webhook is refused.
+const ALLOW_MOCK_PAYMENTS = process.env.ALLOW_MOCK_PAYMENTS === "true";
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
@@ -156,6 +165,75 @@ app.use(
 app.use("/webhooks", express.raw({ type: "*/*", limit: "1mb" }));
 app.use(express.json({ limit: "64kb" }));
 
+// ── Security headers (lightweight, dependency-free) ────────
+// Render and most hosts terminate TLS upstream; trust the first proxy hop so
+// req.ip reflects the real client (X-Forwarded-For). This is required for
+// per-IP rate limiting — without it every customer behind the cafe's NAT would
+// look like one address and throttle each other.
+app.set("trust proxy", 1);
+app.disable("x-powered-by"); // stop Express stack fingerprinting
+app.use((req, res, next) => {
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("X-Frame-Options", "DENY");          // anti-clickjacking for the staff dashboard
+  res.set("Referrer-Policy", "no-referrer");   // don't leak a ?token= URL via Referer
+  res.set("Cross-Origin-Opener-Policy", "same-origin");
+  res.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  if (IS_PROD) res.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  // Conservative CSP for the backend-served pages (dashboard/admin/bill). They
+  // use inline scripts/styles, so 'unsafe-inline' is required for now; menu
+  // images come from Supabase Storage + data URIs. The customer SPA is hosted
+  // separately on Netlify and is unaffected by this header.
+  res.set(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https:; " +
+      "script-src 'self' 'unsafe-inline'; font-src 'self' https: data:; connect-src 'self' https:; " +
+      "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+  );
+  next();
+});
+
+// ── Rate limiting (in-memory, per-IP, dependency-free) ─────
+// Limits are sized generously for a busy cafe (many diners share one NAT IP)
+// while still stopping enumeration, brute force, order/email spam and Resend
+// cost amplification. Authenticated staff are exempt. Fixed 60s windows per IP
+// per rule. For multi-instance deploys, swap this for a shared store (Redis).
+const rlBuckets = new Map();
+function rateRule(req) {
+  const m = req.method;
+  const p = req.path;
+  if (m === "POST" && p === "/order") return ["order", 30];
+  if (m === "POST" && /^\/orders\/[^/]+\/add-items$/.test(p)) return ["add", 30];
+  if (m === "POST" && /^\/orders\/[^/]+\/email-bill$/.test(p)) return ["email", 10];
+  if (m === "POST" && /^\/orders\/[^/]+\/charge$/.test(p)) return ["charge", 30];
+  if (m === "POST" && p.startsWith("/webhooks/")) return ["webhook", 120];
+  if (m === "POST" && p === "/groups") return ["gcreate", 10];
+  if (m === "POST" && /^\/groups\/[^/]+\/join$/.test(p)) return ["gjoin", 30];
+  if (m === "GET" && /^\/groups\/[^/]+$/.test(p)) return ["gget", 40];
+  if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
+  return null;
+}
+app.use((req, res, next) => {
+  const rule = rateRule(req);
+  if (!rule) return next();
+  if (isStaffReq(req)) return next(); // trusted staff are exempt
+  const [name, max] = rule;
+  const key = name + "|" + (req.ip || "?");
+  const now = Date.now();
+  let b = rlBuckets.get(key);
+  if (!b || now > b.resetAt) { b = { count: 0, resetAt: now + 60000 }; rlBuckets.set(key, b); }
+  b.count += 1;
+  if (b.count > max) {
+    res.set("Retry-After", String(Math.ceil((b.resetAt - now) / 1000)));
+    return res.status(429).json({ error: "Too many requests — please slow down and try again shortly." });
+  }
+  next();
+});
+// Periodic cleanup so the bucket map can't grow unbounded across many IPs.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rlBuckets) if (now > v.resetAt) rlBuckets.delete(k);
+}, 120000).unref();
+
 // ── Auth middleware ────────────────────────────────────────
 function requireStaff(req, res, next) {
   if (!STAFF_TOKEN) {
@@ -163,7 +241,7 @@ function requireStaff(req, res, next) {
   }
   const header = req.get("authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : req.query.token;
-  if (!token || token !== STAFF_TOKEN) {
+  if (!token || !safeEqual(String(token), STAFF_TOKEN)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -252,7 +330,7 @@ function genGroupCode(groups) {
   const taken = new Set(groups.map((g) => g.code));
   for (let tries = 0; tries < 80; tries++) {
     let c = "";
-    for (let i = 0; i < 4; i++) c += GROUP_CODE_CHARS[crypto.randomInt(GROUP_CODE_CHARS.length)];
+    for (let i = 0; i < 6; i++) c += GROUP_CODE_CHARS[crypto.randomInt(GROUP_CODE_CHARS.length)];
     if (!taken.has(c)) return c;
   }
   return crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -265,7 +343,10 @@ function publicGroupView(g) {
     status: g.status, guestCount: g.guestCount,
     organizerName: (g.organizer && g.organizer.name) || "",
     memberCount: (g.members || []).length,
-    members: (g.members || []).map((m) => ({ name: m.name, itemCount: (m.items || []).reduce((n, i) => n + (i.qty || 1), 0) })),
+    // Public view exposes only per-member item counts, not names — a guessed
+    // code must not hand a stranger the company's attendee roster. Staff get
+    // names via fullGroupView (token-gated).
+    members: (g.members || []).map((m) => ({ itemCount: (m.items || []).reduce((n, i) => n + (i.qty || 1), 0) })),
     total: groupTotal(g),
   };
 }
@@ -274,7 +355,7 @@ function isStaffReq(req) {
   if (!STAFF_TOKEN) return false;
   const h = req.get("authorization") || "";
   const tok = h.startsWith("Bearer ") ? h.slice(7) : req.query.token;
-  return !!tok && tok === STAFF_TOKEN;
+  return !!tok && safeEqual(String(tok), STAFF_TOKEN);
 }
 function validGroupDate(v) {
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -384,7 +465,7 @@ function saveCustomerEmail(email, orderId, tableNumber, total) {
     });
   }
   persistCustomers(customers);
-  console.log(`[customers] Saved ${email} (${existing ? "returning" : "new"} customer)`);
+  console.log(`[customers] Saved ${maskPII(email)} (${existing ? "returning" : "new"} customer)`);
 }
 
 // ── Validators ────────────────────────────────────────────
@@ -420,6 +501,18 @@ function sanitizeString(s, maxLen) {
   if (typeof s !== "string") return "";
   // Strip control chars (incl. CR/LF used for header-injection-style attacks)
   return s.replace(/[\x00-\x1f\x7f]/g, "").slice(0, maxLen);
+}
+
+// Redact most of a PII string for logs — Render's stdout is persisted, so full
+// phone numbers / emails should not land there. Keeps a short tail for triage.
+function maskPII(s) {
+  const v = String(s || "");
+  if (!v) return "";
+  if (v.includes("@")) {
+    const at = v.indexOf("@");
+    return v.slice(0, Math.min(2, at)) + "***@" + v.slice(at + 1);
+  }
+  return v.length <= 3 ? "***" : "***" + v.slice(-3);
 }
 
 function normalizeItems(items) {
@@ -497,6 +590,39 @@ function priceViolation(items, menu) {
   return null;
 }
 
+// Drink category slugs eligible for pickup pre-orders (counter collection).
+const PICKUP_DRINK_CATEGORIES = new Set(["coffee", "tea", "signature"]);
+
+// Pickup pre-orders are drinks only — every line must resolve (same id-then-name
+// matching as findMenuItem, via findItemCategory) to a drink category.
+// Returns an error string on violation, or null. Skipped when the menu is empty
+// (same cold-start guard as priceViolation) so a missing menu never hard-fails.
+function pickupDrinksViolation(items, menu) {
+  if (!menu || !(menu.categoryOrder || []).length) return null;
+  for (const it of items) {
+    const slug = findItemCategory(menu, it);
+    if (!slug || !PICKUP_DRINK_CATEGORIES.has(slug)) {
+      return `Pickup pre-orders are drinks only — "${it.name || it.id || "item"}" is not a drink`;
+    }
+    // The stored/printed name is client-supplied; require it to match the item
+    // the id resolved to, so a drink id can't smuggle a food label onto tickets.
+    if (it.id) {
+      const f = findItem(menu, it.id);
+      const base = String(it.name || "").replace(/\s*\(.*\)\s*$/, "").trim().toLowerCase();
+      if (f && base && String(f.item.name || "").trim().toLowerCase() !== base) {
+        return `Item name mismatch for "${it.name}"`;
+      }
+    }
+  }
+  return null;
+}
+
+// The dashboard treats the tableNumber sentinel as pickup too — so anything
+// that will RENDER as pickup must also pass pickup validation.
+function isPickupSentinel(v) {
+  return /^\s*pickup\s*$/i.test(typeof v === "string" ? v : "");
+}
+
 // Stable hash of an items array — used to dedup near-simultaneous /add-items submits.
 function itemsHash(items) {
   const norm = items.map((i) =>
@@ -550,7 +676,7 @@ app.get("/health", (_req, res) => {
 app.post("/order", (req, res) => {
   withWriteLock(() => {
     try {
-      const { tableNumber, items, notes, guestCount, phoneNumber } = req.body || {};
+      const { tableNumber, items, notes, guestCount, phoneNumber, orderType, customerName, pickupTime } = req.body || {};
 
       const normalizedItems = normalizeItems(items);
       if (normalizedItems.length === 0) {
@@ -558,11 +684,43 @@ app.post("/order", (req, res) => {
         return;
       }
 
+      // Drinks-only pickup pre-order (tableNumber "PICKUP", collected at counter).
+      // The sentinel alone also counts as pickup — otherwise a crafted request
+      // could render as pickup on the dashboard while skipping pickup checks.
+      const isPickup = orderType === "pickup-drinks" || isPickupSentinel(tableNumber);
+      const pickupName = isPickup ? sanitizeString(customerName, 40).trim() : "";
+      if (isPickup && !pickupName) {
+        res.status(400).json({ error: "Please tell us your name for the pickup" });
+        return;
+      }
+      // "ASAP" or "h:mm am/pm" only — anything else is free text headed for a
+      // staff ticket, so fall back to ASAP.
+      const pickupWhen = isPickup ? (() => {
+        const v = sanitizeString(pickupTime, 20).trim();
+        return /^(asap|\d{1,2}:\d{2}\s?(am|pm))$/i.test(v) ? v : "ASAP";
+      })() : undefined;
+
       // Reject forged/underpriced items against the authoritative menu.
       const menu = loadMenu();
+      if (isPickup) {
+        const dv = pickupDrinksViolation(normalizedItems, menu);
+        if (dv) {
+          res.status(400).json({ error: dv });
+          return;
+        }
+      }
       const pv = priceViolation(normalizedItems, menu);
       if (pv) {
         res.status(400).json({ error: pv });
+        return;
+      }
+
+      // Reject an order whose true total exceeds the storable maximum rather than
+      // silently clamping it to $9999.99 (which would undercharge while the
+      // kitchen still makes everything).
+      const rawTotal = normalizedItems.reduce((s, i) => s + i.price * i.qty, 0);
+      if (rawTotal > 9999.99) {
+        res.status(400).json({ error: "Order total too large — please split into separate orders." });
         return;
       }
 
@@ -571,15 +729,22 @@ app.post("/order", (req, res) => {
         id: nextOrderId(orders),
         billToken: crypto.randomBytes(24).toString("hex"),
         // Only coerce primitives; an object/array body value would otherwise
-        // become garbage like "[object " — fall back to "?" instead.
-        tableNumber: sanitizeString(
+        // become garbage like "[object " — fall back to "?" instead. Pickup
+        // orders are pinned to the canonical sentinel regardless of input so
+        // they can't land on (and pollute) a real table's open-tab feed.
+        tableNumber: isPickup ? "PICKUP" : (sanitizeString(
           (typeof tableNumber === "string" || typeof tableNumber === "number") ? String(tableNumber) : "?",
           8
-        ) || "?",
+        ) || "?"),
         guestCount: clampQty(toFiniteNumber(guestCount, 1)),
         items: normalizedItems,
         phoneNumber: sanitizeString(phoneNumber, 30),
         notes: sanitizeString(notes, 500),
+        // Pickup pre-order fields — undefined for dine-in so the keys are
+        // omitted from stored JSON.
+        orderType: isPickup ? "pickup-drinks" : undefined,
+        customerName: isPickup ? pickupName : undefined,
+        pickupTime: pickupWhen,
         total: normalizedItems.reduce(
           (sum, i) => sum + i.price * i.qty,
           0
@@ -596,7 +761,8 @@ app.post("/order", (req, res) => {
 
       console.log(`\n${"═".repeat(50)}`);
       console.log(`🔔 NEW ORDER ${order.id}`);
-      console.log(`   Table: ${order.tableNumber} | Guests: ${order.guestCount}${order.phoneNumber ? ` | Phone: ${order.phoneNumber}` : ""}`);
+      console.log(`   Table: ${order.tableNumber} | Guests: ${order.guestCount}${order.phoneNumber ? ` | Phone: ${maskPII(order.phoneNumber)}` : ""}`);
+      if (isPickup) console.log(`   Pickup: ${maskPII(order.customerName)} | Ready by: ${order.pickupTime}`);
       console.log(`   Items:`);
       order.items.forEach((item) => {
         console.log(
@@ -612,7 +778,9 @@ app.post("/order", (req, res) => {
         success: true,
         orderId: order.id,
         billToken: order.billToken,
-        message: `Order received — Table ${order.tableNumber}`,
+        message: isPickup
+          ? `Order received — Pickup for ${order.customerName}`
+          : `Order received — Table ${order.tableNumber}`,
         total: order.total,
       });
     } catch (err) {
@@ -666,18 +834,24 @@ app.get("/orders", requireStaff, (req, res) => {
 // Returns minimal info (no PII) so the customer page can detect an open tab.
 app.get("/orders/by-table/:table", (req, res) => {
   const table = String(req.params.table || "");
+  // The PICKUP pseudo-table is not a shared tab — aggregating every pickup
+  // order into one public feed would let anyone enumerate the pickup queue.
+  if (isPickupSentinel(table)) {
+    return res.json({ count: 0, orders: [] });
+  }
   const orders = loadOrders().filter(
     (o) => String(o.tableNumber) === table && o.status !== "done"
   );
   res.json({
     count: orders.length,
+    // Minimal, no-PII view: enough for the customer SPA to detect an existing
+    // open tab, but no longer leaks per-table spend or payment status to an
+    // unauthenticated sweep. (Rate-limited above; staff use GET /orders.)
     orders: orders.map((o) => ({
       id: o.id,
       tableNumber: o.tableNumber,
       itemCount: o.items.length,
-      total: o.total,
       status: o.status,
-      paymentStatus: o.paymentStatus || "unpaid",
       createdAt: o.createdAt,
     })),
   });
@@ -1074,6 +1248,10 @@ app.get("/orders/:id", (req, res) => {
   res.json({
     id: order.id,
     tableNumber: order.tableNumber,
+    // Pickup pre-order fields — undefined (omitted) for dine-in orders.
+    orderType: order.orderType,
+    customerName: order.customerName,
+    pickupTime: order.pickupTime,
     // Strip lineId from bill response — it's an internal kitchen-state key
     // and isn't needed for rendering the bill.
     items: order.items.map((i) => ({
@@ -1138,8 +1316,8 @@ app.post("/orders/:id/add-items", (req, res) => {
 
       // Can't append to an order that's mid-payment or already paid — the
       // captured/authorised amount would no longer match the order total.
-      if (orders[idx].paymentStatus === "pending" || orders[idx].paymentStatus === "paid") {
-        res.status(409).json({ error: "Order is being paid or already paid — cannot add items" });
+      if (["pending", "paid", "refunded"].includes(orders[idx].paymentStatus)) {
+        res.status(409).json({ error: "Order is being paid, already paid, or refunded — cannot add items" });
         return;
       }
 
@@ -1151,10 +1329,20 @@ app.post("/orders/:id/add-items", (req, res) => {
 
       // Reject forged/underpriced additions against the menu (best-effort:
       // /add-items lines carry no id, so this matches by name).
-      const pv = priceViolation(newItems, loadMenu());
+      const addMenu = loadMenu();
+      const pv = priceViolation(newItems, addMenu);
       if (pv) {
         res.status(400).json({ error: pv });
         return;
+      }
+
+      // A pickup pre-order stays drinks-only even via add-items.
+      if (orders[idx].orderType === "pickup-drinks" || isPickupSentinel(orders[idx].tableNumber)) {
+        const dv = pickupDrinksViolation(newItems, addMenu);
+        if (dv) {
+          res.status(400).json({ error: dv });
+          return;
+        }
       }
 
       // N7: dedup window — if the exact same items batch arrives within 5s of
@@ -1175,12 +1363,24 @@ app.post("/orders/:id/add-items", (req, res) => {
         return;
       }
 
-      orders[idx].items = [...orders[idx].items, ...newItems];
-      orders[idx].total = clampMoney(
-        orders[idx].items.reduce((sum, i) => sum + (i.price || 0) * (i.qty || 1), 0)
-      );
+      // Bound how large a single tab can grow. Limits the blast radius of an
+      // abusive/erroneous add (a real table tab is far under these) without
+      // requiring the bill token on the shared-tab path.
+      const mergedItems = [...orders[idx].items, ...newItems];
+      const projectedTotal = mergedItems.reduce((sum, i) => sum + (i.price || 0) * (i.qty || 1), 0);
+      if (mergedItems.length > 120 || projectedTotal > 9999.99) {
+        res.status(409).json({ error: "This tab is already at its maximum — please ask staff or start a new order." });
+        return;
+      }
+
+      orders[idx].items = mergedItems;
+      orders[idx].total = clampMoney(projectedTotal);
       orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu()));
-      orders[idx].status = "received";
+      // Only (re)flag a brand-new/idle tab as "received". Don't drag an order
+      // that's already preparing/ready/picked_up back to the start of the board.
+      if (!["preparing", "ready", "picked_up"].includes(orders[idx].status)) {
+        orders[idx].status = "received";
+      }
       orders[idx].updatedAt = new Date().toISOString();
       orders[idx]._lastAddHash = newHash;
       orders[idx]._lastAddAt = Date.now();
@@ -1344,7 +1544,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       }
     });
 
-    console.log(`[email] Bill sent for ${order.id} → ${email} (${data && data.id})`);
+    console.log(`[email] Bill sent for ${order.id} → ${maskPII(email)} (${data && data.id})`);
     res.json({ success: true, message: "Bill sent to " + email });
   } catch (err) {
     console.error("[email] Error:", err.message);
@@ -1396,6 +1596,15 @@ app.post("/orders/:id/charge", async (req, res) => {
     try {
       const providerName = (req.body && req.body.provider) || "mock";
       const provider = getPaymentProvider(providerName);
+
+      // This café takes payment at the counter after the meal. Don't let a
+      // customer push their own order into a "pending"/mock payment state when
+      // no real PSP is configured — an order's payment state must only ever be
+      // moved by staff (the counter) or a real, signature-verified provider.
+      // A signature-skipping (mock) provider is refused unless explicitly enabled.
+      if (provider.skipSignature && (!ALLOW_MOCK_PAYMENTS || IS_PROD)) {
+        return res.status(403).json({ error: "Online payment isn't available — please pay at the counter." });
+      }
 
       const amount = Number(order.total || 0);
       if (!(amount > 0)) return res.status(400).json({ error: "Order total must be > 0" });
@@ -1489,8 +1698,12 @@ app.post("/webhooks/:provider", (req, res) => {
     const provider = getPaymentProvider(providerName);
     // Security: a provider that skips signature verification (mock) must never
     // be reachable in production — otherwise anyone can mark any order paid.
-    if (provider.skipSignature && IS_PROD) {
-      console.warn(`[pay] refused unsigned webhook for '${providerName}' in production`);
+    // A provider that skips signature verification (mock) must be EXPLICITLY
+    // enabled and is never reachable in production. Crucially this no longer
+    // depends on NODE_ENV being set — an unset/misconfigured NODE_ENV must not
+    // open a free-payment path.
+    if (provider.skipSignature && (!ALLOW_MOCK_PAYMENTS || IS_PROD)) {
+      console.warn(`[pay] refused unsigned webhook for '${providerName}' (ALLOW_MOCK_PAYMENTS not set, or production)`);
       return res.status(403).json({ error: "Provider not enabled" });
     }
     const sig = req.get("x-webhook-signature") || req.get("stripe-signature") || "";
@@ -1527,6 +1740,16 @@ app.post("/webhooks/:provider", (req, res) => {
       if (event.billToken && o.billToken && !safeEqual(String(event.billToken), o.billToken)) {
         console.warn(`[pay] webhook billToken mismatch for order ${o.id} — rejecting`);
         return res.status(400).json({ error: "Token mismatch" });
+      }
+
+      // Verify the captured amount matches the order total. A real provider
+      // always echoes the captured amount; if it's present it MUST match so a
+      // tampered/partial-capture webhook can't settle an order at the wrong
+      // price. (Mock/omitted amount skips this check.)
+      const evAmount = event.amount != null ? Number(event.amount) : null;
+      if (evAmount != null && Number.isFinite(evAmount) && Math.abs(evAmount - Number(o.total || 0)) > 0.01) {
+        console.warn(`[pay] webhook amount ${evAmount} != order total ${o.total} for ${o.id} — rejecting`);
+        return res.status(400).json({ error: "Amount mismatch" });
       }
 
       if (event.eventType === "payment.succeeded" || event.eventType === "succeeded") {
@@ -1586,6 +1809,12 @@ app.post("/webhooks/:provider", (req, res) => {
 // POST /orders/:id/simulate-payment — staff-only, fakes a successful webhook.
 // Used to test the order → paid flow end-to-end before real PSP integration.
 app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
+  // Test-only: fakes a successful capture with no real money. Gated behind the
+  // same explicit flag as the mock provider so it can never fake payments in a
+  // misconfigured prod.
+  if (!ALLOW_MOCK_PAYMENTS || IS_PROD) {
+    return res.status(403).json({ error: "simulate-payment disabled (set ALLOW_MOCK_PAYMENTS=true in a non-production env)" });
+  }
   const orders = loadOrders();
   const order = orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found" });
@@ -1680,7 +1909,7 @@ app.get("/reports/today", requireStaff, (_req, res) => {
   // Per-bill list (newest first) for the "Today's bills" view + day report.
   const bills = orders.slice().reverse().map((o) => ({
     id: o.id,
-    billToken: o.billToken,
+    billToken: o.billToken, // staff-only (requireStaff); powers the click-to-open bill link in reports.html
     createdAt: o.createdAt,
     tableNumber: o.tableNumber,
     total: Number(o.total) || 0,
@@ -1952,9 +2181,11 @@ async function restoreFromSupabase() {
   if (!supabase) return;
   const targets = [
     { key: "menu",      file: MENU_FILE,      valid: (v) => v && typeof v === "object" && !Array.isArray(v) && v.categories } ,
-    { key: "orders",    file: ORDERS_FILE,    valid: Array.isArray },
-    { key: "customers", file: CUSTOMERS_FILE, valid: Array.isArray },
-    { key: "groups",    file: GROUPS_FILE,    valid: Array.isArray },
+    // Validate element shape too — not just "is an array" — so a corrupt/tampered
+    // remote blob is rejected rather than restored verbatim as runtime truth.
+    { key: "orders",    file: ORDERS_FILE,    valid: (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string" && Array.isArray(o.items)) },
+    { key: "customers", file: CUSTOMERS_FILE, valid: (v) => Array.isArray(v) && v.every((c) => c && typeof c === "object" && typeof c.email === "string") },
+    { key: "groups",    file: GROUPS_FILE,    valid: (v) => Array.isArray(v) && v.every((g) => g && typeof g === "object" && typeof g.code === "string") },
   ];
   for (const t of targets) {
     try {
