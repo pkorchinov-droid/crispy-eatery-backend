@@ -1,0 +1,2871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crispy Eatery — Kitchen</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1510;
+    color: #f5f0e8;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    background: #2a2318;
+    border-bottom: 2px solid #b5753a;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: #e8c477;
+    letter-spacing: 1px;
+  }
+
+  .logo span {
+    font-weight: 400;
+    color: #c49a5c;
+    font-size: 14px;
+    margin-left: 10px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+  }
+
+  .stats {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .stat {
+    text-align: center;
+    padding: 4px 14px;
+    background: #352c20;
+    border-radius: 8px;
+  }
+
+  .stat-num {
+    font-size: 24px;
+    font-weight: 700;
+    color: #e8c477;
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #a09080;
+    margin-top: 2px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot.live { background: #4caf50; }
+  .status-dot.error { background: #f44336; animation: none; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .conn-status {
+    font-size: 12px;
+    color: #a09080;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── Header nav buttons ─────────────────────────── */
+  .header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .header-actions a {
+    color: #c49a5c;
+    text-decoration: none;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 7px 14px;
+    border: 1px solid #4a3d2e;
+    border-radius: 6px;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .header-actions a:hover { border-color: #b5753a; color: #e8c477; }
+
+  /* ── Order grid ─────────────────────────────────── */
+  .orders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 20px 24px;
+  }
+
+  /* ── Order card ─────────────────────────────────── */
+  .order-card {
+    background: #2a2318;
+    border-radius: 12px;
+    border: 1px solid #3d3428;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    animation: slideIn 0.4s ease;
+  }
+
+  .order-card.new-arrival {
+    border-color: #e8c477;
+    box-shadow: 0 0 20px rgba(232, 196, 119, 0.3);
+  }
+
+  .order-card.preparing {
+    border-color: #ff9800;
+    box-shadow: 0 0 12px rgba(255, 152, 0, 0.2);
+  }
+
+  .order-card.preparing .card-header {
+    background: #3d2e10;
+  }
+
+  .order-card.preparing .table-badge {
+    background: #ff9800;
+  }
+
+  .order-card.preparing .status-badge {
+    display: inline-block;
+  }
+
+  .order-card.ready {
+    border-color: #2196f3;
+    box-shadow: 0 0 12px rgba(33, 150, 243, 0.2);
+  }
+
+  .order-card.ready .card-header {
+    background: #1a2a3d;
+  }
+
+  .order-card.ready .table-badge {
+    background: #2196f3;
+  }
+
+  .order-card.ready .status-badge {
+    display: inline-block;
+    background: #2196f3;
+  }
+
+  .order-card.picked_up {
+    border-color: #9c27b0;
+    box-shadow: 0 0 12px rgba(156, 39, 176, 0.2);
+  }
+
+  .order-card.picked_up .card-header {
+    background: #2d1a33;
+  }
+
+  .order-card.picked_up .table-badge {
+    background: #9c27b0;
+  }
+
+  .order-card.picked_up .status-badge {
+    display: inline-block;
+    background: #9c27b0;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .order-card.done {
+    opacity: 0;
+    transform: scale(0.9);
+    transition: all 0.4s ease;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    background: #352c20;
+  }
+
+  .table-badge {
+    background: #b5753a;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 800;
+    padding: 6px 16px;
+    border-radius: 8px;
+    min-width: 56px;
+    text-align: center;
+  }
+
+  /* Drinks-only pickup pre-orders: sage badge, stays sage across statuses
+     (placed after the status rules above so it wins the source-order tie). */
+  .table-badge.pickup,
+  .order-card .table-badge.pickup {
+    background: #7a8362;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .pickup-info {
+    background: #242a1c;
+    border-bottom: 1px solid #3a4230;
+    color: #b8c49a;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 18px;
+  }
+  .pickup-info b { color: #d6e0b4; }
+
+  .status-badge {
+    display: none;
+    background: #ff9800;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-left: 10px;
+    animation: pulse 1.5s infinite;
+  }
+
+  .order-meta {
+    text-align: right;
+  }
+
+  .order-id {
+    font-size: 11px;
+    color: #8a7a68;
+    font-family: monospace;
+  }
+
+  .order-time {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8c477;
+  }
+
+  .order-phone {
+    font-size: 13px;
+    color: #64b5f6;
+    margin-top: 3px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+
+  .order-phone a {
+    color: #64b5f6;
+    text-decoration: none;
+  }
+
+  .order-phone a:hover {
+    text-decoration: underline;
+  }
+
+  .elapsed {
+    font-size: 12px;
+    color: #a09080;
+    margin-top: 2px;
+  }
+
+  .card-body {
+    padding: 14px 18px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 6px 0 4px;
+    margin-top: 4px;
+    border-top: 1px dashed #4a3d2e;
+    color: #ff9800;
+  }
+  .section-label:first-child { border-top: none; margin-top: 0; }
+  .section-label.barista { color: #64b5f6; }
+
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 8px 0;
+    border-bottom: 1px solid #3d3428;
+  }
+
+  .item-row:last-child { border-bottom: none; }
+
+  .item-row.tappable {
+    cursor: pointer;
+    transition: all 0.2s;
+    border-radius: 6px;
+    padding: 8px 6px;
+    margin: 0 -6px;
+  }
+
+  .item-row.tappable:hover {
+    background: rgba(33, 150, 243, 0.1);
+  }
+
+  .item-row.tappable:active {
+    transform: scale(0.98);
+  }
+
+  .item-row.picked {
+    opacity: 0.4;
+    text-decoration: line-through;
+    text-decoration-color: #4caf50;
+    text-decoration-thickness: 2px;
+  }
+
+  .item-row.picked .item-qty {
+    background: #2e4a2e;
+    color: #4caf50;
+  }
+
+  /* Per-item ready (cooking) tracking */
+  .item-row.cookable {
+    cursor: pointer;
+    transition: all 0.2s;
+    border-radius: 6px;
+    padding: 8px 6px;
+    margin: 0 -6px;
+  }
+
+  .item-row.cookable:hover {
+    background: rgba(255, 152, 0, 0.1);
+  }
+
+  .item-row.cookable:active {
+    transform: scale(0.98);
+  }
+
+  .item-row.cooked {
+    opacity: 0.5;
+  }
+
+  .item-row.cooked .item-qty {
+    background: #2e4a2e;
+    color: #4caf50;
+  }
+
+  .item-row .cook-check {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid #5a4a38;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    font-size: 14px;
+    color: transparent;
+  }
+
+  .item-row.cooked .cook-check {
+    background: #4caf50;
+    border-color: #4caf50;
+    color: #fff;
+  }
+
+  .cook-hint {
+    text-align: center;
+    font-size: 12px;
+    color: #ff9800;
+    padding: 6px 0 2px;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+  }
+
+  .cook-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #a09080;
+  }
+
+  .cook-progress .prog-bar {
+    flex: 1;
+    height: 4px;
+    background: #3d3428;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .cook-progress .prog-fill {
+    height: 100%;
+    background: #ff9800;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .pickup-hint {
+    text-align: center;
+    font-size: 12px;
+    color: #2196f3;
+    padding: 6px 0 2px;
+    opacity: 0.8;
+    letter-spacing: 0.5px;
+  }
+
+  .pickup-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #a09080;
+  }
+
+  .pickup-progress .prog-bar {
+    flex: 1;
+    height: 4px;
+    background: #3d3428;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .pickup-progress .prog-fill {
+    height: 100%;
+    background: #4caf50;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .item-qty {
+    background: #4a3d2e;
+    color: #e8c477;
+    font-weight: 700;
+    min-width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 14px;
+    margin-right: 10px;
+    flex-shrink: 0;
+  }
+
+  .item-name {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 500;
+    color: #f0e8d8;
+    line-height: 1.3;
+  }
+
+  .item-variant {
+    font-weight: 400;
+    color: #a09080;
+    font-size: 13px;
+  }
+
+  .item-notes {
+    font-size: 12px;
+    color: #e8a040;
+    font-style: italic;
+    margin-top: 3px;
+  }
+
+  .item-price {
+    color: #8a7a68;
+    font-size: 14px;
+    margin-left: 10px;
+    flex-shrink: 0;
+  }
+
+  .order-notes {
+    background: #3d3020;
+    border-left: 3px solid #e8a040;
+    padding: 8px 12px;
+    margin: 10px 0 4px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: #e8a040;
+  }
+
+  .card-footer {
+    padding: 12px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #3d3428;
+  }
+
+  .order-total {
+    font-size: 18px;
+    font-weight: 700;
+    color: #e8c477;
+  }
+
+  .btn-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-prep {
+    background: #ff9800;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-prep:hover { background: #f57c00; transform: scale(1.02); }
+  .btn-prep:active { transform: scale(0.98); }
+
+  .btn-ready {
+    background: #2196f3;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-ready:hover { background: #1976d2; transform: scale(1.02); }
+  .btn-ready:active { transform: scale(0.98); }
+
+  .btn-done {
+    background: #4caf50;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-done:hover { background: #43a047; transform: scale(1.02); }
+  .btn-done:active { transform: scale(0.98); }
+
+  .btn-pickup {
+    background: #9c27b0;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .btn-pickup:hover { background: #7b1fa2; transform: scale(1.02); }
+  .btn-pickup:active { transform: scale(0.98); }
+
+  .btn-paid {
+    background: #4caf50;
+    color: #fff;
+    border: none;
+    padding: 10px 28px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+    width: 100%;
+  }
+
+  .btn-paid:hover { background: #43a047; transform: scale(1.02); }
+  .btn-paid:active { transform: scale(0.98); }
+
+  /* ── Empty state ────────────────────────────────── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 20px;
+    color: #6a5a48;
+  }
+
+  .empty-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+
+  .empty-text {
+    font-size: 20px;
+    font-family: Georgia, serif;
+    font-style: italic;
+  }
+
+  .empty-sub {
+    font-size: 13px;
+    margin-top: 6px;
+    color: #5a4a38;
+  }
+
+  /* ── Flash animation for new orders ─────────────── */
+  @keyframes flashBorder {
+    0%, 100% { border-color: #e8c477; }
+    50% { border-color: #ff9800; }
+  }
+
+  .order-card.flash {
+    animation: flashBorder 0.5s ease 3;
+  }
+
+  /* ── Order history section ─────────────────────── */
+  .history-section {
+    padding: 0 24px 40px;
+  }
+
+  .history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 0 12px;
+    border-top: 1px solid #3d3428;
+    margin-top: 20px;
+  }
+
+  .history-title {
+    font-family: Georgia, serif;
+    font-size: 18px;
+    color: #8a7a68;
+    font-style: italic;
+  }
+
+  .history-toggle {
+    background: none;
+    border: 1px solid #3d3428;
+    color: #8a7a68;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .history-toggle:hover {
+    border-color: #8a7a68;
+    color: #c49a5c;
+  }
+
+  .history-list {
+    display: none;
+  }
+
+  .history-list.open {
+    display: block;
+  }
+
+  .history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #221c14;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    border: 1px solid #2a2318;
+    opacity: 0.7;
+  }
+
+  .history-item .hi-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .history-item .hi-table {
+    background: #3d3428;
+    color: #8a7a68;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  .history-item .hi-items {
+    font-size: 13px;
+    color: #8a7a68;
+  }
+
+  .history-item .hi-right {
+    text-align: right;
+  }
+
+  .history-item .hi-total {
+    font-size: 14px;
+    color: #6a5a48;
+    font-weight: 600;
+  }
+
+  .history-item .hi-time {
+    font-size: 11px;
+    color: #5a4a38;
+  }
+
+  .history-item .hi-phone {
+    font-size: 12px;
+    color: #64b5f6;
+    margin-top: 2px;
+  }
+  .history-item .hi-phone a {
+    color: #64b5f6;
+    text-decoration: none;
+  }
+  .history-item .hi-phone a:hover {
+    text-decoration: underline;
+  }
+
+  .history-empty {
+    text-align: center;
+    padding: 20px;
+    color: #5a4a38;
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  /* ── View filter tabs ────────────────────────────── */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    padding: 14px 24px 0;
+    background: #1a1510;
+  }
+
+  .filter-btn {
+    background: #2a2318;
+    border: 1px solid #3d3428;
+    color: #a09080;
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+
+  .filter-btn:hover {
+    border-color: #8a7a68;
+    color: #c49a5c;
+  }
+
+  .filter-btn.active {
+    background: #b5753a;
+    border-color: #b5753a;
+    color: #fff;
+  }
+
+  .filter-btn.active[data-filter="kitchen"] {
+    background: #ff9800;
+    border-color: #ff9800;
+  }
+
+  .filter-btn.active[data-filter="barista"] {
+    background: #42a5f5;
+    border-color: #42a5f5;
+  }
+
+  .filter-btn.active[data-filter="pickup"] {
+    background: #7a8362;
+    border-color: #7a8362;
+  }
+
+  /* Filter-based hiding */
+  body.filter-kitchen .order-card:not([data-has-kitchen="true"]) { display: none; }
+  body.filter-kitchen .item-row[data-type="barista"] { display: none; }
+  body.filter-kitchen .section-label { display: none; }
+
+  body.filter-barista .order-card:not([data-has-barista="true"]) { display: none; }
+  body.filter-barista .item-row[data-type="kitchen"] { display: none; }
+  body.filter-barista .section-label { display: none; }
+
+  /* Pickup view: only pickup pre-orders, all their items (drinks-only anyway) */
+  body.filter-pickup .order-card:not([data-pickup="true"]) { display: none; }
+  body.filter-pickup .section-label { display: none; }
+
+  /* ── Responsive ─────────────────────────────────── */
+  @media (max-width: 768px) {
+    .orders-grid {
+      grid-template-columns: 1fr;
+      padding: 12px;
+      gap: 12px;
+    }
+    header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+    .logo span { display: block; margin-left: 0; }
+    .header-actions { order: 3; width: 100%; justify-content: flex-start; }
+    .header-actions a { padding: 6px 10px; font-size: 11px; letter-spacing: 1px; }
+    .filter-bar { padding: 10px 12px 0; }
+    .filter-btn { padding: 8px 14px; font-size: 13px; }
+    .history-section { padding: 0 12px 30px; }
+  }
+
+  /* ── Kitchen-ticket print ── */
+  .btn-print {
+    background: transparent; border: 1px solid #4a3d2e; color: #c49a5c;
+    margin-left: 8px; padding: 3px 9px; border-radius: 7px; font-size: 15px;
+    cursor: pointer; line-height: 1.2; transition: all 0.2s;
+  }
+  .btn-print:hover { border-color: #b5753a; color: #e8c477; background: #352c20; }
+  .btn-print:active { transform: scale(0.94); }
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+    background: #2a2318; color: #f5f0e8; border: 1px solid #b5753a;
+    padding: 12px 20px; border-radius: 10px; font-size: 14px; z-index: 9999;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5); opacity: 0; pointer-events: none;
+    transition: opacity .25s, transform .25s; max-width: 82vw; text-align: center; line-height: 1.45;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { border-color: #ef5350; color: #ffd9d7; }
+  #toast.ok  { border-color: #4caf50; color: #dff5df; }
+
+  /* Print-failure alert bar — persistent until retried or dismissed.
+     Sticky at the very top, ABOVE the sticky header (z 100) and the groups
+     overlay (z 3000), so a missed ticket stays visible wherever staff are.
+     Capped height + inner scroll so a bad rush can't swallow the screen. */
+  #printFailBar { display:none; position:sticky; top:0; z-index:3500; background:#3a1410;
+    border:1px solid #ef5350; border-left:6px solid #ef5350; border-radius:12px;
+    margin:10px 16px; padding:10px 16px; color:#ffd9d7; font-size:14px;
+    max-height:40vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  #printFailBar .pf-head { font-weight:700; letter-spacing:.05em; color:#ff8a80; }
+  #printFailBar .pf-dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+    background:#ef5350; margin-right:7px; animation:pfPulse 1.2s infinite; }
+  @keyframes pfPulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+  #printFailBar .pf-row { display:flex; align-items:center; gap:12px; padding:6px 0;
+    border-top:1px dashed rgba(239,83,80,.35); flex-wrap:wrap; }
+  #printFailBar .pf-row b { color:#fff; }
+  #printFailBar .pf-time { opacity:.75; font-size:12px; }
+  #printFailBar .pf-reason { opacity:.85; font-size:12px; font-style:italic; }
+  #printFailBar button { background:#c62828; color:#fff; border:none; border-radius:10px;
+    min-height:44px; min-width:76px; padding:10px 18px; font-weight:600; cursor:pointer; font-size:14px; }
+  #printFailBar button.ghost { background:transparent; border:1px solid rgba(255,217,215,.5); color:#ffd9d7; }
+  #printFailBar .pf-btns { margin-left:auto; display:flex; gap:16px; }
+  #printFailBar .pf-actions { margin-top:10px; display:flex; gap:16px; justify-content:flex-end; }
+
+  /* ── Group / corporate Upcoming overlay ── */
+  #groupsOverlay{position:fixed;inset:0;z-index:3000;background:rgba(24,18,12,.62);overflow:auto;}
+  .g-panel{max-width:780px;margin:26px auto;background:#fffdf8;border-radius:16px;padding:20px 22px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);}
+  .g-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  .g-head h2{font-size:20px;margin:0;color:#2b1f17;}
+  .g-x{border:none;background:#eee;border-radius:999px;width:34px;height:34px;font-size:15px;cursor:pointer;}
+  .g-newform{display:flex;gap:8px;flex-wrap:wrap;background:#f6efe2;border-radius:12px;padding:12px;margin-bottom:16px;}
+  .g-newform input{flex:1;min-width:120px;border:1px solid #e6dcc7;border-radius:8px;padding:9px 11px;font-size:14px;}
+  .g-card{border:1px solid #e6dcc7;border-radius:12px;padding:14px;margin-bottom:14px;background:#fff;}
+  .g-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .g-co{font-weight:700;font-size:17px;color:#2b1f17;}
+  .g-meta{color:#8a7558;font-size:13px;margin-top:2px;}
+  .g-code{color:#b7a994;font-size:11px;letter-spacing:.08em;margin-top:2px;}
+  .g-status{color:#fff;border-radius:999px;padding:3px 11px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;height:fit-content;}
+  .g-mems{margin:10px 0;}
+  .g-mem{padding:6px 0;font-size:13.5px;color:#4a3c2e;border-top:1px dashed #f0e9da;}
+  .g-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+  .g-btn{border:1px solid #e6dcc7;background:#fff;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;color:#2b1f17;}
+  .g-btn-primary{background:#c25a3a;border-color:#c25a3a;color:#fff;}
+  .g-btn-danger{color:#b04a3a;}
+  .g-empty{padding:30px;text-align:center;color:#999;}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">Crispy Eatery <span>Kitchen</span></div>
+  </div>
+  <div class="header-actions">
+    <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
+    <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
+    <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print" aria-label="Printer setup"><span aria-hidden="true">🖨</span> Printer</a>
+    <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts" aria-label="Receipt info"><span aria-hidden="true">🧾</span> Receipt info</a>
+    <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders" aria-label="Groups"><span aria-hidden="true">👥</span> Groups</a>
+  </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num" id="activeCount">0</div>
+      <div class="stat-label">Active</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="prepCount">0</div>
+      <div class="stat-label">Preparing</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="readyCount">0</div>
+      <div class="stat-label">Ready</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="pickedUpCount">0</div>
+      <div class="stat-label">Picked Up</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="doneCount">0</div>
+      <div class="stat-label">Paid</div>
+    </div>
+    <div class="conn-status">
+      <span class="status-dot live" id="statusDot"></span>
+      <span id="statusText">Live</span>
+    </div>
+  </div>
+</header>
+
+<div id="printFailBar" style="display:none"></div>
+
+<div class="filter-bar" id="filterBar">
+  <button class="filter-btn active" onclick="setFilter('all')" data-filter="all">All</button>
+  <button class="filter-btn" onclick="setFilter('kitchen')" data-filter="kitchen">Kitchen</button>
+  <button class="filter-btn" onclick="setFilter('barista')" data-filter="barista">Barista</button>
+  <button class="filter-btn" onclick="setFilter('pickup')" data-filter="pickup">☕ Pickup</button>
+</div>
+
+<div id="groupsOverlay" style="display:none"></div>
+
+<main class="orders-grid" id="ordersGrid">
+  <div class="empty-state" id="emptyState">
+    <div class="empty-icon">&#x1F373;</div>
+    <div class="empty-text">No active orders</div>
+    <div class="empty-sub">New orders will appear here automatically</div>
+  </div>
+</main>
+
+<section class="history-section">
+  <div class="history-header">
+    <div class="history-title">Order History</div>
+    <button class="history-toggle" id="historyToggle" onclick="toggleHistory()">Show</button>
+  </div>
+  <div class="history-list" id="historyList">
+    <div class="history-empty" id="historyEmpty">No completed orders yet</div>
+  </div>
+</section>
+
+<script>
+(function() {
+  // ── Config ──
+  const BACKEND = window.location.origin;
+  const POLL_INTERVAL = 3000;
+
+  // ── Auth: capture staff token from URL, persist in localStorage ──
+  (function captureToken() {
+    var urlParams = new URLSearchParams(window.location.search);
+    var t = urlParams.get('token');
+    if (t) {
+      localStorage.setItem('staffToken', t);
+      // Strip the token from the URL bar so it's not shoulder-surfed.
+      urlParams.delete('token');
+      var rest = urlParams.toString();
+      var clean = window.location.pathname + (rest ? '?' + rest : '') + window.location.hash;
+      window.history.replaceState(null, '', clean);
+    }
+  })();
+
+  // ── Propagate token to the menu-admin link so it can capture on first visit ──
+  (function wireNavLinks() {
+    var t = localStorage.getItem('staffToken');
+    if (!t) return;
+    var menuAdminLink = document.getElementById('menuAdminLink');
+    if (menuAdminLink) menuAdminLink.href = 'menu-admin.html?token=' + encodeURIComponent(t);
+  })();
+  function authHeaders(extra) {
+    var h = Object.assign({}, extra || {});
+    var t = localStorage.getItem('staffToken');
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
+
+  // ── HTML / JS-string escapers (XSS hardening) ──
+  function escHtml(s) {
+    if (s === null || s === undefined) return '';
+    var d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+  function escAttr(s) { return escHtml(s); }
+  function escTelHref(s) {
+    // Allow + and digits; strip everything else for safety.
+    return String(s || '').replace(/[^+0-9]/g, '').slice(0, 20);
+  }
+  function jsStr(s) {
+    // Safe to interpolate inside a single-quoted JS string in an inline handler.
+    return String(s == null ? '' : s)
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/</g, '\\u003c')
+      .replace(/>/g, '\\u003e')
+      .replace(/&/g, '\\u0026')
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n');
+  }
+  window.__escHtml = escHtml; // expose for ad-hoc use
+
+  // ── Drink detection (barista items) ──
+  const DRINK_KEYWORDS = [
+    'flat white', 'long black', 'short black', 'americano', 'latte', 'cappuccino',
+    'mocha', 'espresso', 'macchiato', 'coffee', 'matcha', 'chai',
+    'tea', 'hot chocolate', 'turmeric', 'smoothie',
+    'iced auckland', 'iced ferrero', 'iced berry black', 'iced orange',
+    'iced mango', 'iced coconut', 'iced lychee', 'iced strawberry',
+    'iced tonic passion', 'iced yuzu', 'iced london fog', 'iced peach',
+    'iced bumblebee', 'milkshake'
+  ];
+
+  // Strip a trailing " (size / options ...)" so set lines like
+  // "Breakfast Set for Two (Mushroom Crepe • Long Black)" match on the base name only.
+  function baseName(name) {
+    var s = String(name == null ? '' : name);
+    var p = s.indexOf(' (');
+    return p >= 0 ? s.slice(0, p) : s;
+  }
+  function isDrink(itemName) {
+    var lower = baseName(itemName).toLowerCase();
+    return DRINK_KEYWORDS.some(function(kw) { return lower.indexOf(kw) !== -1; });
+  }
+
+  // Authoritative barista/kitchen routing by MENU CATEGORY (not fuzzy name). Order
+  // items keep their menu id, so we map id -> category from /menu; items in these
+  // categories go to the barista, everything else (incl. SETS & desserts) is kitchen
+  // food. Add a slug here if a new drink category is created.
+  var DRINK_CATEGORIES = { coffee: 1, tea: 1, signature: 1 };
+  var ITEM_CATEGORY = {}; // menuItemId -> categorySlug
+  function loadMenuCategories() {
+    try {
+      fetch(BACKEND + '/menu').then(function (r) { return r.json(); }).then(function (m) {
+        var cats = (m && m.categories) || {};
+        Object.keys(cats).forEach(function (slug) {
+          (cats[slug].items || []).forEach(function (it) { if (it && it.id) ITEM_CATEGORY[it.id] = slug; });
+        });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  loadMenuCategories();
+
+  // Classify a whole order ITEM (object): category wins; fall back to base-name
+  // keywords for items without a known id/category.
+  function isDrinkItem(item) {
+    if (!item) return false;
+    var cat = item && item.id ? ITEM_CATEGORY[item.id] : null;
+    if (cat) return !!DRINK_CATEGORIES[cat];
+    return isDrink((item && item.name) || '');
+  }
+
+  // Drinks-only PICKUP pre-order: flagged by orderType, or by the sentinel
+  // tableNumber "PICKUP" (legacy/partial orders may carry only one of the two).
+  function isPickupOrder(o) { return !!o && (o.orderType === 'pickup-drinks' || String(o.tableNumber || '').toUpperCase() === 'PICKUP'); }
+
+  // ── State ──
+  let knownOrderIds = new Set();
+  let orderData = {};
+  let prepCount = 0;
+  let doneCount = 0;
+  let isFirstLoad = true;
+  let completedOrders = [];
+  let currentFilter = 'all';
+  // N9: serverTimeOffset = (serverNow - clientNow) at last poll; used to compute
+  // elapsed times against the server clock so cafe iPad skew doesn't show "-2m".
+  let serverTimeOffset = 0;
+  // N3/N4: orders that markPaid is currently flushing — don't double-count or
+  // chime-resurrect them via the polling cleanup path.
+  let paidInFlight = new Set();
+  // Done-order ids already considered for Order History hydration — without
+  // this, once the server holds >50 done orders every poll re-pushes the
+  // overflow, re-sorts and re-renders history in a permanent 3s loop.
+  let hydratedDoneIds = new Set();
+
+  // ── View filter ──
+  window.setFilter = function(filter) {
+    currentFilter = filter;
+    document.body.classList.remove('filter-kitchen', 'filter-barista', 'filter-pickup');
+    if (filter !== 'all') {
+      document.body.classList.add('filter-' + filter);
+    }
+    // Update active button
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+    });
+    // Update header subtitle
+    const subtitles = { all: 'Kitchen', kitchen: 'Kitchen', barista: 'Barista', pickup: 'Pickup' };
+    document.querySelector('.logo span').textContent = subtitles[filter] || 'Kitchen';
+    updateStats();
+  };
+
+  // ── Audio ──
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+
+  function ensureAudio() {
+    if (!audioCtx) audioCtx = new AudioCtx();
+  }
+
+  function playChime() {
+    try {
+      ensureAudio();
+      const now = audioCtx.currentTime;
+      [660, 880].forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, now + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.5);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + i * 0.15);
+        osc.stop(now + i * 0.15 + 0.6);
+        // N16: explicitly disconnect after the oscillator finishes so a
+        // week-long iPad uptime doesn't accumulate stranded audio nodes.
+        osc.onended = function() {
+          try { osc.disconnect(); gain.disconnect(); } catch (_) {}
+        };
+      });
+    } catch(e) {
+      console.log('Audio not available');
+    }
+  }
+
+  // ── Elapsed time ──
+  // N9: use serverTimeOffset so a wrong client clock doesn't show "-2 min ago".
+  function nowOnServer() { return Date.now() + serverTimeOffset; }
+  function elapsed(iso) {
+    let diff = Math.floor((nowOnServer() - new Date(iso).getTime()) / 1000);
+    if (diff < 0) diff = 0; // clamp; never show negative time
+    if (diff < 60) return 'just now';
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.floor(mins / 60);
+    return hrs + 'h ' + (mins % 60) + 'm ago';
+  }
+
+  function formatTime(iso) {
+    return new Date(iso).toLocaleTimeString('en-NZ', {
+      hour: '2-digit', minute: '2-digit', hour12: true
+    });
+  }
+
+  // ── Render card ──
+  // ────────────────────────────────────────────────────────────
+  // ── Kitchen-ticket printing — Epson TM-m30 over LAN (ePOS-Print)
+  //    The dashboard runs on a device on the cafe WiFi, so the browser
+  //    can POST directly to the printer's ePOS-Print service. The page is
+  //    HTTPS and the printer is HTTP, so the kitchen device's browser must
+  //    allow "Insecure content" for this site (one-time setting).
+  // ────────────────────────────────────────────────────────────
+  const PRINT_LINE_WIDTH = 42; // 80mm Font A ≈ 48 cols; 42 is tidy & safe
+  // Two print stations, each its own printer. Barista IP blank → one combined
+  // ticket goes to the kitchen printer (original behaviour).
+  // Kitchen/food ticket -> the dedicated WiFi kitchen printer (.160). NOT .101:
+  // Lightspeed holds .101's mechanism, so ePOS-Print there times out. .160 is
+  // dashboard-owned (uncontended).
+  function getKitchenPrinterIP() {
+    try { return localStorage.getItem('kitchenPrinterIP') || '192.168.1.160'; } catch (e) { return '192.168.1.160'; }
+  }
+  function getBaristaPrinterIP() {
+    try { return (localStorage.getItem('baristaPrinterIP') || '192.168.1.76').trim(); } catch (e) { return '192.168.1.76'; }
+  }
+  // GST receipt prints to the dedicated GST/receipt printer (.66), separate from
+  // the order-ticket printers.
+  function getReceiptPrinterIP() {
+    try { return localStorage.getItem('receiptPrinterIP') || '192.168.1.66'; } catch (e) { return '192.168.1.66'; }
+  }
+  // Full combined order ticket (food + drinks together) prints to the expo/pass
+  // printer (.210), alongside the split kitchen (.160) / barista (.76) slips.
+  function getFullPrinterIP() {
+    try { return (localStorage.getItem('fullPrinterIP') || '192.168.1.210').trim(); } catch (e) { return '192.168.1.210'; }
+  }
+  function getPrinterIP() { return getKitchenPrinterIP(); } // back-compat default (test)
+  function eposEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/[\x00-\x1f\x7f]/g, ' ');
+  }
+  function eposRule() { return '<text>' + new Array(PRINT_LINE_WIDTH + 1).join('-') + '&#10;</text>'; }
+
+  // SOAP body for a station ticket (no prices). `items` is the subset for that
+  // station; `stationLabel` is the banner ("KITCHEN" / "BARISTA").
+  function buildStationTicketXml(order, items, stationLabel) {
+    var when = new Date(order.createdAt || Date.now());
+    var timeStr = when.toLocaleTimeString('en-NZ', { hour: '2-digit', minute: '2-digit', hour12: true });
+    var L = [];
+    L.push('<text align="center"/>');
+    L.push('<text dw="true" dh="true" em="true">CRISPY EATERY&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">* ' + eposEsc(stationLabel) + ' *&#10;</text>');
+    L.push('<feed line="1"/>');
+    L.push('<text align="left"/>');
+    L.push(eposRule());
+    if (isPickupOrder(order)) {
+      // Double-width header = 21 cols on 42-col paper; "PICKUP · " is 9.
+      var pickupName = String(order.customerName || '').toUpperCase().slice(0, 12);
+      L.push('<text dw="true" dh="true" em="true">PICKUP' + (pickupName ? ' · ' + eposEsc(pickupName) : '') + '&#10;</text>');
+      L.push('<text dw="true" dh="false" em="true">READY BY: ' + eposEsc(order.pickupTime || 'ASAP') + '&#10;</text>');
+    } else {
+      L.push('<text dw="true" dh="true" em="true">TABLE ' + eposEsc(order.tableNumber) + '&#10;</text>');
+    }
+    L.push('<text dw="false" dh="false" em="false">' + eposEsc(order.id) + '   ' + eposEsc(timeStr) + '&#10;</text>');
+    L.push(eposRule());
+    L.push('<feed line="1"/>');
+    (items || []).forEach(function (it) {
+      var qty = Number(it.qty) || 1;
+      var line = qty + ' x ' + (it.name || '');
+      if (it.size) line += ' (' + it.size + ')';
+      L.push('<text dh="true" em="true">' + eposEsc(line) + '&#10;</text>');
+      if (it.notes) L.push('<text dh="false" em="false">    &gt;&gt; ' + eposEsc(it.notes) + '&#10;</text>');
+      L.push('<feed line="1"/>');
+    });
+    if (order.notes) {
+      L.push(eposRule());
+      L.push('<text em="true">ORDER NOTE:&#10;</text>');
+      L.push('<text em="true">' + eposEsc(order.notes) + '&#10;</text>');
+    }
+    L.push('<feed line="2"/>');
+    L.push('<cut type="feed"/>');
+    var body = '<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">' + L.join('') + '</epos-print>';
+    return '<?xml version="1.0" encoding="utf-8"?>' +
+      '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>' +
+      body + '</s:Body></s:Envelope>';
+  }
+  // back-compat: full-order kitchen ticket (used by the test print)
+  function buildKitchenTicketXml(order) { return buildStationTicketXml(order, order.items || [], 'KITCHEN'); }
+
+  function sendEposOnce(xml, ip) {
+    // HTTPS (port 443) — required so an HTTPS dashboard page can reach the printer.
+    // The printer must serve a certificate this device trusts (see 🖨 Printer setup).
+    // Short 8s timeout so a contended printer fails fast and we can retry.
+    var url = 'https://' + (ip || getKitchenPrinterIP()) + '/cgi-bin/epos/service.cgi?devid=local_printer&timeout=8000';
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '""' },
+      body: xml,
+    }).then(function (r) {
+      return r.text().then(function (text) {
+        if (/success="true"/.test(text)) return { ok: true };
+        var m = text.match(/code="([^"]*)"/);
+        return { ok: false, reason: (m && m[1] ? m[1] : 'printer error') };
+      });
+    });
+  }
+  // Retry a few times: a TM printer momentarily owned by Lightspeed returns
+  // EX_TIMEOUT, and a retry usually lands in a free window between its jobs.
+  function sendEpos(xml, ip, tries) {
+    tries = tries || 3;
+    function again() { return new Promise(function (r) { setTimeout(r, 700); }).then(function () { return sendEpos(xml, ip, tries - 1); }); }
+    return sendEposOnce(xml, ip).then(function (res) {
+      return (res.ok || tries <= 1) ? res : again();
+    }).catch(function (e) {
+      if (tries <= 1) throw e;
+      return again();
+    });
+  }
+
+  function toast(msg, kind) {
+    var el = document.getElementById('toast');
+    if (!el) { el = document.createElement('div'); el.id = 'toast'; document.body.appendChild(el); }
+    el.className = 'show' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+    clearTimeout(el.__t);
+    el.__t = setTimeout(function () { el.classList.remove('show'); }, kind === 'err' ? 9000 : 3000);
+  }
+
+  function printerHelp(ip) {
+    ip = ip || getKitchenPrinterIP();
+    return 'Could not reach the printer at https://' + ip + '. Check: (1) printer is on and on the cafe WiFi; ' +
+      '(2) on THIS iPad the "Crispy Eatery Printer CA" is installed AND switched on under ' +
+      'Settings > General > About > Certificate Trust Settings; (3) the IP is correct (tap 🖨 Printer). ' +
+      'If you just finished setup, fully close this tab and reopen it. Quick check: open https://' + ip + ' in Safari — it should load with no certificate warning.';
+  }
+
+  // ── Print-failure alert bar ─────────────────────────────────────
+  // Failed prints land here and STAY VISIBLE (sticky red bar under the header)
+  // until retried successfully or dismissed — so upstairs staff can see that a
+  // ticket never reached a station even if they missed the toast. Persisted in
+  // localStorage so a page refresh doesn't hide a missing ticket.
+  var PRINT_FAILS_KEY = 'printFailures.v1';
+  var PF_STATION_LABEL = { KITCHEN: 'Kitchen', BARISTA: 'Barista', FULL: 'Expo (full order)', ORDER: 'Kitchen (combined)', RECEIPT: 'GST receipt' };
+  var printFails = (function () {
+    try {
+      var v = JSON.parse(localStorage.getItem(PRINT_FAILS_KEY)) || [];
+      var cutoff = Date.now() - 12 * 3600 * 1000;   // drop stale entries (>12h)
+      return v.filter(function (f) { return f && f.at > cutoff; });
+    } catch (e) { return []; }
+  })();
+  function pfPersist() {
+    try {
+      localStorage.setItem(PRINT_FAILS_KEY, JSON.stringify(printFails.slice(-20).map(function (f) {
+        var c = Object.assign({}, f); delete c.busy; return c;   // busy is transient
+      })));
+    } catch (e) {}
+  }
+  function pfEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function recordPrintFail(e) {
+    e.key = e.kind + ':' + e.refId + ':' + e.station;
+    e.at = Date.now();
+    printFails = printFails.filter(function (f) { return f.key !== e.key; });
+    printFails.push(e);
+    if (printFails.length > 20) printFails = printFails.slice(-20);
+    pfPersist(); renderPrintFails();
+  }
+  function resolvePrintFailKey(key) {
+    var before = printFails.length;
+    printFails = printFails.filter(function (f) { return f.key !== key; });
+    if (printFails.length !== before) { pfPersist(); renderPrintFails(); }
+  }
+  function renderPrintFails() {
+    var el = document.getElementById('printFailBar');
+    if (!el) return;
+    // Re-apply the 12h expiry on every render — an always-on iPad never reloads,
+    // so the load-time filter alone would let stale entries sit forever.
+    var cutoff = Date.now() - 12 * 3600 * 1000;
+    var fresh = printFails.filter(function (f) { return f.at > cutoff; });
+    if (fresh.length !== printFails.length) { printFails = fresh; pfPersist(); }
+    if (!printFails.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    var rows = printFails.map(function (f) {
+      var when = new Date(f.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      var pickup = f.kind !== 'group' && String(f.table || '').toUpperCase() === 'PICKUP';
+      var pkOrder = pickup ? pfFindOrder(f.refId) : null;
+      var who = f.kind === 'group' ? 'Group: ' + pfEsc(f.table)
+        : pickup ? 'Pickup' + (pkOrder && pkOrder.customerName ? ' · ' + pfEsc(pkOrder.customerName) : '') + ' · ' + pfEsc(f.refId)
+        : 'Table ' + pfEsc(f.table) + ' · ' + pfEsc(f.refId);
+      return '<div class="pf-row" data-key="' + pfEsc(f.key) + '">' +
+        '<span>⚠ <b>' + pfEsc(PF_STATION_LABEL[f.station] || f.station) + '</b> — ' + who + '</span>' +
+        '<span class="pf-time">' + when + '</span>' +
+        (f.reason ? '<span class="pf-reason">' + pfEsc(f.reason) + '</span>' : '') +
+        '<span class="pf-btns">' +
+        '<button data-pf-retry="' + pfEsc(f.key) + '">Retry</button>' +
+        '<button class="ghost" data-pf-dismiss="' + pfEsc(f.key) + '">Dismiss</button></span></div>';
+    }).join('');
+    el.innerHTML =
+      '<div class="pf-head"><span class="pf-dot"></span>' + printFails.length +
+      ' PRINT ' + (printFails.length === 1 ? 'FAILURE' : 'FAILURES') +
+      ' — a ticket may be missing at a station</div>' + rows +
+      '<div class="pf-actions"><button data-pf-retryall="1">Retry all</button>' +
+      '<button class="ghost" data-pf-dismissall="1">Dismiss all</button></div>';
+    el.style.display = 'block';
+    el.querySelectorAll('[data-pf-retry]').forEach(function (b) { b.onclick = function () { retryPrintFail(b.getAttribute('data-pf-retry')); }; });
+    el.querySelectorAll('[data-pf-dismiss]').forEach(function (b) {
+      b.onclick = function () {
+        if (!window.confirm('Dismiss this print failure without reprinting?')) return;
+        resolvePrintFailKey(b.getAttribute('data-pf-dismiss'));
+      };
+    });
+    var ra = el.querySelector('[data-pf-retryall]');
+    if (ra) ra.onclick = function () {
+      // Serialize: these TM printers handle one job at a time (same reason
+      // printGroupTickets chains its jobs) — parallel retries just contend.
+      printFails.slice().reduce(function (p, f) {
+        return p.then(function () { return retryPrintFail(f.key); });
+      }, Promise.resolve());
+    };
+    var da = el.querySelector('[data-pf-dismissall]');
+    if (da) da.onclick = function () {
+      if (!window.confirm('Dismiss ALL ' + printFails.length + ' print failures without reprinting?')) return;
+      printFails = []; pfPersist(); renderPrintFails();
+    };
+  }
+  function pfFindOrder(id) {
+    if (orderData[id]) return orderData[id];
+    var hist = (typeof completedOrders !== 'undefined' && completedOrders) || [];
+    for (var i = 0; i < hist.length; i++) if (hist[i].id === id) return hist[i];
+    return null;
+  }
+  // Rebuild the exact ticket for a failed job from current data (no stale XML
+  // kept). Station headers carry a REPRINT marker so a retried slip — possibly
+  // long after the original order — can't be mistaken for a fresh order.
+  function pfRebuildJob(f) {
+    if (f.kind === 'order') {
+      var o = pfFindOrder(f.refId); if (!o) return null;
+      var items = o.items || [];
+      if (f.station === 'KITCHEN') return { ip: getKitchenPrinterIP(), xml: buildStationTicketXml(o, items.filter(function (i) { return !isDrinkItem(i); }), 'KITCHEN · REPRINT') };
+      if (f.station === 'BARISTA') { var bIp = getBaristaPrinterIP(); return bIp ? { ip: bIp, xml: buildStationTicketXml(o, items.filter(isDrinkItem), 'BARISTA · REPRINT') } : null; }
+      if (f.station === 'FULL') { var fIp = getFullPrinterIP(); return fIp ? { ip: fIp, xml: buildStationTicketXml(o, items, 'FULL ORDER · REPRINT') } : null; }
+      if (f.station === 'ORDER') return { ip: getKitchenPrinterIP(), xml: buildStationTicketXml(o, items, 'ORDER · REPRINT') };
+      return null;
+    }
+    if (f.kind === 'receipt') {
+      var ro = pfFindOrder(f.refId); if (!ro) return null;
+      return { ip: getReceiptPrinterIP(), xml: buildReceiptXml(ro) };
+    }
+    if (f.kind === 'group') {
+      var g = null;
+      for (var j = 0; j < GROUPS_CACHE.length; j++) if (GROUPS_CACHE[j].id === f.refId) g = GROUPS_CACHE[j];
+      if (!g) return null;
+      var mode = f.station === 'KITCHEN' ? 'food' : f.station === 'BARISTA' ? 'drink' : 'all';
+      var label = (f.station === 'KITCHEN' ? 'KITCHEN' : f.station === 'BARISTA' ? 'BARISTA' : 'FULL ORDER') + ' · REPRINT';
+      var xml = buildGroupTicketXml(g, mode, label); if (!xml) return null;
+      var gip = f.station === 'KITCHEN' ? getKitchenPrinterIP() : f.station === 'BARISTA' ? getBaristaPrinterIP() : getFullPrinterIP();
+      return gip ? { ip: gip, xml: xml } : null;
+    }
+    return null;
+  }
+  function retryPrintFail(key) {
+    var f = null;
+    for (var i = 0; i < printFails.length; i++) if (printFails[i].key === key) f = printFails[i];
+    if (!f || f.busy) return Promise.resolve();
+    f.busy = true;
+    function finish() { f.busy = false; }
+    function attempt() {
+      var job = pfRebuildJob(f);
+      if (!job) {
+        if (isFirstLoad) toast('Orders are still loading from the server — try Retry again in a few seconds', 'err');
+        else if (f.kind === 'group') toast('Group not found on the server — it may have been deleted. Check 👥 Groups.', 'err');
+        else toast('Cannot rebuild this ticket (order no longer on this screen) — reprint it from the order card or reports', 'err');
+        return Promise.resolve();
+      }
+      toast('Retrying ' + (PF_STATION_LABEL[f.station] || f.station) + '…');
+      return sendEpos(job.xml, job.ip).then(function (res) {
+        if (res.ok) { resolvePrintFailKey(key); toast('🖨 ' + (PF_STATION_LABEL[f.station] || f.station) + ' OK', 'ok'); }
+        else { f.at = Date.now(); f.reason = res.reason || 'printer error'; pfPersist(); renderPrintFails(); toast((PF_STATION_LABEL[f.station] || f.station) + ' still failing', 'err'); }
+      }).catch(function () {
+        f.at = Date.now(); f.reason = 'unreachable'; pfPersist(); renderPrintFails();
+        toast((PF_STATION_LABEL[f.station] || f.station) + ' unreachable (' + job.ip + ')', 'err');
+      });
+    }
+    // Group tickets: refresh the groups list first — GROUPS_CACHE is empty after
+    // a reload (it's only filled when the 👥 overlay opens) and may be stale if
+    // the group changed from another device.
+    var pre = (f.kind === 'group')
+      ? fetch(BACKEND + '/groups', { headers: authHeaders() })
+          .then(function (r) { return r.json(); })
+          .then(function (data) { if (Array.isArray(data)) GROUPS_CACHE = data; })
+          .catch(function () {})
+      : Promise.resolve();
+    return pre.then(attempt).then(function (r) { finish(); return r; }, function (e) { finish(); throw e; });
+  }
+  renderPrintFails();   // restore any persisted failures on load
+
+  // Tap 🖨 → food items print to the kitchen printer, coffee/drinks to the barista
+  // printer. If no barista printer is set, the whole order prints as one ticket
+  // to the kitchen printer (original behaviour).
+  // ── Corporate / group pre-orders (staff "Upcoming" view) ──────
+  var GROUPS_CACHE = [];
+  function gMoney(n){ return '$' + (Number(n)||0).toFixed(2); }
+  function gStatusColor(s){ return ({open:'#5b7553',locked:'#b0832f',preparing:'#c25a3a',done:'#7d7d7d',cancelled:'#a23b2a'})[s] || '#777'; }
+  function gReq(method, path, body){
+    return fetch(BACKEND + path, { method: method, headers: Object.assign({ 'Content-Type':'application/json' }, authHeaders()), body: body ? JSON.stringify(body) : undefined })
+      .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, status:r.status, d:d }; }, function(){ return { ok:r.ok, status:r.status, d:{} }; }); });
+  }
+  window.openGroups = function(){
+    var ov = document.getElementById('groupsOverlay');
+    ov.innerHTML =
+      '<div class="g-panel">' +
+        '<div class="g-head"><h2>Upcoming group orders</h2><button class="g-x" onclick="closeGroups()">&#10005;</button></div>' +
+        '<div class="g-newform">' +
+          '<input id="gNewCompany" placeholder="Company / group name">' +
+          '<input id="gNewDate" type="date">' +
+          '<input id="gNewTime" type="time">' +
+          '<input id="gNewTable" placeholder="Table(s)">' +
+          '<button class="g-btn g-btn-primary" onclick="groupCreate()">+ New group</button>' +
+        '</div>' +
+        '<div id="groupsList"></div>' +
+      '</div>';
+    ov.style.display = 'block';
+    loadGroups();
+  };
+  window.closeGroups = function(){ var ov = document.getElementById('groupsOverlay'); if (ov) ov.style.display = 'none'; };
+  function loadGroups(){
+    var list = document.getElementById('groupsList');
+    if (list) list.innerHTML = '<div class="g-empty">Loading…</div>';
+    fetch(BACKEND + '/groups', { headers: authHeaders() })
+      .then(function(r){ if (r.status === 401) throw new Error('auth'); return r.json(); })
+      .then(function(data){ GROUPS_CACHE = Array.isArray(data) ? data : []; renderGroups(); })
+      .catch(function(){ if (list) list.innerHTML = '<div class="g-empty" style="color:#b04a3a">Could not load groups — check the ?token= in the URL.</div>'; });
+  }
+  function renderGroups(){
+    var list = document.getElementById('groupsList');
+    if (!list) return;
+    if (!GROUPS_CACHE.length){ list.innerHTML = '<div class="g-empty">No group bookings yet. Create one above, or share the Group QR with customers.</div>'; return; }
+    list.innerHTML = GROUPS_CACHE.map(function(g){
+      var members = (g.members||[]);
+      var memHtml = members.length ? members.map(function(m){
+        var items = (m.items||[]).map(function(it){ return (Number(it.qty)||1) + '&#215; ' + escHtml(it.name) + (it.size ? ' (' + escHtml(it.size) + ')' : ''); }).join(', ');
+        return '<div class="g-mem"><b>' + escHtml(m.name) + '</b> &mdash; ' + (items || '<i>no items</i>') + '</div>';
+      }).join('') : '<div class="g-mem" style="color:#999">No one has ordered yet.</div>';
+      var locked = g.status !== 'open';
+      return '<div class="g-card">' +
+        '<div class="g-card-top">' +
+          '<div><div class="g-co">' + escHtml(g.company) + '</div>' +
+            '<div class="g-meta">' + escHtml(g.date) + ' &middot; ' + escHtml(g.arrivalTime) + (g.tableNumbers ? (' &middot; T' + escHtml(g.tableNumbers)) : '') + ' &middot; ' + members.length + (g.guestCount ? ('/' + g.guestCount) : '') + ' ordered &middot; ' + gMoney(g.total) + '</div>' +
+            '<div class="g-code">CODE ' + escHtml(g.code) + '</div></div>' +
+          '<span class="g-status" style="background:' + gStatusColor(g.status) + '">' + escHtml(g.status) + '</span>' +
+        '</div>' +
+        '<div class="g-mems">' + memHtml + '</div>' +
+        '<div class="g-actions">' +
+          '<button class="g-btn g-btn-primary" onclick="groupStartPrep(\'' + g.id + '\')">&#128424; Start prep</button>' +
+          '<button class="g-btn" onclick="groupToggleLock(\'' + g.id + '\')">' + (locked ? 'Unlock' : 'Lock') + '</button>' +
+          '<button class="g-btn" onclick="groupEditTable(\'' + g.id + '\')">Table&#8230;</button>' +
+          '<button class="g-btn g-btn-danger" onclick="groupDelete(\'' + g.id + '\')">Delete</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  window.groupCreate = function(){
+    var company = (document.getElementById('gNewCompany').value||'').trim();
+    var date = document.getElementById('gNewDate').value;
+    var time = document.getElementById('gNewTime').value;
+    var table = (document.getElementById('gNewTable').value||'').trim();
+    if (!company || !date || !time){ toast('Company, date and time are required', 'err'); return; }
+    gReq('POST','/groups',{ company:company, date:date, arrivalTime:time, tableNumbers:table }).then(function(res){
+      if (!res.ok){ toast((res.d&&res.d.error)||'Could not create group','err'); return; }
+      toast('Group ' + res.d.code + ' created', 'ok');
+      document.getElementById('gNewCompany').value=''; document.getElementById('gNewTable').value='';
+      loadGroups();
+    }).catch(function(){ toast('Could not create group','err'); });
+  };
+  window.groupToggleLock = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ status: (g.status==='open'?'locked':'open') }).then(function(res){ if(!res.ok){toast('Update failed','err');return;} loadGroups(); });
+  };
+  window.groupEditTable = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    var t = prompt('Table number(s) for ' + g.company + ':', g.tableNumbers||''); if (t===null) return;
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ tableNumbers: t }).then(function(res){ if(!res.ok){toast('Update failed','err');return;} loadGroups(); });
+  };
+  window.groupDelete = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    if (!confirm('Delete group "' + g.company + '" (' + g.code + ')? This cannot be undone.')) return;
+    gReq('DELETE','/groups/'+encodeURIComponent(id)).then(function(res){ if(!res.ok){toast('Delete failed','err');return;} toast('Group deleted','ok'); loadGroups(); });
+  };
+  window.groupStartPrep = function(id){
+    var g = GROUPS_CACHE.find(function(x){return x.id===id;}); if (!g) return;
+    if (!(g.members||[]).length){ toast('No orders to print yet','err'); return; }
+    gReq('PATCH','/groups/'+encodeURIComponent(id),{ status:'preparing' }).then(function(){ printGroupTickets(g); loadGroups(); }).catch(function(){ printGroupTickets(g); });
+  };
+  function buildGroupTicketXml(group, mode, stationLabel){
+    var L=[];
+    L.push('<text align="center"/><text dw="true" dh="true" em="true">CRISPY EATERY&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">* ' + eposEsc(stationLabel) + ' &#8212; GROUP *&#10;</text><feed line="1"/><text align="left"/>');
+    L.push(eposRule());
+    L.push('<text dw="true" dh="true" em="true">' + eposEsc(group.company) + '&#10;</text>');
+    L.push('<text dw="false" dh="false" em="false">' + eposEsc((group.tableNumbers?('TABLE '+group.tableNumbers+'   '):'') + group.date + '  ' + group.arrivalTime) + '&#10;</text>');
+    L.push(eposRule()); L.push('<feed line="1"/>');
+    var any=false;
+    (group.members||[]).forEach(function(m){
+      var items=(m.items||[]).filter(function(it){ if(mode==='food') return !isDrinkItem(it); if(mode==='drink') return isDrinkItem(it); return true; });
+      if(!items.length) return;
+      any=true;
+      L.push('<text dh="true" em="true">' + eposEsc(m.name) + '&#10;</text>');
+      items.forEach(function(it){ var q=Number(it.qty)||1; L.push('<text dh="true" em="false">' + eposEsc('  ' + q + ' x ' + (it.name||'') + (it.size?(' ('+it.size+')'):'')) + '&#10;</text>'); if(it.notes) L.push('<text em="false">' + eposEsc('      >> ' + it.notes) + '&#10;</text>'); });
+      L.push('<feed line="1"/>');
+    });
+    if(!any) return null;
+    L.push(eposRule()); L.push('<feed line="2"/><cut type="feed"/>');
+    var body='<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">'+L.join('')+'</epos-print>';
+    return '<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'+body+'</s:Body></s:Envelope>';
+  }
+  function printGroupTickets(group){
+    var jobs=[];
+    var k=buildGroupTicketXml(group,'food','KITCHEN'); if(k) jobs.push({ip:getKitchenPrinterIP(),xml:k,label:'kitchen'});
+    var b=buildGroupTicketXml(group,'drink','BARISTA'); var bip=getBaristaPrinterIP(); if(b&&bip) jobs.push({ip:bip,xml:b,label:'barista'});
+    var f=buildGroupTicketXml(group,'all','FULL ORDER'); var fip=getFullPrinterIP(); if(f&&fip) jobs.push({ip:fip,xml:f,label:'full'});
+    if(!jobs.length){ toast('Nothing to print','err'); return; }
+    toast('Printing group tickets for ' + group.company + '…');
+    (function next(i){ if(i>=jobs.length){ toast('Group tickets sent','ok'); return; }
+      var st = jobs[i].label === 'full' ? 'FULL' : jobs[i].label.toUpperCase();
+      sendEpos(jobs[i].xml,jobs[i].ip).then(function(res){
+        if(res.ok) resolvePrintFailKey('group:'+group.id+':'+st);
+        else { recordPrintFail({ kind:'group', refId:group.id, station:st, ip:jobs[i].ip, table:group.company || group.tableNumbers, reason:res.reason||'printer error' }); toast(jobs[i].label+': '+(res.reason||'error'),'err'); }
+      }).catch(function(){
+        recordPrintFail({ kind:'group', refId:group.id, station:st, ip:jobs[i].ip, table:group.company || group.tableNumbers, reason:'unreachable' });
+        toast(jobs[i].label+' failed','err');
+      }).then(function(){ next(i+1); }); })(0);
+  }
+
+  window.printTicket = function (orderId) {
+    var order = orderData[orderId];
+    if (!order) { toast('Order not found', 'err'); return; }
+    var items = order.items || [];
+    var kIp = getKitchenPrinterIP();
+    var bIp = getBaristaPrinterIP();
+    if (!bIp) {
+      toast('Printing ticket for ' + order.id + '…');
+      sendEpos(buildStationTicketXml(order, items, 'ORDER'), kIp)
+        .then(function (res) {
+          if (res.ok) {
+            // a successful combined ticket supersedes any per-station failures
+            // recorded under the other print mode (barista IP set vs cleared)
+            ['ORDER', 'KITCHEN', 'BARISTA', 'FULL'].forEach(function (st) { resolvePrintFailKey('order:' + order.id + ':' + st); });
+          }
+          else recordPrintFail({ kind: 'order', refId: order.id, station: 'ORDER', ip: kIp, table: order.tableNumber, reason: res.reason || 'printer error' });
+          toast(res.ok ? '🖨 Printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err');
+        })
+        .catch(function () {
+          recordPrintFail({ kind: 'order', refId: order.id, station: 'ORDER', ip: kIp, table: order.tableNumber, reason: 'unreachable' });
+          toast(printerHelp(kIp), 'err');
+        });
+      return;
+    }
+    var food = items.filter(function (i) { return !isDrinkItem(i); });
+    var drinks = items.filter(function (i) { return isDrinkItem(i); });
+    var fIp = getFullPrinterIP();
+    var jobs = [];
+    if (food.length) jobs.push({ label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
+    if (drinks.length) jobs.push({ label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
+    if (fIp && items.length) jobs.push({ label: 'full', ip: fIp, xml: buildStationTicketXml(order, items, 'FULL ORDER') });
+    if (!jobs.length) { toast('Nothing to print', 'err'); return; }
+    toast('Printing ' + order.id + '…');
+    Promise.all(jobs.map(function (j) {
+      return sendEpos(j.xml, j.ip)
+        .then(function (res) { return { j: j, ok: res.ok, reason: res.reason }; })
+        .catch(function () { return { j: j, ok: false, reason: 'unreachable' }; });
+    })).then(function (rs) {
+      rs.forEach(function (r) {
+        var st = r.j.label === 'full' ? 'FULL' : r.j.label.toUpperCase();
+        if (r.ok) resolvePrintFailKey('order:' + order.id + ':' + st);
+        else recordPrintFail({ kind: 'order', refId: order.id, station: st, ip: r.j.ip, table: order.tableNumber, reason: r.reason || 'printer error' });
+      });
+      var ok = rs.filter(function (r) { return r.ok; }).map(function (r) { return r.j.label; });
+      var bad = rs.filter(function (r) { return !r.ok; });
+      if (!bad.length) resolvePrintFailKey('order:' + order.id + ':ORDER');   // supersedes old combined-mode failures
+      if (!bad.length) toast('🖨 ' + order.id + ' → ' + ok.join(' + '), 'ok');
+      else toast((ok.length ? ok.join(' + ') + ' OK; ' : '') + bad[0].j.label + ' FAILED (' + bad[0].j.ip + ')', 'err');
+    });
+  };
+
+  window.testPrint = function () {
+    var demo = {
+      id: 'TEST', tableNumber: '0', createdAt: new Date().toISOString(),
+      items: [{ qty: 1, name: 'Test Print', size: '', notes: 'If you can read this, printing works' }],
+      notes: ''
+    };
+    var kIp = getKitchenPrinterIP(), bIp = getBaristaPrinterIP();
+    toast('Test printing…');
+    sendEpos(buildStationTicketXml(demo, demo.items, 'KITCHEN'), kIp)
+      .then(function (res) { toast(res.ok ? '🖨 Kitchen OK (' + kIp + ')' : 'Kitchen failed — ' + res.reason, res.ok ? 'ok' : 'err'); })
+      .catch(function () { toast(printerHelp(kIp), 'err'); });
+    if (bIp) {
+      sendEpos(buildStationTicketXml(demo, demo.items, 'BARISTA'), bIp)
+        .then(function (res) { setTimeout(function () { toast(res.ok ? '🖨 Barista OK (' + bIp + ')' : 'Barista failed — ' + res.reason, res.ok ? 'ok' : 'err'); }, 1400); })
+        .catch(function () { setTimeout(function () { toast(printerHelp(bIp), 'err'); }, 1400); });
+    }
+  };
+
+  function askIP(label, cur) {
+    var v = window.prompt(label, cur);
+    if (v === null) return null;          // cancelled — keep current
+    v = v.trim();
+    if (v && !/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) { toast('Not a valid IP: ' + v, 'err'); return false; }
+    return v;                              // '' = clear
+  }
+  window.printerSetup = function () {
+    var k = askIP('KITCHEN printer IP (food tickets):', getKitchenPrinterIP());
+    if (k === false) return;
+    if (k !== null) { try { localStorage.setItem('kitchenPrinterIP', k); } catch (e) {} }
+    var b = askIP('BARISTA printer IP (coffee / drink tickets).\nLeave BLANK for one combined ticket to the kitchen printer.', getBaristaPrinterIP());
+    if (b === false) return;
+    if (b !== null) { try { localStorage.setItem('baristaPrinterIP', b); } catch (e) {} }
+    toast('Printer settings saved', 'ok');
+    if (confirm('Run a TEST print now?')) window.testPrint();
+  };
+
+  // ────────────────────────────────────────────────────────────
+  // ── GST receipt / customer bill — full order WITH prices ──
+  //    Mirrors the Lightspeed tax invoice. Prices are GST-inclusive (NZ 15%).
+  //    GST is derived from the total and subtotal is the residual, so the
+  //    three printed figures always reconcile to the cent.
+  // ────────────────────────────────────────────────────────────
+  function getReceiptInfo() {
+    var d = {
+      name: 'Crispy Eatery',
+      legal: 'Twopeople Ltd',
+      addr: '341 Remuera Road, Auckland 1050',
+      gst: '136-528-536',
+      web: 'www.crispyeatery.co.nz'
+    };
+    try {
+      var s = localStorage.getItem('receiptInfo');
+      if (s) { var o = JSON.parse(s); for (var k in d) { if (o && o[k] != null && o[k] !== '') d[k] = o[k]; } }
+    } catch (e) {}
+    return d;
+  }
+  // NZ GST 15%, prices GST-inclusive. Derive GST from the total (round half-up on
+  // integer cents), then subtotal = total - GST so subtotal + GST === total exactly.
+  function gstBreakdown(total) {
+    var cents = Math.round((Number(total) || 0) * 100);
+    var gst = Math.round(cents * 3 / 23);
+    return { subtotal: (cents - gst) / 100, gst: gst / 100, total: cents / 100 };
+  }
+  function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+  function eposRuleEq() { return '<text>' + new Array(PRINT_LINE_WIDTH + 1).join('=') + '&#10;</text>'; }
+  // left text + right text, right flush to the line edge (manual pad — no tab stops)
+  function padRow(left, right) {
+    left = String(left); right = String(right);
+    var maxLeft = PRINT_LINE_WIDTH - right.length - 1;
+    if (left.length > maxLeft) left = left.slice(0, Math.max(0, maxLeft - 1)) + '.';
+    var gap = PRINT_LINE_WIDTH - left.length - right.length;
+    if (gap < 1) gap = 1;
+    return left + new Array(gap + 1).join(' ') + right;
+  }
+
+  var CRISPY_FORTUNES=[{"t":"Mercury isn't retrograde. Mercury just owes you money and is avoiding you."},{"t":"Your aura is a soft beige today. Surprisingly competent. Mildly suspicious."},{"t":"Saturn suggests you finish the email. Saturn is right. Saturn is always smug."},{"t":"A rogue comet will compliment your hair from 84 million miles away."},{"t":"Venus is in your snack cabinet. Trust the second cookie."},{"t":"The stars aligned, then immediately got bored and wandered off."},{"t":"Your moon sign is 'leftover pasta.' This explains a great deal."},{"t":"Jupiter is bigger than your problems. Jupiter is also bigger than everything."},{"t":"An aura reader saw yours and just said 'huh' and quietly left."},{"t":"Pluto, still bitter, has cursed you with finding socks but never pairs."},{"t":"Your rising sign rose, looked around, and went back to bed."},{"t":"The constellations spelled your name wrong but the effort counts."},{"t":"Neptune governs your dreams and has chosen the one about teeth again."},{"t":"Today your aura clashes with your sweater. Apologize to the sweater."},{"t":"A retrograde planet hijacked your group chat. That wasn't you. Mostly."},{"t":"Mars wants you to be brave. Mars also dared you. Don't take the dare."},{"t":"Your zodiac upgraded to a thirteenth sign. It is just confused Gemini."},{"t":"The cosmos has read your texts and is choosing not to comment."},{"t":"Your aura is glowing faintly. Possibly proud. Possibly just the streetlight."},{"t":"An eclipse is coming to borrow the sun and forget to give it back."},{"t":"The stars predict a Tuesday so ordinary it loops back into magnificent."},{"t":"Uranus is doing fine, thank you for never asking."},{"t":"Your horoscope was eaten by a goat. The goat now knows your future."},{"t":"Two planets argued about you last night. You won. You always win at night."},{"t":"Your aura registers as 'wifi searching.' Reconnect after lunch."},{"t":"The North Star is pointing at something. Not north. Stop asking."},{"t":"A meteor shower will rain on a plan you hadn't finished making."},{"t":"Your sun sign filed a complaint about your sleep schedule."},{"t":"Mercury left retrograde and immediately texted three exes. Not yours. Probably."},{"t":"The galaxy spun extra fast today just so you'd feel slightly dizzy."},{"t":"Your aura is a color that hasn't been invented. Patent it before noon."},{"t":"Saturn's rings are jealous of your napkin folding. Show no mercy."},{"t":"The planets formed a perfect line, then ruined it laughing at you fondly."},{"t":"An astrologer checked your chart and ordered another coffee. Brace yourself."},{"t":"Your moon is waxing, which is the moon's way of clearing its throat."},{"t":"Today's lucky planet is the one you can't remember the name of."},{"t":"Your aura left a voicemail. It sounded periwinkle and a little worried."},{"t":"The zodiac wheel got stuck on your sign. Everyone is mildly annoyed."},{"t":"A black hole admires your ability to swallow an entire sandwich whole."},{"t":"Cosmic forces conspired all week to deliver you this exact warm beverage."},{"t":"Your star chart has a typo where your ambition should be. Investigating."},{"t":"Venus retrograde means your houseplants are gossiping. They saw what you did."},{"t":"The sun rose specifically to inconvenience your nap. Take it personally."},{"t":"Your aura matches the ceiling. This is either zen or a sign to look up."},{"t":"Three constellations RSVP'd yes to your evening. None of them are punctual."},{"t":"Mercury, Venus, and Mars formed a band. Your week is the opening act."},{"t":"Your horoscope today is simply: hydrate, then conquer one small thing."},{"t":"The moon pulled the tides and gently pulled your attention to dessert."},{"t":"An aura this teal hasn't been recorded since a Tuesday nobody remembers."},{"t":"Pluto demands recognition as a planet and your snack as compensation."},{"t":"The stars wrote you a love note, then dissolved it into dawn. Rude."},{"t":"Your celestial forecast: brief glory near the register, then a calm afternoon."},{"t":"You're brewing something big; let the grounds settle and trust the slow drip."},{"t":"A double shot of luck is heading your way before the crema even fades."},{"t":"Like a perfect tamp, even pressure today turns your effort into gold."},{"t":"Your best ideas are still steeping. Give them another minute."},{"t":"Bold as a dark roast, you'll handle whatever the day pours."},{"t":"The bean roasted longest carries the deepest flavor. So do you."},{"t":"Someone is about to make your morning. Save them the corner seat."},{"t":"Don't espresso yourself short today; you're stronger than a triple."},{"t":"A frothy opportunity is rising. Skim the foam and dive in."},{"t":"Patience grinds fine; rushed beans only bring bitterness."},{"t":"Your warmth is the kind people return for, mug after mug."},{"t":"Good things percolate for those who wait by the pot."},{"t":"Today asks for grit, the kind found at the bottom of a Turkish cup."},{"t":"You bring the crema to other people's plain black days."},{"t":"A small kindness, poured carefully, makes the prettiest latte art."},{"t":"Wake up and smell the win; it's been roasting all week."},{"t":"Steady hands and a steady heart pull the cleanest shot."},{"t":"The afternoon slump is no match for the spark already in you."},{"t":"Your next chapter is single-origin: rare, traceable, all yours."},{"t":"Pour generously. The cup that's shared never runs empty."},{"t":"A friend will surprise you, smooth as cold brew on a hot day."},{"t":"Skip the decaf decisions; this is a full-strength kind of week."},{"t":"What feels burnt now will mellow into something rich and complex."},{"t":"You are the reason someone takes the long way past this cafe."},{"t":"Trust your gut grind: the coarse calls and the fine ones both."},{"t":"Today's blend: two parts courage, one part quiet confidence."},{"t":"A windfall is dripping in slowly; check the carafe by Friday."},{"t":"You handle pressure like a portafilter: nine bars and never cracking."},{"t":"The froth fades, but the warmth you gave today will linger."},{"t":"Let the small talk steam off; the real conversation is worth the wait."},{"t":"You've earned the extra shot. Take it without guilt today."},{"t":"Some days you're the barista; some days you're the first happy sip."},{"t":"A fresh start is grinding now; you'll smell it before you see it."},{"t":"Keep your standards high and your milk steamed to a silky thirty-eight."},{"t":"The hard week was just the roast. Now comes the flavor."},{"t":"You'll find clarity where you least expect it, like sugar at the cup's base."},{"t":"Pour over your plans twice; the second pass tastes far better."},{"t":"Inspiration is blooming, like fresh grounds rising to greet the water."},{"t":"Your calm is contagious, smoother than a flat white at sunrise."},{"t":"Don't let one bitter cup decide the whole pot is ruined."},{"t":"Big news is brewing under pressure; the seal is about to break."},{"t":"You make ordinary mornings feel like a reserved-bean treat."},{"t":"Take the leap today; the best shots are pulled before they go stale."},{"t":"A long line means you're worth the wait. Remember that about yourself."},{"t":"The aroma of a good idea reaches you before the work is done."},{"t":"Stay grounded, but never forget how good it feels to rise like steam."},{"t":"Someone saved you the last pour today. Notice who, and thank them."},{"t":"Your patience this week is the slow bloom before a perfect cup."},{"t":"Choose the bold roast version of yourself; the day can take it."},{"t":"Luck froths up fast for people who keep showing up to the counter."},{"t":"The dregs of yesterday are gone; today's grind is fresh."},{"t":"You're exactly the right strength: never watered down, always worth the sip."},{"t":"The kettle is patient with you; try being patient with yourself today."},{"t":"A pinch of cardamom in your week will turn the ordinary into the warm."},{"t":"Steep slowly. The best parts of your day refuse to be rushed."},{"t":"Someone you miss is two cups of courage away from a phone call."},{"t":"Your chai is strong, but your second wind will be stronger."},{"t":"Let the chamomile remind you: rest is a decision, not a reward."},{"t":"The peppermint you sip today clears more than your head."},{"t":"A small kindness, like loose leaves, expands far past its first size."},{"t":"Ginger heat now, calm clarity later. Trust the order of things."},{"t":"You are the blend nobody else can quite reproduce."},{"t":"Hibiscus turns water a bold red; one brave word will color your week."},{"t":"The lemon you almost skipped is the part you'll be glad you kept."},{"t":"Honey dissolves best in warmth. So do most of your worries."},{"t":"A new friendship is brewing in a room you haven't entered yet."},{"t":"Rooibos asks for no caffeine and still keeps you company. Be that friend."},{"t":"The leaves settle when you stop stirring. Some answers do too."},{"t":"Today's small ritual becomes tomorrow's quiet strength."},{"t":"A second steeping reveals flavors the first cup hid from you."},{"t":"Cinnamon belongs where it's least expected. So, perhaps, do you."},{"t":"The mug you choose by feel is rarely the wrong one."},{"t":"Lavender slows the evening so your good ideas can finally catch up."},{"t":"You'll soon pour for someone who really needed to be poured for."},{"t":"A cold brew teaches you that time, not heat, does the deepest work."},{"t":"The fennel seed is tiny and still changes the whole pot. Notice yours."},{"t":"Let the steam rise and carry off one grudge you no longer need."},{"t":"Your favorite blend ran out so a better one could find your shelf."},{"t":"Turmeric stains the cup gold; today leaves a brighter mark than you think."},{"t":"The teaspoon you lost will return the moment you stop needing it."},{"t":"A quiet afternoon with one good cup outweighs a loud, empty week."},{"t":"Lemongrass cuts through heavy air; a clear thought will cut through yours."},{"t":"You steep best in good company, so go find some this week."},{"t":"The first pour is for the guest; the last, finally, is for you."},{"t":"An old recipe in a new hand becomes something entirely fresh."},{"t":"Nettle stings the careless and feeds the patient. Choose patient."},{"t":"The teapot keeps no secrets; speak as plainly and be trusted."},{"t":"A spoon of jasmine in your day arrives from an unexpected sender."},{"t":"What feels bitter now will mellow with one more minute of warmth."},{"t":"You'll trade a recipe and gain a story worth far more."},{"t":"The clay pot remembers every brew; let your kindness season you too."},{"t":"Mint multiplies when tended. So does the cheer you hand out freely."},{"t":"A misplaced leaf in the strainer is a small, forgivable mess. Like most."},{"t":"Sip before you speak today and the right words will already be warm."},{"t":"The infusion you forgot turned out richer for the wait. So will yours."},{"t":"A stranger's recommendation leads you to your new everyday cup."},{"t":"Let the saucer catch what spills; not every drop has to be saved."},{"t":"Anise and orange peel: the odd pairing is the one people remember."},{"t":"Your hands warmed by a mug are hands ready to help someone else."},{"t":"The leftover leaves still flavor a second pot; your effort echoes onward."},{"t":"A slow morning brew sets a pace the whole rushing day will envy."},{"t":"Sage settles the kitchen and, given a chance, settles you."},{"t":"The blend you almost ignored becomes the one you reorder twice."},{"t":"Drink to the small win nobody clapped for; that one was real."},{"t":"A croissant has 27 layers; today, give yourself half that many second chances."},{"t":"The best scones crumble a little. So will your worries by Friday."},{"t":"Someone is saving the last muffin for you. Let them."},{"t":"Patience is just dough resting before it rises. Wait one more hour."},{"t":"A danish folds its fruit inward; tuck your good news close, then share it."},{"t":"Warm butter forgives a cold morning. Be the butter today."},{"t":"You will soon flake beautifully, like pastry, not like plans."},{"t":"The crumb you brush off your shirt is proof you enjoyed something."},{"t":"Three good things rise today: bread, the sun, and your odds."},{"t":"A muffin top is just enthusiasm that wouldn't stay in the tin."},{"t":"Steam escapes a fresh croissant the way doubt leaves a brave heart."},{"t":"Sweetness finds you before noon, dusted in cinnamon."},{"t":"The oven that browned your scone is rooting for you too."},{"t":"Knead today gently; tomorrow handles the rolling pin."},{"t":"A flaky pastry keeps no secrets; neither should a true friend."},{"t":"Your luck is proofing quietly in a warm corner. Check on it soon."},{"t":"Even a fallen souffle made the kitchen smell wonderful. So did you."},{"t":"Glaze sets fast; act on the kind thought before it cools."},{"t":"The jam at the center was worth digging for. So is your goal."},{"t":"A baker's dozen means one extra gift you didn't expect. Watch for it."},{"t":"Crisp on the outside, soft within: that is the right way to be strong."},{"t":"Today the burnt edge is somebody else's; yours comes out golden."},{"t":"A scone splits cleanly when shared. Split your good day with someone."},{"t":"The last bite is always the smallest and somehow the best. Slow down."},{"t":"Powdered sugar lands where it pleases; let a little joy surprise you."},{"t":"You are nearly done resting. Soon you double in size."},{"t":"A croissant tip points two ways; both of your choices are fine."},{"t":"The muffin you almost skipped is the one you'll remember. Take it."},{"t":"Heat made the laminate; a little pressure makes your best work too."},{"t":"Fresh from the oven beats fresh from the freezer. Choose the warm path."},{"t":"A pastry brush leaves shine where it lingers. Linger somewhere kind."},{"t":"Your morning has a soft center under a crisp start. Bite in."},{"t":"Crumbs lead somewhere good when you stop apologizing for the trail."},{"t":"The danish wears its fruit on top; wear your joy where others see it."},{"t":"Good things, like brioche, take an extra egg and a longer wait."},{"t":"A scone tastes braver with a little jam. Add the brave part."},{"t":"The dough that fought the rolling pin made the flakiest layers. Keep going."},{"t":"Today smells of vanilla and second chances."},{"t":"You will fold something difficult into something delicious by evening."},{"t":"A muffin holds its shape because someone greased the tin first. Thank them."},{"t":"The crust is the part that protected everything soft. Mind your edges kindly."},{"t":"Warm enough, sweet enough, almost ready: that's you, right now."},{"t":"A croissant never rushes its rise and still makes the best mornings."},{"t":"Let the oven do the worrying; you just hold the warm tray."},{"t":"The chip in your scone is where the chocolate decided to stay. Lucky you."},{"t":"Some pastries are best torn, not cut. Some joys, too. Use your hands."},{"t":"Tomorrow proofs overnight while you sleep. Trust the slow rise."},{"t":"A dusting of sugar hides no flaws, only adds delight. Try that approach."},{"t":"The almond inside the croissant was the plan all along. So is your surprise."},{"t":"You'll hear a small good crackle today, like a fresh crust giving way."},{"t":"Butter, flour, time, and care: the recipe for this works on people too."},{"t":"The pastry case is fullest right before opening. Your best hour is early."},{"t":"Your benedict hour approaches: hollandaise will pool exactly where you need it."},{"t":"A poached egg keeps its shape under pressure. So, it turns out, do you."},{"t":"Fold today like an omelette: gently, and around something good."},{"t":"The runny yolk you fear is the reward you have been waiting for."},{"t":"Soon a stranger will pass you the last slice of toast. Accept it."},{"t":"Whisk before you season. Patience seasons everything that follows."},{"t":"Your morning will arrive sunny side up, no flipping required."},{"t":"The English muffin knows: nooks hold the most butter, and the most joy."},{"t":"A perfect poach needs swirling water. Let a little chaos work for you."},{"t":"Three eggs, one pan, no rush. Your week wants the same treatment."},{"t":"Hollandaise breaks when hurried. Slow down and warm your bowl first."},{"t":"The ham beneath the egg supports you quietly. Thank someone like that today."},{"t":"You are closer to golden-brown than you think. Keep the heat steady."},{"t":"An omelette never asks to be flipped twice. Trust your first decision."},{"t":"Brunch finds the people who deserve a slow morning. You qualify."},{"t":"Crack boldly, but mind the shell. Detail saves the whole dish."},{"t":"A second yolk in your egg means twice the luck before lunch."},{"t":"Let the butter foam, then move. Timing is the only secret recipe."},{"t":"The wobble in a soft-set egg is confidence, not weakness."},{"t":"Today you will rescue something nearly burnt and call it caramelized."},{"t":"Chives belong scattered, not measured. Loosen your grip on small things."},{"t":"Your benedict will be ordered, remembered, and recommended to a friend."},{"t":"A poached egg waits in cold water for its moment. Yours is nearly here."},{"t":"Beat the eggs until they forget they were separate. Then unite your team."},{"t":"The toast lands butter-side up today. The odds have turned for you."},{"t":"Warm plates make happy yolks. Prepare the ground before the good arrives."},{"t":"A quiet brunch beats a loud feast. Choose the table by the window."},{"t":"You will master the flip you have feared for years. Wrist, not arm."},{"t":"Spinach folded in still counts. Sneak something healthy into your day."},{"t":"The first bubble in the poaching water says: begin now, not later."},{"t":"Your omelette will hold its filling and so will your secret. Both safe."},{"t":"A pinch of salt finishes the dish. A pinch of grace finishes the argument."},{"t":"Soft, medium, or hard: you get to choose how done today must be."},{"t":"The brunch you skip is the one you regret. Sit down and order."},{"t":"Lemon brightens hollandaise; a small acid sharpens a dull morning too."},{"t":"You will be served before the person who arrived first. Enjoy it kindly."},{"t":"An egg drops perfectly into the swirl. Your timing returns this week."},{"t":"Crusts off or on, the sandwich still feeds you. Stop sweating the edges."},{"t":"Smoked salmon arrives where you least expect richness. Welcome the surprise."},{"t":"The pan is finally hot enough. Stop testing and start cooking your plan."},{"t":"A poached egg has no corners to hide in. Try a little of that honesty."},{"t":"Butter, then eggs, never the reverse. Some orders are worth respecting."},{"t":"Your weekend will be soft-boiled: tender inside, easy to open."},{"t":"Two muffins, one fork, shared yolk. Generosity returns to your table."},{"t":"The omelette folds best when half-set. Act while things are still moving."},{"t":"A dusting of pepper, a splash of luck. Both land on your plate today."},{"t":"Coffee beside eggs makes a complete morning. You already have the coffee."},{"t":"The yolk breaks and the sauce improves. Let your mistake feed the dish."},{"t":"Hollandaise forgives the patient cook. Whisk, wait, and you win."},{"t":"A late brunch is still a brunch. Forgive yourself the slow start."},{"t":"You will teach someone to poach an egg, and they will never forget you."},{"t":"Set the table for one more than you expect. Brunch always grows."},{"t":"A short stack today builds a tall mood by noon."},{"t":"The maple you almost skipped is the one you'll remember."},{"t":"Patience browns the best waffle; rushing only burns it."},{"t":"Someone will pour you syrup before you have to ask."},{"t":"Your next good idea arrives steaming, with a pat of butter."},{"t":"Flip it once, trust it, and let the edges go golden."},{"t":"A waffle's squares are just little pockets for keeping luck."},{"t":"French toast forgives the bread that was almost too old."},{"t":"Today the batter rises higher than you planned. Good."},{"t":"Warm syrup finds the cracks; let it reach yours too."},{"t":"The best breakfast is the one you weren't rushing through."},{"t":"You will say yes to seconds, and you will be right."},{"t":"A crisp edge and a soft middle: aim to be both."},{"t":"The griddle rewards the cook who waits for the bubbles."},{"t":"Drizzle generously; the day repays what you pour."},{"t":"Some mornings call for cinnamon. This is one of them."},{"t":"Your luck stacks up, layer by buttery layer."},{"t":"A new friend likes their pancakes the same odd way you do."},{"t":"Let the syrup pool. Hurrying never tasted like this."},{"t":"The waffle iron and you agree: good things take heat."},{"t":"Soak it through, then crisp it up. That's the secret."},{"t":"Today you are the warm plate everyone gathers around."},{"t":"Berries on top mean the small extras are worth it."},{"t":"A lopsided pancake still feeds you. Forgive the flaw."},{"t":"The first bite is honest; trust what it tells you."},{"t":"Maple runs slow on purpose. So can you, today."},{"t":"Whisk out the lumps; smoother days are just ahead."},{"t":"You'll catch the syrup drip before it hits the table."},{"t":"A double stack means you were braver than you thought."},{"t":"The last triangle of waffle is yours. Take it."},{"t":"Butter melts where it's needed; so will your worry."},{"t":"Crispy on the outside is a fine way to face the week."},{"t":"Your kindness spreads like warm syrup, edge to edge."},{"t":"A pancake flipped too soon teaches the next one patience."},{"t":"Today, savor slow; the griddle isn't going anywhere."},{"t":"Powdered sugar settles on small joys. Watch for them."},{"t":"The recipe you tweak by feel turns out best this time."},{"t":"You'll be the one who knows the perfect flip moment."},{"t":"Stack high, pour deep, and share the top one."},{"t":"A golden morning leaves crumbs of luck all day."},{"t":"Trust the batter you can't see rising. It is."},{"t":"The syrup bottle is fuller than it looks. So is today."},{"t":"Every waffle pocket fills if you give it a moment."},{"t":"You will find sweetness in a corner you nearly skipped."},{"t":"Let it rest a minute; the warmth keeps spreading."},{"t":"A messy plate means you enjoyed it right."},{"t":"Tomorrow's batter starts with tonight's good rest."},{"t":"The toast soaks longest where the heart is biggest."},{"t":"Cinnamon, butter, and you: a combination worth keeping."},{"t":"You'll flip something tricky today and stick the landing."},{"t":"Pour the syrup like you mean it; mean things turn out well."},{"t":"A warm stack waits at the end of this long morning."},{"t":"Your starter is quietly bubbling toward something wonderful."},{"t":"A slow rise beats a fast bake. Give your plans more time."},{"t":"The crust you fear is the part that gives you crunch."},{"t":"Feed the thing you want to grow, even on the busy days."},{"t":"Warm bread shared is a small, perfect kind of generosity."},{"t":"Today the butter melts exactly where you need it to."},{"t":"A burnt corner is not a failed loaf. Cut it, keep the rest."},{"t":"Good things proof in the dark before they ever see the oven."},{"t":"You are closer to golden-brown than you think."},{"t":"Knead your worries, then let them rest. They soften."},{"t":"The heel of the loaf is overlooked treasure. So will yours be found."},{"t":"Patience smells like a kitchen at six in the morning."},{"t":"Let it cool before you cut it. The wait makes the crumb."},{"t":"Sourdough teaches you to befriend time instead of fighting it."},{"t":"A little salt makes the sweetness in your week stand out."},{"t":"Your hands already know more than your doubts admit."},{"t":"Even a flat loaf still feeds someone. Nothing you make is wasted."},{"t":"The oven spring comes when you least expect the rise."},{"t":"Toast lightly today. Not everything needs pushing to the edge."},{"t":"What you start this morning will be ready by the weekend."},{"t":"A crackling crust means the heat was worth it."},{"t":"Keep a little starter back. Always save something for tomorrow."},{"t":"The whole house wakes up happier when bread is in the oven."},{"t":"Score the loaf so steam can leave. Make room for pressure to escape."},{"t":"Flour on your sleeve is the badge of someone who made something."},{"t":"A jar of starter is a tiny promise you keep with yourself."},{"t":"The dough rises whether you watch or not. Trust and step away."},{"t":"Today, be the warm bread on someone's cold morning."},{"t":"Open crumb, open heart. Let a few holes be part of the beauty."},{"t":"You can fix almost anything with toast and ten quiet minutes."},{"t":"The wild yeast around you is already cheering for your rise."},{"t":"A loaf shared at the table outlasts the meal in memory."},{"t":"Honey on warm bread reminds you that simple still wins."},{"t":"Your second attempt at the recipe will surprise everyone."},{"t":"Stretch and fold, again and again. Strength is built in repetition."},{"t":"The crumb you cut into reveals the care you put in."},{"t":"Let it autolyse. Some problems solve themselves if left alone."},{"t":"A good crust protects a tender inside. So does a little quiet."},{"t":"Tomorrow's breakfast is rising on the counter tonight."},{"t":"Bread won't be rushed, and neither should the part of you healing."},{"t":"The smell of toast forgives a whole hard week."},{"t":"You are the kind of person who saves the last slice for a friend."},{"t":"Dust the basket with flour and trust the shape underneath."},{"t":"A bakery line is proof that good things are worth the wait."},{"t":"Day-old bread makes the best toast. Your delays have a purpose."},{"t":"Build steam under the lid: pressure, then patience, then bloom."},{"t":"You will meet someone over a shared loaf this season."},{"t":"The crust sings as it cools. Listen for your small victories."},{"t":"Add the seeds. The little extras are what people remember."},{"t":"A well-fed starter forgives missed days. So do those who love you."},{"t":"Crusty outside, soft inside is a fine way to move through life."},{"t":"Somewhere a loaf is rising with your name on the rim of the bowl."},{"t":"A slice of cake tastes better when you waited all week for it."},{"t":"The frosting you scrape from the bowl is a quiet kind of joy."},{"t":"Someone is saving the last cookie for you. Find out who."},{"t":"Warm from the oven beats perfect every single time."},{"t":"Your patience is about to be rewarded, possibly with caramel."},{"t":"Share the brownie corner and you make a friend for keeps."},{"t":"A small dessert at noon can rescue an entire afternoon."},{"t":"The recipe you scribbled on a napkin will outlive the napkin."},{"t":"Sprinkles solve nothing and improve everything anyway."},{"t":"Today, let the cream rise to the top, and so will you."},{"t":"Two spoons, one sundae: the math of a good evening."},{"t":"That cake you're nervous to bake turns out lighter than you fear."},{"t":"A pinch of salt makes the sweet things truly sing."},{"t":"You will soon trade a secret for a slice of pie. Worth it."},{"t":"The dessert nobody finished is the one you'll remember fondly."},{"t":"Let your next mistake be a lopsided cake that still gets eaten."},{"t":"Cool the tart before cutting; cool your temper before speaking."},{"t":"A jar of honey in your pantry is a small promise to your future self."},{"t":"The best macaron is the one cracked by someone laughing nearby."},{"t":"Fold gently. Both the egg whites and the apology."},{"t":"Your name belongs on the good plates, not just the everyday ones."},{"t":"A custard sets while you sleep; so does your worry, sometimes."},{"t":"Lick the spoon. No one is grading you today."},{"t":"The fruit at the bottom is the reward for digging deeper."},{"t":"Soon a stranger will offer you the bigger half of a cookie."},{"t":"Whipped cream forgives a cake that fell in the middle."},{"t":"Bake double; the second loaf is for someone who needs it."},{"t":"A chocolate left in your pocket survives the meeting. So do you."},{"t":"The crumbs you brush away today were a fine afternoon."},{"t":"You will discover that pudding tastes like being eight again."},{"t":"Burnt edges mean the oven loved you a little too much."},{"t":"Save room. Something sweet is coming you didn't plan for."},{"t":"A meringue is mostly air and still makes everyone happy. Be that."},{"t":"The cake will rise. So will your good mood, given time."},{"t":"Dip the cookie longer than feels safe. Live a little."},{"t":"A dusting of sugar makes a plain morning look like a holiday."},{"t":"The dessert you make for one tastes best eaten slowly."},{"t":"Soon you'll learn the trick: add the vanilla, double the joy."},{"t":"A birthday candle wish counts even when you forget the words."},{"t":"Cold cake at midnight knows all your best secrets."},{"t":"The jam will set if you stop poking it. Same with most plans."},{"t":"You are the cherry someone has been hoping for on top."},{"t":"A shared dessert is never really cut in half; it multiplies."},{"t":"Let the dough rest. Let yourself rest. Both turn out softer."},{"t":"The lopsided gingerbread house is the one kids love most."},{"t":"Soon you will taste something new and forgive an old grudge."},{"t":"The cake batter you snuck was the best part. Admit it."},{"t":"A warm cookie in cold hands is a small, perfect kindness."},{"t":"You will find the dessert fork you thought was lost forever."},{"t":"Pour the syrup slowly; the sweetest things are not rushed."},{"t":"The last bite is yours today. Take it without apology."},{"t":"Somewhere, a cake is cooling with your name already on it."},{"t":"The map ends where your courage begins."},{"t":"A locked gate is just a door that hasn't met you yet."},{"t":"Pack light, but never leave your nerve behind."},{"t":"The dragon you fear is smaller than the one you imagine."},{"t":"Every hero once stood exactly where you stand now."},{"t":"The long road repays patient boots with quiet wonders."},{"t":"Lost paths often lead to the best campfires."},{"t":"Carry a torch, and the dark forgets your name."},{"t":"The bravest step is the one taken before dawn."},{"t":"A worn cloak hides a hundred finished quests."},{"t":"Mountains kneel for travelers who refuse to stop climbing."},{"t":"Your compass spins; your heart already knows the way."},{"t":"Cross the river before it learns to argue with you."},{"t":"The quest chooses the willing, not the ready."},{"t":"A single lantern can lead a whole caravan home."},{"t":"Trust the trail, but keep one hand on your sword."},{"t":"Storms test the sail, never the captain's resolve."},{"t":"The wise hero befriends the fool at the crossroads."},{"t":"Behind the tallest ridge waits a wider sky."},{"t":"Footprints fade, but the legend keeps walking."},{"t":"A small companion can carry a giant's hope."},{"t":"Forge ahead; the bridge appears under marching feet."},{"t":"The desert rewards those who ration their doubt."},{"t":"Even kings began as travelers with muddy boots."},{"t":"Knock thrice on the old door and adventure answers."},{"t":"The hardest mile hides the gentlest summit."},{"t":"Your shadow grows long, but your spirit grows longer."},{"t":"A whispered oath outlasts the loudest battle."},{"t":"Follow the falling star past the edge of the known."},{"t":"The toll for greatness is paid in tired knees."},{"t":"Grip the reins; the wild road respects a steady hand."},{"t":"One brave choice can rewrite a timid map."},{"t":"The fortress falls to the traveler who simply waits."},{"t":"Beyond the fog stands a tower built for your arrival."},{"t":"A hero's pack is heavy with everyone they protect."},{"t":"Climb today; tomorrow the cliff calls you friend."},{"t":"The ferryman favors those who fear no far shore."},{"t":"Sharpen courage nightly; it dulls faster than steel."},{"t":"Wanderers find the well that hermits forgot."},{"t":"The quest is won in the boring miles between battles."},{"t":"Plant your banner where others planted their excuses."},{"t":"A guiding owl prefers the traveler who listens."},{"t":"The deepest cave guards the brightest gem."},{"t":"Let the wind argue; you keep walking north."},{"t":"Every scar is a sentence in your hero's tale."},{"t":"The gatekeeper bows to a patient, honest knock."},{"t":"Doubt builds walls; one footstep builds a road."},{"t":"Brave hearts travel lighter than heavy gold."},{"t":"The summit forgets the slow but blesses the steady."},{"t":"A torch shared in darkness never burns shorter."},{"t":"Tomorrow's legend begins with today's first stride."},{"t":"The wild calls; answer before the trail goes cold."},{"t":"The crow that watched your door this morning carried good word onward."},{"t":"A locked thing in your life has been waiting for the key you already own."},{"t":"By the third dusk, a small yes will undo a long silence."},{"t":"The river that forgot your name remembers it again today."},{"t":"Listen: the oldest stone in your path is hollow, and it hums for you."},{"t":"What you misplaced in spring returns wearing a different color."},{"t":"A door you walked past twice will open on the third glance back."},{"t":"The moon owes you one favor, and it intends to pay in clear weather."},{"t":"Speak softly to the next stranger; they carry half of your answer."},{"t":"The thread you thought was cut is merely tied in another room."},{"t":"Before the salt runs out, a quiet debt will be quietly forgiven."},{"t":"Your shadow has been practicing patience; soon you will catch up to it."},{"t":"A bell you cannot hear is already ringing somewhere on your behalf."},{"t":"The map was wrong, and that error leads you exactly where you belong."},{"t":"Count seven kindnesses; the eighth will arrive uninvited and welcome."},{"t":"An old grudge of yours has quietly packed its bags and left town."},{"t":"The next ladder you find leans against the right wall this time."},{"t":"Whatever you whisper to the steam today, the kettle will keep secret."},{"t":"A name you nearly forgot will knock twice and bring an open hand."},{"t":"The wind changed its mind about you; expect it to be generous."},{"t":"Some door in the east has your initials carved on the inside."},{"t":"A coin you dropped years ago is rolling slowly back toward your shoe."},{"t":"Trust the path that smells of rain; the dry one only pretends to be safe."},{"t":"The candle you almost blew out still has one important hour left."},{"t":"A creature smaller than your thumb decides your luck this week, kindly."},{"t":"The story you stopped telling wants its ending written by Friday."},{"t":"Look up: a window you never noticed has been left open for you."},{"t":"What feels like winter is only a long held breath before the thaw."},{"t":"A clock somewhere strikes a number that does not exist, just for you."},{"t":"The owl that questions everyone has, at last, no question for you."},{"t":"Your name was spoken kindly today in a room you will never enter."},{"t":"A small mirror will show you a courage you forgot you packed."},{"t":"The garden you neglected has been growing your good fortune in secret."},{"t":"Three knocks mean nothing; the fourth is the one to answer slowly."},{"t":"An unfamiliar song will hand you a familiar memory, gift-wrapped."},{"t":"The tide is keeping something for you that it refuses to give the shore."},{"t":"You will lend a match and be repaid in an unexpected fire of joy."},{"t":"The hinge that always squeaked has decided to bless your next exit."},{"t":"A letter never sent still found its way; watch for its quiet arrival."},{"t":"Where the road forks, the smaller branch carries the larger reward."},{"t":"The first bird awake tomorrow sings a verse meant only for you."},{"t":"A weight you have carried for nine months is about to learn to fly."},{"t":"The dust on the high shelf hides a yes you put there for safekeeping."},{"t":"Someone you have not met yet is already glad you exist."},{"t":"A spark you ignore today becomes the lantern you bless next winter."},{"t":"The last leaf to fall this year falls in your favor, on purpose."},{"t":"What the fog hides, the noon sun will hand you without ceremony."},{"t":"A promise made under stars is being kept under a plain ceiling soon."},{"t":"The echo in the empty hall is rehearsing your good news for delivery."},{"t":"You will find the missing half not by searching, but by sitting still."},{"t":"A long door of waiting closes; a short bright corridor opens beyond it."},{"t":"The wax has spelled your fortune: stay curious, and arrive on time."},{"t":"A walk up Mount Eden's crater clears more than your lungs today."},{"t":"The Remuera roundabout you dread will wave you through on green."},{"t":"Good news arrives on the ferry from Devonport before noon."},{"t":"Your next flat white will be the best one Newmarket has poured."},{"t":"A tui in the kowhai is reason enough to slow down this morning."},{"t":"The harbour bridge traffic parts for you like a small miracle."},{"t":"Someone in Parnell remembers your name and is glad to see you."},{"t":"Pohutukawa will bloom red the week your luck turns bright."},{"t":"A quiet stroll along Mission Bay settles a question you've carried."},{"t":"The car park you circle for at Sylvia Park opens just in time."},{"t":"Rain on the Waitakere ranges feeds a forest that outlives us all."},{"t":"Your patience at the Orakei lights will be quietly rewarded."},{"t":"A friend from Ponsonby owes you a coffee and intends to pay it."},{"t":"The Sky Tower will glow your favourite colour the night you notice."},{"t":"Fresh feijoas left on a doorstep mean someone is thinking of you."},{"t":"You will find the perfect seat at the Remuera library by the window."},{"t":"A weekend on Waiheke restores what a busy month took from you."},{"t":"The kereru that thuds through the canopy is clumsy luck, and yours."},{"t":"Your bus on the Number 75 route arrives precisely when promised."},{"t":"A walk around One Tree Hill counts every sheep as a small blessing."},{"t":"The west coast surf at Piha humbles you in the kindest possible way."},{"t":"Someone at the Newmarket markets saves the last loaf for you."},{"t":"A clear day from Rangitoto's summit shows you the whole gulf and more."},{"t":"Your garden in Meadowbank rewards the seeds you planted last autumn."},{"t":"The cicadas will sing the afternoon you finally rest in the sun."},{"t":"A long black in Mount Eden village sparks an idea worth keeping."},{"t":"The tide at Kohimarama turns in favour of your morning plans."},{"t":"You will catch the green light all the way down Remuera Road today."},{"t":"A snapper on the line off Takapuna means the sea is feeling generous."},{"t":"Fog over the Manukau lifts to reveal a day better than forecast."},{"t":"Your koru of patience unfurls into something unexpectedly fine."},{"t":"A picnic at Cornwall Park ends with the warmest of conversations."},{"t":"The fantail that follows you through the bush is showing you the way."},{"t":"Someone in Epsom returns the favour you'd long since forgotten."},{"t":"A swim at St Heliers washes off a worry you didn't need to keep."},{"t":"The morning train from Britomart carries you toward good fortune."},{"t":"Your jandals will survive another summer; so will your good mood."},{"t":"A jar of manuka honey sweetens more than your morning toast."},{"t":"The harbour glitters for you as it did for the first sailors here."},{"t":"You will find a park right outside the Remuera shops, just this once."},{"t":"A walk through the Domain's wintergarden warms a cold week."},{"t":"The pukeko strutting across the field reminds you to take your space."},{"t":"Good company waits for you in a Kingsland cafe you haven't tried."},{"t":"A southerly may blow through, but it carries clear skies behind it."},{"t":"Your effort this week ripens like a tamarillo on the vine."},{"t":"The lighthouse at North Head still stands; so does your resolve."},{"t":"A trip across to Motutapu fills your week with unhurried air."},{"t":"Someone you helped in Greenlane will pass the kindness onward."},{"t":"The morning gulls over the Viaduct call you toward the water."},{"t":"Your name will be drawn, your number called; your moment will come."},{"t":"A stand of nikau palms in the gully marks how far you've grown."},{"t":"The bell of the Remuera clock will mark an hour you remember fondly."},{"t":"Your jandals will survive one more summer. Probably."},{"t":"Today the tide is on your side, so paddle out and grin."},{"t":"A perfect parking spot near the beach awaits you. Patience."},{"t":"The sandfly that finds you will lose interest by noon."},{"t":"You will pick the warmest swimming hole on the first try."},{"t":"Sunscreen now, smug later. Your future shoulders thank you."},{"t":"A pohutukawa in full red bloom is your sign to slow down."},{"t":"The cooler bag stays cold longer than you expect today."},{"t":"Your next swim ends exactly when the chill feels good."},{"t":"A friend brings the chilly bin so you only bring snacks."},{"t":"That long beach walk reveals one perfect, palm-sized shell."},{"t":"Wet sand between your toes is the only schedule you need."},{"t":"The wind drops just as you light the barbecue. Lucky you."},{"t":"You will find a fiver in last summer's beach shorts."},{"t":"A wave with your name on it rolls in around three o'clock."},{"t":"Your hat stays on through the gust at the lookout. Held."},{"t":"Fresh feijoas land in your lap before autumn even arrives."},{"t":"The ice cream holds together all the way to the last bite."},{"t":"A lazy afternoon nap in the shade is fully approved today."},{"t":"Saltwater sorts out whatever was bugging you this week."},{"t":"Your towel stays dry while everyone else's gets splashed."},{"t":"The sea is the exact blue you were hoping for. Go look."},{"t":"A tui sings outside while your coffee is still hot. Listen."},{"t":"You will master the art of the unhurried summer breakfast."},{"t":"Bare feet on warm decking: today's small, real victory."},{"t":"The ferry runs on time and you get the sunny side seat."},{"t":"A stranger lends you a bottle opener at the perfect moment."},{"t":"Today your kite catches the breeze on the very first toss."},{"t":"The fish and chips come wrapped warm and salty and right."},{"t":"Your sunburn this year will be a near miss, not a hit."},{"t":"A rock pool shows you a tiny crab having a great day."},{"t":"The campsite shower runs hot longer than it should. Enjoy."},{"t":"You will remember to bring the cricket set this time. Nice."},{"t":"A breeze off the harbour finds you on the warmest afternoon."},{"t":"Your watermelon is sweet to the rind. No bad slices today."},{"t":"The last light over the dunes is yours alone tonight."},{"t":"A boogie board ride carries you further than you planned."},{"t":"You will nail the timing on the soft-serve swirl. Lucky cone."},{"t":"Tomorrow's forecast smiles on whatever you decide to do."},{"t":"The hammock holds, the book is good, and the day is long."},{"t":"A gull eyes your chips but chooses someone else's. Phew."},{"t":"You will spot a dolphin fin from the cliff path. Keep watching."},{"t":"The bach key is exactly where you left it last summer."},{"t":"Your bare arms catch the morning sun and it feels like luck."},{"t":"A cold drink finds your hand right as the heat peaks."},{"t":"The path through the dunes is shorter than you feared."},{"t":"Today's sandcastle outlasts the tide by one proud hour."},{"t":"You will find shade exactly when you start to wilt."},{"t":"A summer storm passes you by and leaves the air clean."},{"t":"Your togs dry on the line before you want them again."},{"t":"The road trip playlist and the open windows agree with you."},{"t":"A quiet stretch of sand opens up just for your group today."},{"t":"A pigeon already chose your table. You are merely catching up to its plan."},{"t":"The seagull eyeing your chip has reviewed your defenses and found them lacking."},{"t":"Today a tui will out-sing your alarm clock and you will be grateful."},{"t":"The cafe cat has decided you are furniture. This is the highest honour available."},{"t":"A dog under the next table is rooting for you. It roots for everyone, but still."},{"t":"Walk like a pigeon: nod first, commit fully, regret nothing."},{"t":"The seagull does not ask permission. Borrow this energy in small, legal doses."},{"t":"A tui guards two notes you cannot hear. One of them is meant for you."},{"t":"Somewhere a tabby is sleeping off your worries. Let it finish the shift."},{"t":"The terrier knows the muffin is gone yet keeps hope. Be the terrier."},{"t":"Pigeons on the wire are voting. Quietly, they elected you to a good day."},{"t":"That gull learned patience from no one. You will learn it from the gull."},{"t":"A tui flashes its white throat-tuft like a tiny bowtie. Dress for the occasion."},{"t":"The shop cat sat on the one chair you wanted. Take the lesson, take the latte."},{"t":"A spaniel tilted its head at your trouble and found it not very serious."},{"t":"Crumbs you drop today will fund a pigeon's modest empire. Tip generously."},{"t":"The gull circling the carpark sees an opportunity. So, perhaps, should you."},{"t":"When a tui mimics a car alarm, applaud. Strange talents deserve an audience."},{"t":"The ginger cat by the window is meditating on warmth. Join its religion."},{"t":"A border collie has counted your problems and herded them into a tidy corner."},{"t":"Two pigeons are negotiating over a pastry flake. Your stakes are lower; relax."},{"t":"A seagull stole the spotlight and the sandwich. Today, settle for the spotlight."},{"t":"The tui in the kowhai tree is drunk on nectar and happy. Sip slower than it does."},{"t":"A cat will choose the exact lap that needs choosing. Hold still and be chosen."},{"t":"The old dog by the door greets every stranger. Practise his open-door policy."},{"t":"A pigeon survived the city by improvising. Today, so will you, with style."},{"t":"The gull that misses one chip simply waits. Missing is not the end of fishing."},{"t":"Listen: a tui clicks, whirs, then sings. Your good news is somewhere in that mix."},{"t":"The bakery cat audits every croissant by smell. Trust its expert nose today."},{"t":"A wagging tail does not lie. Find the people who wag and stay near them."},{"t":"Pigeons walk in pairs for no reason but company. Call the friend you miss."},{"t":"A seagull just out-flew the wind. Headwinds are temporary; keep your wings out."},{"t":"The tui defends its flower fiercely. Guard your small joys with the same nerve."},{"t":"A cat stretched and reorganised its whole afternoon. Permission granted to do likewise."},{"t":"The dog waiting outside trusts you will return. Be worthy of that trust today."},{"t":"One bold pigeon tried the open door and found the warm bit. Try the open door."},{"t":"The gull on the lamppost surveys its kingdom of crumbs. Survey yours with pride."},{"t":"A tui's song carries past the fence. Your kindness travels further than you think."},{"t":"The cafe cat blinks at you slowly. In cat, that is a compliment. Return it."},{"t":"A puppy meets the world nose-first. Lead today with curiosity, not caution."},{"t":"Pigeons remember the kind window. Be someone's kind window this week."},{"t":"The seagull is unbothered by your opinion of seagulls. Borrow one ounce of that."},{"t":"When the tui sits still, the whole garden leans in. Your quiet moment matters too."},{"t":"A cat found the single sunbeam in the room. Today you will find yours."},{"t":"The dog dropped its ball at your feet, certain you would play. Prove it right."},{"t":"A pigeon puffs up against the cold and carries on. Fluff up; carry on."},{"t":"The gull cracked a shellfish by dropping it twice. Second attempts feed you."},{"t":"A tui chased a bigger bird off its tree. Small and determined still wins ground."},{"t":"The shop cat ignores the menu and orders sunlight. Know exactly what you want."},{"t":"A dog naps with total commitment. Rest like you mean it before the day asks more."},{"t":"Pigeons gather where someone was once generous. Leave that kind of mark behind."},{"t":"A tui, a gull, and a cat all want your table. You, clearly, have excellent taste."},{"t":"A comet only visits once, so it makes the trip worth remembering."},{"t":"Somewhere a moon is rising just to keep your evening company."},{"t":"Saturn keeps its rings tidy; you may keep your worries loose."},{"t":"The dark between stars is not empty, only patient."},{"t":"Two planets can share an orbit without ever bumping. So can you."},{"t":"A meteor is a stone that finally decided to shine."},{"t":"Even a small moon can tug a whole ocean into dancing."},{"t":"Tonight the sky is rearranging the stars in your favor."},{"t":"Light from an old star is still arriving. Good things take their time."},{"t":"Every constellation began as someone connecting lonely dots."},{"t":"The moon changes shape monthly and never apologizes for it."},{"t":"A planet spins fastest where no one is watching."},{"t":"You are mostly made of atoms a star once stopped using."},{"t":"Pluto is small, distant, and beloved anyway. Take the hint."},{"t":"An eclipse is just two friends standing perfectly in line."},{"t":"Gravity is the universe's way of holding what it likes nearby."},{"t":"The North Star stays put so the rest of us can wander safely."},{"t":"A nebula is a star learning how to begin again."},{"t":"Jupiter has weathered the same storm for centuries and still glows."},{"t":"Stardust settles slowly; so does a good idea worth keeping."},{"t":"The Milky Way is a road with no edges. Walk it anyway."},{"t":"A new moon is the sky giving itself a fresh page."},{"t":"Asteroids travel in crowds yet never lose their own path."},{"t":"The cosmos is expanding, which means there is always more room."},{"t":"Venus shines brightest at dusk, when most have stopped looking."},{"t":"A galaxy turns slowly, and still it gets everywhere it needs to go."},{"t":"Catch a falling star in a teacup and call it a quiet wish."},{"t":"Mars is red from rust and still considered handsome."},{"t":"Orbits are loyal: they keep coming back around to what matters."},{"t":"The moon borrows all its light and shines just fine regardless."},{"t":"A black hole keeps its secrets. You may keep a few of yours too."},{"t":"Distant planets are simply friends you haven't reached yet."},{"t":"Twilight is the sky brewing its first cup of stars."},{"t":"Every sunrise is a small star checking in to say hello."},{"t":"A telescope shows that patience and curiosity see the same things."},{"t":"The rings of Saturn are made of ice that refused to melt alone."},{"t":"Comets carry tails of light, proof that leaving can be lovely."},{"t":"Wherever you stand on Earth, the whole sky is above you."},{"t":"A star twinkles only because it traveled a long way to reach you."},{"t":"Moonlight is sunlight that learned to be gentle."},{"t":"The universe keeps no clocks, so you are never truly late."},{"t":"Even drifting comets eventually find their way home around the sun."},{"t":"A crescent moon is just the rest of it being modest tonight."},{"t":"Galaxies collide and somehow make something brighter, not broken."},{"t":"The first star out tonight is rooting quietly for you."},{"t":"Space is silent, yet somehow the stars are always cheering."},{"t":"A planet without a moon still dances; it simply leads."},{"t":"Aurora is the sky doodling in colors it invented just now."},{"t":"Count the craters on the moon and you count its good stories."},{"t":"The cosmos took billions of years to make today, so enjoy it."},{"t":"Shooting stars are brief because brilliance rarely lingers to brag."},{"t":"Look up often; the universe left the light on for you."},{"t":"A grey morning often hides the warmest afternoon you'll have all week."},{"t":"Carry the small umbrella today; the sky has plans it hasn't announced."},{"t":"You are the kind of person who notices the first cold snap before others do."},{"t":"Two clouds can look identical and still drift toward different valleys."},{"t":"The puddle you step around today reflects a sky worth looking up at."},{"t":"Spring arrives for you a little early this year, just under the surface."},{"t":"A short rain is the sky clearing its throat before good news."},{"t":"Frost on the window is winter signing its name; read it kindly."},{"t":"Some storms exist only to make the quiet afterward feel earned."},{"t":"Your patience this week is a slow drizzle that fills a deep well."},{"t":"Watch the way leaves turn before a wind; you have that instinct too."},{"t":"A warm front is moving toward something you've been waiting to thaw."},{"t":"The fog will lift by noon, and so will the thing weighing on you."},{"t":"You collect small fair-weather days the way others collect coins."},{"t":"Autumn rewards those who walk slowly under thinning trees."},{"t":"A single sunbeam through clouds is enough to redirect your afternoon."},{"t":"The wind today carries someone's good wish toward your front door."},{"t":"Late summer heat is teaching you the patience of slow ripening."},{"t":"You will find shelter exactly one minute before the downpour starts."},{"t":"A snowfall counts no one out; every roof gets the same blanket."},{"t":"The barometer of your mood is rising; expect clearer skies by Friday."},{"t":"Morning dew chooses no favorites, yet it lands on you first today."},{"t":"You are someone's break in the clouds without ever knowing it."},{"t":"A long winter sharpens the green that eventually answers it."},{"t":"The drizzle you dislike is feeding a garden you haven't seen yet."},{"t":"Trust the season changing inside you, even before the calendar agrees."},{"t":"A rainbow asks for both rain and light; you've already supplied one."},{"t":"Thunder is only sound; the rain that follows is the real message."},{"t":"You handle gusty days better than calm ones, and that is a gift."},{"t":"The first warm wind of the year is looking for a window like yours."},{"t":"A cloudy sky is a blank page; you get to decide what the day becomes."},{"t":"Snow muffles the world so a small voice in you can finally be heard."},{"t":"You'll remember this season by its light, not its temperature."},{"t":"A late frost can't undo a root that already decided to grow."},{"t":"The tide of weather turns; pack your good coat and your better mood."},{"t":"Hail rarely lasts; your steadiness today will outlast the racket."},{"t":"You notice the season's first cricket the way others miss it entirely."},{"t":"A soft rain at night is the sky tucking the whole town in."},{"t":"Clear cold mornings were made for people who think best while walking."},{"t":"The humidity breaks soon, and a heavy feeling breaks along with it."},{"t":"You are due for a stretch of unreasonably perfect afternoons."},{"t":"A storm on the horizon often means the heat finally has to surrender."},{"t":"Every melting icicle is winter quietly admitting you were right."},{"t":"The breeze knows where it's going; today, follow its lead a little."},{"t":"A drift of low clouds is just the mountains borrowing a scarf."},{"t":"You'll catch the exact moment the season turns, and it will feel earned."},{"t":"Sunshowers are proof two good things can happen at the very same time."},{"t":"The chill in the air is rehearsing you for a cozier week ahead."},{"t":"A puddle freezes overnight so a child can find a mirror by morning."},{"t":"Your calm is the eye others will gather inside when the wind picks up."},{"t":"The sky changes its mind often; permit yourself the same freedom."},{"t":"Warm rain in spring means the year has decided to be generous to you."},{"t":"Today the snooze button loses; you win on the first ring."},{"t":"The kettle whistles for you before the day asks anything in return."},{"t":"A made bed at sunrise sets the tone for a tidy mind."},{"t":"Your slow start hides a fast finish waiting just past noon."},{"t":"The quiet hour before everyone wakes is yours to spend wisely."},{"t":"One glass of water now will thank you three hours from now."},{"t":"The alarm you almost ignored is nudging you toward good news."},{"t":"Lay out tomorrow's clothes tonight and skip a small panic."},{"t":"Sunlight on your face this week unlocks an idea you've been chasing."},{"t":"The first deep breath of the day decides how you carry the rest."},{"t":"Your morning walk will cross paths with an unexpected kindness."},{"t":"Brew it strong today; you'll need the steadiness it brings."},{"t":"The to-do list shrinks fastest when you start with the hardest line."},{"t":"A stretch at dawn keeps a stiff afternoon politely away."},{"t":"Whoever greets the day first claims the calmest seat in it."},{"t":"Tomorrow's you is begging today's you to set just one alarm."},{"t":"The toast lands butter-side up; trust the small luck of mornings."},{"t":"Skip the scroll at sunrise and your focus arrives on time."},{"t":"A clean sink before bed gifts a brighter kitchen at dawn."},{"t":"Your routine is a quiet engine; oil it with one new habit."},{"t":"The early bus carries a conversation you didn't know you needed."},{"t":"Five tidy minutes tonight buys you a calm sprint tomorrow."},{"t":"The slowest mornings often hide the sweetest cups of coffee."},{"t":"Write the day's one true goal before the inbox writes it for you."},{"t":"A cold shower this week wakes a courage you'd been saving."},{"t":"The dawn chorus outside is rehearsing applause for your good week."},{"t":"Pack the bag the night before and walk out the door grinning."},{"t":"Your second alarm exists because your first dream was worth it."},{"t":"Morning fog clears by ten; so will the doubt you woke up with."},{"t":"A handwritten list beats a head full of half-remembered errands."},{"t":"The commute you dread holds a small window of perfect quiet."},{"t":"Open the curtains first; let the day argue its case in light."},{"t":"Oatmeal patience this morning pays out as steady energy by lunch."},{"t":"The habit you start on a Monday will still stand by Friday."},{"t":"A short morning run outpaces a long afternoon of regret."},{"t":"Set the coffee timer and let tomorrow greet you already brewing."},{"t":"The first email can wait; the first stretch cannot."},{"t":"Your sleepy idea at 6am is sharper than it feels right now."},{"t":"Wake ten minutes earlier and the rush forgets your name."},{"t":"The alarm is loud because the morning has something to say."},{"t":"A slow breakfast on a busy day is rebellion you'll be glad you chose."},{"t":"Tidy the desk before you leave; arrive tomorrow already ahead."},{"t":"The streetlights blink off just as your good mood blinks on."},{"t":"Trade one snooze for one push-up and feel the day shift."},{"t":"The morning you plan tonight is the morning that goes right."},{"t":"Birdsong at your window is the cheapest alarm and the kindest."},{"t":"A warm mug in cold hands is enough of a victory to start with."},{"t":"Lace your shoes before the doubt does, and the walk wins."},{"t":"The earliest train and the earliest riser both reach further."},{"t":"Stack tomorrow's small wins tonight, one quiet task at a time."},{"t":"A calm morning is built the night before, brick by tiny brick."},{"t":"The sunrise keeps no grudges; meet it the same way today."},{"t":"A shared plate makes the smallest meal feel like a feast."},{"t":"The best seat at any table is the one beside a good friend."},{"t":"Someone is saving you a chair without even being asked."},{"t":"Pass the bread, pass the stories, pass the whole evening together."},{"t":"A friend remembers how you take your coffee. That's love, quietly."},{"t":"Tonight, the laughter at your table will outlast the dessert."},{"t":"Make room for one more; the night gets better when it gets crowded."},{"t":"The cup you share tastes warmer than the one you drink alone."},{"t":"An old friend will text you something silly before the week ends."},{"t":"Two forks, one slice: the math of a happy friendship."},{"t":"A long lunch with someone kind is never time wasted."},{"t":"You will soon say yes to a plan you almost talked yourself out of."},{"t":"The quiet friend at the table notices more than you think."},{"t":"Crumbs on the table mean the conversation was worth the mess."},{"t":"Someone has been meaning to call you. Beat them to it."},{"t":"A circle of chairs is the oldest kind of magic we still have."},{"t":"The friend who shows up late still shows up. That counts."},{"t":"Split the bill, double the memory."},{"t":"You give better advice over a meal than you ever do by text."},{"t":"A new acquaintance this month will feel like an old one by autumn."},{"t":"Hold the door, save the seat, refill the glass: small kindness, big roots."},{"t":"The table you build at home is bigger than any house."},{"t":"A friend's bad joke is still the one you'll repeat for years."},{"t":"Tea grows cold while good company never does."},{"t":"Invite the person who always says they're too busy. They'll come."},{"t":"The leftovers you share tonight taste like generosity tomorrow."},{"t":"Some friendships are measured in shared menus, not years."},{"t":"You are someone's favorite person to sit across from."},{"t":"A spare chair pulled up changes a meal into a memory."},{"t":"The friend who listens twice as much is the one to keep close."},{"t":"Reach out first; the silence between you is shorter than you fear."},{"t":"A handful of regulars makes any cafe feel like a living room."},{"t":"The toast you raise tonight will be remembered longer than the wine."},{"t":"Good company turns waiting into the best part of the evening."},{"t":"Someone wants to hear your news. Don't make them guess it."},{"t":"The seat beside a stranger is one introduction from a friend."},{"t":"Share the last bite; it's the kindest thing on the table."},{"t":"A friend's kitchen always has room for you, plate or not."},{"t":"You'll laugh so hard at lunch that strangers will smile too."},{"t":"Keep the group chat alive; it's a table that never gets cleared."},{"t":"The friend you meet for coffee becomes the friend you meet for life."},{"t":"A patient ear at dinner is worth more than any gift you could wrap."},{"t":"Set two cups out of habit; soon enough one will be filled."},{"t":"The walk home is better when someone shares the long way."},{"t":"A shared umbrella makes a downpour feel almost lucky."},{"t":"You will be the reason someone has a good day this week."},{"t":"The best recipes are the ones you cook for someone else."},{"t":"A friend across the table is a mirror that only shows the kind parts."},{"t":"Linger past the check; the staff understands and so does the night."},{"t":"An honest friend tells you there's spinach in your teeth, gently."},{"t":"Show up with snacks and you'll never sit alone."},{"t":"The warmest table in town is wherever your people gather next."},{"t":"The small kindness you almost skipped is the one someone will remember."},{"t":"You are allowed to be a work in progress and a masterpiece at once."},{"t":"Someone feels braver today because you listened all the way through."},{"t":"Golden No. 888 of 1000! Fortune smiles on you. Show this for a free coffee."},{"t":"Be gentle with the version of you that is still learning."},{"t":"A warm hello costs nothing and can rearrange a stranger's whole day."},{"t":"Your patience with others is quietly teaching them patience too."},{"t":"Rest is not a reward you earn; it is fuel you deserve."},{"t":"The way you treat the tired barista says who you really are."},{"t":"You don't have to be loud to be a light in someone's room."},{"t":"Today, forgive yourself for something small. Tomorrow, forgive one more."},{"t":"Holding the door is a tiny vote for a friendlier world."},{"t":"Your softness is not weakness; it is courage that chose to be kind."},{"t":"Check on the friend who always seems fine. They notice when you do."},{"t":"You have survived every hard day so far. That streak is unbroken."},{"t":"Compliment the thing they worked hard on, not just the easy thing."},{"t":"Being the first to apologize takes the most strength in the room."},{"t":"Your name is safe in someone's mouth today because you were kind."},{"t":"Water yourself like you would a plant you actually want to keep."},{"t":"A thank-you said slowly lands deeper than one said in a hurry."},{"t":"You can be the reason a shy person feels welcome at the table."},{"t":"Talk to yourself the way you'd cheer on someone you love."},{"t":"Leaving a place a little tidier than you found it is a quiet gift."},{"t":"Your effort counts even on the days no one claps for it."},{"t":"Remember the helper's name. Say it back. Watch them stand taller."},{"t":"Kindness given without an audience is the kind that grows roots."},{"t":"You are someone's good memory in the making right now."},{"t":"Let the person merge. Let the kid go first. Let it be easy."},{"t":"Your worth was never up for a vote, so stop counting the ballots."},{"t":"Notice one good thing about today before it slips past you."},{"t":"The encouragement you needed to hear, go say it to someone else."},{"t":"You can disagree with a person and still be tender toward them."},{"t":"A handwritten note outlives a hundred quick messages."},{"t":"Cheer loudest for the friend whose win is not yours."},{"t":"You are not behind. You are exactly where your story needs you."},{"t":"Make room at the table before anyone has to ask you to."},{"t":"The grudge is heavy. Set it down and feel your shoulders thank you."},{"t":"Someone learned how to be kind by watching you do it first."},{"t":"Your quiet generosity is louder than you think it is."},{"t":"Ask the lonely one to sit with you. That's the whole magic."},{"t":"Be the calm voice in the group chat tonight."},{"t":"You can outgrow a habit without hating who you used to be."},{"t":"Tip a little extra and tell them their smile made your day."},{"t":"The kindest thing is sometimes just believing someone can change."},{"t":"You don't owe anyone perfect; you owe them honest and warm."},{"t":"Let people be new at things without making them pay for it."},{"t":"Your gentleness today is a seed in a garden you'll never see."},{"t":"Send the message you keep meaning to send. They're waiting."},{"t":"Being easy to forgive is its own kind of generosity."},{"t":"You are doing better than the worried voice in your head insists."},{"t":"Praise people behind their backs and let it find its way home."},{"t":"A kind eye can spot the good in someone before they spot it themselves."},{"t":"Treat your own mistakes like a friend's: with grace and a fresh start."},{"t":"Name your houseplants. They behave better when accountable."},{"t":"Keep one drawer chaotic on purpose. It absorbs the stress of the others."},{"t":"Walk the long way home once a week to confuse your routine."},{"t":"Apologize to the spider before you relocate it. Manners cost nothing."},{"t":"Buy the smaller umbrella. Adventure thrives in slightly wet shoulders."},{"t":"Learn to whistle one tune badly. It is a complete personality."},{"t":"Reheat the soup twice; it tells a better story the third day."},{"t":"Carry a spare pen. Strangers remember the person who lends them ink."},{"t":"Sit in the second-best chair. The view is friendlier from there."},{"t":"Fold the map wrong on purpose and discover a street you needed."},{"t":"Greet the moon out loud at least once. It has been patient."},{"t":"Keep a jar of buttons you will never use. It is good for the soul."},{"t":"Tip the musician who plays to an empty room. Courage deserves coins."},{"t":"Wear the socks that do not match when you need extra luck."},{"t":"Compliment a stranger's hat sincerely and watch the day reroute."},{"t":"Save the heel of the bread for the ducks, or for stubbornness."},{"t":"Plant something you will not be around to see bloom. Trust the dirt."},{"t":"Hum in elevators. Silence there has gone on far too long."},{"t":"Keep one secret recipe you refuse to explain, even under questioning."},{"t":"Let the dog choose the direction once. Dogs know about now."},{"t":"Write the grocery list by hand so the fridge feels consulted."},{"t":"Pause at the top of the stairs to applaud yourself quietly."},{"t":"Befriend a librarian. They guard maps to places that do not exist."},{"t":"Keep a smooth stone in your pocket for arguments with yourself."},{"t":"Trade your fastest route for the one with the better tree."},{"t":"Eat dessert first on a Tuesday. Tuesdays rarely expect it."},{"t":"Learn the name of one cloud shape. Sky trivia ages well."},{"t":"Refold the towels your own strange way and reign over the closet."},{"t":"Leave a good book on a bench for a stranger to inherit."},{"t":"Practice saying maybe slowly. It buys time and sounds wise."},{"t":"Keep a candle for power outages and for purely dramatic dinners."},{"t":"Wave at trains. Conductors collect those small mercies."},{"t":"Stash a snack for your future self. They are always grateful."},{"t":"Mismatch your mugs proudly. A matched set hides no history."},{"t":"Whisper thank you to the chair that did not collapse today."},{"t":"Take the stairs two at a time when nobody is grading you."},{"t":"Keep an empty notebook for the idea you have not had yet."},{"t":"Let the kettle finish its whistle. It worked hard for that note."},{"t":"Repot the brave little weed that grew through the sidewalk crack."},{"t":"Carry exact change like a tiny superpower nobody respects yet."},{"t":"Memorize one good joke for elevators and emergencies alike."},{"t":"Water the plant before you water the worry. Both will thank you."},{"t":"Keep your oldest spoon. It has stirred more than you remember."},{"t":"Cross the bridge slowly enough to nod at the river below."},{"t":"Save the prettiest stamp. Letters deserve a small ceremony."},{"t":"Talk to the bread while it rises. Encouragement is half the recipe."},{"t":"Keep one chair empty at dinner for whoever wanders in late."},{"t":"Press a leaf in a book and forget it for a happier future."},{"t":"Let the slow checkout line teach you to admire ceiling tiles."},{"t":"Pick a lucky sidewalk crack and step over it on purpose."},{"t":"Keep your shoelaces double-knotted and your plans loosely tied."},{"t":"Leave the porch light on for moths, neighbors, and your own return."},{"t":"The next stranger you greet may hold the favor you've been waiting on."},{"t":"Three small chances are circling you this week; catch at least one."},{"t":"Your lucky number is the sum of the digits in today's date."},{"t":"A door you assumed was locked has quietly been left ajar for you."},{"t":"Two friends will mention the same idea to you within seven days."},{"t":"Keep the receipt; the coincidence will make sense by Thursday."},{"t":"Fortune favors the person who shows up eleven minutes early."},{"t":"The seat you almost didn't take turns out to be the right one."},{"t":"A number you keep noticing is trying to point you somewhere good."},{"t":"Luck arrives this month disguised as a slightly inconvenient detour."},{"t":"Bet on patience, not dice; the odds quietly tilt your way soon."}];
+
+  function buildReceiptXml(order) {
+    var W = PRINT_LINE_WIDTH;
+    var info = getReceiptInfo();
+    var phone = info.phone || '+64 27 413 6743';
+    var wifiNet = info.wifiNet || 'Crispy Eatery Unsafe';
+    var wifiKey = info.wifiKey || 'Youneedtobuysomethingfirst';
+    function rep(c, n) { return n > 0 ? new Array(n + 1).join(c) : ''; }
+    function ls(s) { return String(s).split('').join(' '); }
+    function esc(s) { return eposEsc(s); }
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function centerPad(s) { s = String(s); if (s.length >= W) return s.slice(0, W); var t = W - s.length, l = Math.floor(t / 2); return rep(' ', l) + s + rep(' ', t - l); }
+    function padN(l, r, w) { l = String(l); r = String(r); var m = w - r.length - 1; if (l.length > m) l = l.slice(0, Math.max(0, m - 1)) + '.'; var g = w - l.length - r.length; if (g < 1) g = 1; return l + rep(' ', g) + r; }
+    function pad(l, r) { return padN(l, r, W); }
+    function wrap(s, w) { var ws = String(s).split(' '), o = [], c = ''; for (var k = 0; k < ws.length; k++) { var x = ws[k]; if ((c + ' ' + x).replace(/^ /, '').length > w) { if (c) o.push(c); c = x; } else { c = (c ? c + ' ' : '') + x; } } if (c) o.push(c); return o; }
+    function P(t, o) { o = o || {}; return '<text align="' + (o.align || 'left') + '" font="' + (o.font || 'font_a') + '" em="' + (o.em ? 'true' : 'false') + '" dw="' + (o.dw ? 'true' : 'false') + '" dh="' + (o.dh ? 'true' : 'false') + '" reverse="' + (o.reverse ? 'true' : 'false') + '">' + esc(t) + '&#10;</text>'; }
+    function seg(t, em) { return '<text font="font_a" em="' + (em ? 'true' : 'false') + '" dw="false" dh="false" reverse="false">' + esc(t) + '</text>'; }
+    var nl = '<text font="font_a" em="false" dw="false" dh="false" reverse="false">&#10;</text>';
+    function metaRow(lLab, lVal, rLab, rVal) { var left = lLab + ' ' + lVal, right = rLab + ' ' + rVal; var g = W - left.length - right.length; if (g < 1) g = 1; return seg(lLab + ' ', false) + seg(lVal, true) + seg(rep(' ', g), false) + seg(rLab + ' ', false) + seg(rVal, true) + nl; }
+    function cols(l, r, el, er) { var g = W - String(l).length - String(r).length; if (g < 1) g = 1; return seg(l, el) + seg(rep(' ', g), false) + seg(r, er) + nl; }
+    function itemRow(left, price) { var Lp = left + ' ', Rp = ' ' + price; var g = W - Lp.length - Rp.length; if (g < 1) g = 1; return seg(Lp, false) + seg(rep('.', g), false) + seg(Rp, true) + nl; }
+    function revblank() { return '<text align="left" font="font_a" em="false" dw="false" dh="false" reverse="true">' + esc(rep(' ', W)) + '&#10;</text>'; }
+    function revbar(t) { return '<text align="left" font="font_a" em="true" dw="false" dh="false" reverse="true">' + esc(centerPad(t)) + '&#10;</text>'; }
+    function hashStr(s) { var h = 5381; s = String(s); for (var k = 0; k < s.length; k++) { h = ((h << 5) + h) + s.charCodeAt(k); h = h >>> 0; } return h; }
+    var HD = '<hline x1="0" x2="503" style="thin_double"/>';
+    var F1 = '<feed line="1"/>';
+
+    var rawTotal = (typeof order.total === 'number' && isFinite(order.total)) ? order.total : (order.items || []).reduce(function (s, i) { return s + (Number(i.price) || 0) * (Number(i.qty) || 1); }, 0);
+    var b = gstBreakdown(rawTotal);
+    var when = new Date(order.createdAt || Date.now());
+    var dateStr = when.getFullYear() + '-' + pad2(when.getMonth() + 1) + '-' + pad2(when.getDate());
+    var timeStr = pad2(when.getHours()) + ':' + pad2(when.getMinutes()) + ':' + pad2(when.getSeconds());
+    var paid = order.paymentStatus === 'paid';
+    var method = order.paymentMethod || order.payMethod || '';
+    var payLabel = paid ? ('PAID' + (method ? (' - ' + method) : '')) : 'UNPAID';
+
+    var seed = String(order.billToken || order.id || '');
+    var num = (hashStr(seed) % 1000) + 1;
+    var special = (num === 888);
+    var pool = (typeof CRISPY_FORTUNES !== 'undefined' && CRISPY_FORTUNES.length) ? CRISPY_FORTUNES : [{ t: '' }];
+    var fortune = pool[(num - 1) % pool.length] || pool[0];
+
+    var L = [];
+    L.push(F1);
+    L.push(P(ls('TAX INVOICE / RECEIPT'), { align: 'center', em: true }));
+    L.push(P(info.name || 'Crispy Eatery', { align: 'center', dh: true, em: true }));
+    if (info.legal || info.addr) L.push(P([info.legal, info.addr].filter(Boolean).join('  -  '), { align: 'center', font: 'font_b' }));
+    L.push(P('GST ' + (info.gst || '') + (phone ? ('   -   ' + phone) : ''), { align: 'center', font: 'font_b' }));
+    if (info.web) L.push(P(info.web, { align: 'center', font: 'font_b' }));
+    L.push(HD);
+    L.push('<text align="left"/>');
+    L.push(metaRow('ORDER', String(order.id || ''), 'DATE', dateStr));
+    if (isPickupOrder(order)) L.push(metaRow('PICKUP', String(order.customerName || '-').slice(0, 18), 'READY', String(order.pickupTime || 'ASAP')));
+    else L.push(metaRow('TABLE', String(order.tableNumber || '-'), 'TIME', timeStr));
+    L.push(HD);
+    L.push('<text align="left"/>');
+    L.push(cols('ITEM', 'AMOUNT', false, false));
+    (order.items || []).forEach(function (it) {
+      var qty = Number(it.qty) || 1;
+      var name = qty + 'x ' + (it.name || '') + (it.size ? ' (' + it.size + ')' : '');
+      L.push(itemRow(name, money((Number(it.price) || 0) * qty)));
+      if (it.notes) L.push(P('   + ' + it.notes, { align: 'left', font: 'font_b' }));
+    });
+    L.push(P(rep('. ', Math.floor(W / 2)).replace(/ $/, ''), { align: 'left' }));
+    L.push(cols('Subtotal (incl. GST)', money(b.total), false, false));
+    L.push(cols('GST 15%', money(b.gst), false, false));
+    L.push(P(pad('TOTAL NZD', money(b.total)), { align: 'left', dh: true, em: true }));
+    L.push(P('+' + rep('-', W - 2) + '+', { align: 'left' }));
+    L.push(P('| ' + padN(payLabel, money(b.total), W - 4) + ' |', { align: 'left', em: true }));
+    L.push(P('+' + rep('-', W - 2) + '+', { align: 'left' }));
+    L.push(F1);
+    if (special) {
+      L.push(revblank()); L.push(revbar('* ONE IN A THOUSAND *')); L.push(revblank());
+      L.push(F1);
+      wrap('"' + fortune.t + '"', 32).forEach(function (li) { L.push(P(li, { align: 'center', em: true })); });
+      L.push(F1);
+      L.push(revblank()); L.push(revbar('GOLDEN  No. 888 / 1000')); L.push(revblank());
+    } else {
+      L.push(P('*  YOUR CRISPY FORTUNE  *', { align: 'center', em: true }));
+      L.push(F1);
+      wrap('"' + fortune.t + '"', 32).forEach(function (li) { L.push(P(li, { align: 'center' })); });
+      if (fortune.by) L.push(P('- ' + fortune.by, { align: 'center', font: 'font_b' }));
+      L.push(F1);
+      L.push(P('Crispy Collectible   No. ' + num + ' / 1000', { align: 'center', em: true }));
+    }
+    L.push(F1); L.push(HD);
+    L.push(P('*  FREE WiFi (you earned it)  *', { align: 'center', em: true }));
+    L.push(P('NET   ' + wifiNet, { align: 'center' }));
+    L.push(P('KEY   ' + wifiKey, { align: 'center' }));
+    L.push(P('Tell your friends. Or don\'t. But do.', { align: 'center', font: 'font_b' }));
+    L.push(F1);
+    L.push('<text align="center"/>');
+    var code = ('CRISPY' + num).toUpperCase();
+    L.push('<barcode type="code128" hri="none" font="font_a" width="2" height="56">{B' + code + '</barcode>');
+    L.push(P(ls(code), { align: 'center', font: 'font_b' }));
+    L.push(P('PRICES IN NZD   -   GST INCLUSIVE', { align: 'center', font: 'font_b' }));
+    L.push(F1);
+    L.push(P('*   *   *   +   +   +   *   *   *', { align: 'center' }));
+    L.push('<feed line="3"/><cut type="feed"/>');
+    var body = '<epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">' + L.join('') + '</epos-print>';
+    return '<?xml version="1.0" encoding="utf-8"?>' +
+      '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>' +
+      body + '</s:Body></s:Envelope>';
+  }
+
+  window.printReceipt = function (orderId) {
+    var order = orderData[orderId];
+    if (!order) { toast('Order not found', 'err'); return; }
+    toast('Printing receipt for ' + order.id + '…');
+    sendEpos(buildReceiptXml(order), getReceiptPrinterIP())
+      .then(function (res) {
+        if (res.ok) resolvePrintFailKey('receipt:' + order.id + ':RECEIPT');
+        else recordPrintFail({ kind: 'receipt', refId: order.id, station: 'RECEIPT', ip: getReceiptPrinterIP(), table: order.tableNumber, reason: res.reason || 'printer error' });
+        toast(res.ok ? '🧾 Receipt printed ' + order.id : 'Print failed — ' + res.reason, res.ok ? 'ok' : 'err');
+      })
+      .catch(function () {
+        recordPrintFail({ kind: 'receipt', refId: order.id, station: 'RECEIPT', ip: getReceiptPrinterIP(), table: order.tableNumber, reason: 'unreachable' });
+        toast(printerHelp(getReceiptPrinterIP()), 'err');
+      });
+  };
+
+  window.receiptSetup = function () {
+    var info = getReceiptInfo();
+    var fields = [['name', 'Business / trading name'], ['legal', 'Legal entity name'], ['addr', 'Address'], ['gst', 'GST number'], ['web', 'Website']];
+    for (var i = 0; i < fields.length; i++) {
+      var v = window.prompt('Receipt — ' + fields[i][1] + ':\n(Cancel keeps current value)', info[fields[i][0]] || '');
+      if (v !== null) info[fields[i][0]] = v.trim();
+    }
+    try { localStorage.setItem('receiptInfo', JSON.stringify(info)); } catch (e) {}
+    toast('Receipt details saved', 'ok');
+  };
+
+  function renderCard(order) {
+    const isPreparing = order.status === 'preparing';
+    const isReady = order.status === 'ready';
+    const isPickedUp = order.status === 'picked_up';
+    const isPickup = isPickupOrder(order);
+    // Split items into kitchen (food) and barista (drinks)
+    const kitchenIndices = [];
+    const baristaIndices = [];
+    order.items.forEach(function(item, idx) {
+      if (isDrinkItem(item)) { baristaIndices.push(idx); }
+      else { kitchenIndices.push(idx); }
+    });
+
+    function renderItemRow(item, idx) {
+      const itemType = isDrinkItem(item) ? 'barista' : 'kitchen';
+      const key = item.lineId || String(idx); // stable key for cooked/picked state
+      const variant = item.size ? '<span class="item-variant"> &middot; ' + escHtml(item.size) + '</span>' : '';
+      const notes = item.notes ? '<div class="item-notes">' + escHtml(item.notes) + '</div>' : '';
+      const cookable = isPreparing ? ' cookable' : '';
+      const cooked = (isPreparing && order.cookedItems && order.cookedItems[key]) ? ' cooked' : '';
+      const cookAction = isPreparing ? ' onclick="toggleItemCooked(\'' + jsStr(order.id) + '\',\'' + jsStr(key) + '\')"' : '';
+      const cookCheck = isPreparing ? '<span class="cook-check">&#10003;</span>' : '';
+      const tappable = isReady ? ' tappable' : '';
+      const picked = (isReady && order.pickedItems && order.pickedItems[key]) ? ' picked' : '';
+      const tapAction = isReady ? ' onclick="toggleItemPickup(\'' + jsStr(order.id) + '\',\'' + jsStr(key) + '\')"' : '';
+      const qty = Number(item.qty) || 0;
+      const price = Number(item.price) || 0;
+      return '<div class="item-row' + cookable + cooked + tappable + picked + '" data-key="' + escAttr(key) + '" data-idx="' + idx + '" data-type="' + itemType + '"' + cookAction + tapAction + '>' +
+        '<span class="item-qty">' + qty + '</span>' +
+        '<div class="item-name">' + escHtml(item.name) + variant + notes + '</div>' +
+        '<span class="item-price">$' + (price * qty).toFixed(2) + '</span>' +
+        cookCheck +
+      '</div>';
+    }
+
+    let itemsHtml = '';
+    const hasKitchen = kitchenIndices.length > 0;
+    const hasBarista = baristaIndices.length > 0;
+    if (hasKitchen && hasBarista) {
+      itemsHtml += '<div class="section-label">🍳 Kitchen</div>';
+      itemsHtml += kitchenIndices.map(function(idx) { return renderItemRow(order.items[idx], idx); }).join('');
+      itemsHtml += '<div class="section-label barista">☕ Barista</div>';
+      itemsHtml += baristaIndices.map(function(idx) { return renderItemRow(order.items[idx], idx); }).join('');
+    } else {
+      // All same type — no section headers needed
+      itemsHtml = order.items.map(function(item, idx) { return renderItemRow(item, idx); }).join('');
+    }
+
+    // Count cooked/picked items only against items still present (lineIds may have been removed via add-items merges).
+    function countTrueFor(map, items) {
+      if (!map) return 0;
+      var n = 0;
+      items.forEach(function(it, i) {
+        var k = it.lineId || String(i);
+        if (map[k]) n++;
+      });
+      return n;
+    }
+
+    // Cook progress hint shown when preparing
+    let cookHint = '';
+    if (isPreparing) {
+      const totalItems = order.items.length;
+      const cookedCount = countTrueFor(order.cookedItems, order.items);
+      const pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+      cookHint = '<div class="cook-hint">Tap each item when cooked</div>' +
+        '<div class="cook-progress">' +
+          '<span>' + cookedCount + '/' + totalItems + '</span>' +
+          '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+    }
+
+    // Pickup hint shown when order is ready
+    let pickupHint = '';
+    if (isReady) {
+      const totalItems = order.items.length;
+      const pickedCount = countTrueFor(order.pickedItems, order.items);
+      const pct = totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0;
+      pickupHint = '<div class="pickup-hint">Tap each item as staff picks up</div>' +
+        '<div class="pickup-progress">' +
+          '<span>' + pickedCount + '/' + totalItems + '</span>' +
+          '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+    }
+
+    const orderNotes = order.notes
+      ? '<div class="order-notes">' + escHtml(order.notes) + '</div>'
+      : '';
+
+    // Buttons based on status:
+    const idJs = jsStr(order.id);
+    let buttons = '';
+    if (!isPreparing && !isReady && !isPickedUp) {
+      buttons = '<button class="btn-prep" onclick="markPreparing(\'' + idJs + '\')">PREP</button>';
+    } else if (isPreparing) {
+      buttons = '<button class="btn-ready" onclick="markSectionDone(\'' + idJs + '\')">READY</button>';
+    } else if (isReady) {
+      buttons = '<button class="btn-pickup" onclick="markPickedUp(\'' + idJs + '\')">PICKED UP</button>';
+    } else if (isPickedUp) {
+      buttons = '<button class="btn-paid" onclick="markPaid(\'' + idJs + '\')">PAID BY CUSTOMER</button>';
+    }
+
+    // Status badge text and visibility
+    let statusClass = '';
+    let badgeText = '';
+    let badgeVisible = false;
+    if (isPreparing) {
+      statusClass = ' preparing';
+      badgeText = 'Preparing';
+      badgeVisible = true;
+    } else if (isReady) {
+      statusClass = ' ready';
+      badgeText = 'Ready';
+      badgeVisible = true;
+    } else if (isPickedUp) {
+      statusClass = ' picked_up';
+      badgeText = 'Picked Up';
+      badgeVisible = true;
+    }
+
+    const safeId = escAttr(order.id);
+    const phoneHtml = order.phoneNumber
+      ? '<div class="order-phone"><a href="tel:' + escAttr(escTelHref(order.phoneNumber)) + '">' + escHtml(order.phoneNumber) + '</a></div>'
+      : '';
+    const pickupInfo = isPickup
+      ? '<div class="pickup-info">for <b>' + escHtml(order.customerName || 'customer') + '</b> &middot; ready by <b>' + escHtml(order.pickupTime || 'ASAP') + '</b></div>'
+      : '';
+    return '<div class="order-card' + statusClass + '" id="card-' + safeId + '" data-id="' + safeId + '" data-has-kitchen="' + hasKitchen + '" data-has-barista="' + hasBarista + '" data-pickup="' + isPickup + '">' +
+      '<div class="card-header">' +
+        '<div style="display:flex;align-items:center">' +
+          (isPickup
+            ? '<div class="table-badge pickup">&#9749; PICKUP</div>'
+            : '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>') +
+          '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + escHtml(badgeText) + '</span>' +
+          '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)" aria-label="Print kitchen ticket">&#128424;</button>' +
+          '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)" aria-label="Print GST receipt">&#129534;</button>' +
+        '</div>' +
+        '<div class="order-meta">' +
+          '<div class="order-id">' + escHtml(order.id) + '</div>' +
+          '<div class="order-time">' + escHtml(formatTime(order.createdAt)) + '</div>' +
+          '<div class="elapsed" data-created="' + escAttr(order.createdAt) + '">' + escHtml(elapsed(order.createdAt)) + '</div>' +
+          phoneHtml +
+        '</div>' +
+      '</div>' +
+      pickupInfo +
+      '<div class="card-body">' + itemsHtml + orderNotes + cookHint + pickupHint + '</div>' +
+      '<div class="card-footer">' +
+        '<div class="order-total">$' + (Number(order.total) || 0).toFixed(2) + '</div>' +
+        '<div class="btn-group">' +
+          buttons +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // ── Mark section done (filter-aware READY) ──
+  window.markSectionDone = function(orderId) {
+    var order = orderData[orderId];
+    if (!order || order.status !== 'preparing') return;
+
+    // If viewing ALL (or PICKUP — those orders are drinks-only, no split needed),
+    // just mark everything ready
+    if (currentFilter === 'all' || currentFilter === 'pickup') {
+      markReady(orderId);
+      return;
+    }
+
+    // Otherwise, batch-cook only items matching the current filter (keyed by lineId)
+    if (!order.cookedItems) order.cookedItems = {};
+    order.items.forEach(function(item, idx) {
+      var itemIsDrink = isDrinkItem(item);
+      if ((currentFilter === 'barista' && itemIsDrink) || (currentFilter === 'kitchen' && !itemIsDrink)) {
+        order.cookedItems[itemKey(item, idx)] = true;
+      }
+    });
+
+    var card = document.getElementById('card-' + orderId);
+    if (card) {
+      order.items.forEach(function(item, idx) {
+        if (!order.cookedItems[itemKey(item, idx)]) return;
+        var row = card.querySelector('.item-row[data-idx="' + idx + '"]');
+        if (row) row.classList.add('cooked');
+      });
+      var totalItems = order.items.length;
+      var cookedCount = activeTrueCount(order.cookedItems, order.items);
+      var pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+      var progFill = card.querySelector('.cook-progress .prog-fill');
+      if (progFill) progFill.style.width = pct + '%';
+      var progText = card.querySelector('.cook-progress span');
+      if (progText) progText.textContent = cookedCount + '/' + totalItems;
+    }
+
+    syncOrder(orderId, { status: 'preparing', cookedItems: order.cookedItems });
+
+    if (activeTrueCount(order.cookedItems, order.items) === order.items.length) {
+      setTimeout(function() { markReady(orderId); }, 500);
+    }
+  };
+
+  // ── Mark order preparing ──
+  window.markPreparing = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (card) {
+      card.classList.add('preparing');
+      // Show status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) badge.style.display = 'inline-block';
+      // Replace all buttons with READY (ALL) override
+      const btnGroup = card.querySelector('.btn-group');
+      if (btnGroup) {
+        btnGroup.innerHTML = '';
+        const readyBtn = document.createElement('button');
+        readyBtn.className = 'btn-ready';
+        var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE', pickup: 'READY (PICKUP)' };
+        readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
+        readyBtn.onclick = function() { markSectionDone(orderId); };
+        btnGroup.appendChild(readyBtn);
+      }
+      // Make items tappable for per-dish cooking (key by lineId via data-key)
+      const items = card.querySelectorAll('.item-row');
+      const totalItems = items.length;
+      items.forEach(function(row, idx) {
+        row.classList.add('cookable');
+        var key = row.getAttribute('data-key') || String(idx);
+        if (!row.querySelector('.cook-check')) {
+          const check = document.createElement('span');
+          check.className = 'cook-check';
+          check.textContent = '✓';
+          row.appendChild(check);
+        }
+        row.onclick = function() { toggleItemCooked(orderId, key); };
+      });
+      // Add cook hint + progress bar
+      const cardBody = card.querySelector('.card-body');
+      if (cardBody && !cardBody.querySelector('.cook-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'cook-hint';
+        hint.textContent = 'Tap each item when cooked';
+        cardBody.appendChild(hint);
+        const prog = document.createElement('div');
+        prog.className = 'cook-progress';
+        prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+        cardBody.appendChild(prog);
+      }
+    }
+
+    // Update local data
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
+    if (orderData[orderId]) orderData[orderId].status = 'preparing';
+    updateStats();
+
+    const resp = await syncOrder(orderId, { status: 'preparing' });
+    if (!resp || !resp.ok) {
+      // Revert local status + rebuild the card to its prior (received) form.
+      if (orderData[orderId]) orderData[orderId].status = prevStatus;
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'start preparing');
+    }
+  };
+
+  // ── Mark order ready (kitchen done) ──
+  window.markReady = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    // Capture prior state so a failed sync can fully revert (status + the
+    // cookedItems we clear optimistically below).
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
+    const prevCookedItems = orderData[orderId] ? orderData[orderId].cookedItems : undefined;
+    if (card) {
+      card.classList.remove('preparing');
+      card.classList.add('ready');
+      // Update status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+      // Remove cook state (cookable items, checkmarks, cook hint/progress)
+      card.querySelectorAll('.item-row').forEach(function(row) {
+        row.classList.remove('cookable', 'cooked');
+        row.onclick = null;
+        const check = row.querySelector('.cook-check');
+        if (check) check.remove();
+      });
+      const cookHintEl = card.querySelector('.cook-hint');
+      if (cookHintEl) cookHintEl.remove();
+      const cookProgEl = card.querySelector('.cook-progress');
+      if (cookProgEl) cookProgEl.remove();
+      // Clear cookedItems data (captured above for revert-on-failure)
+      if (orderData[orderId]) delete orderData[orderId].cookedItems;
+      // Replace buttons with PICKED UP only
+      const btnGroup = card.querySelector('.btn-group');
+      if (btnGroup) {
+        btnGroup.innerHTML = '';
+        const pickupBtn = document.createElement('button');
+        pickupBtn.className = 'btn-pickup';
+        pickupBtn.textContent = 'PICKED UP';
+        pickupBtn.onclick = function() { markPickedUp(orderId); };
+        btnGroup.appendChild(pickupBtn);
+      }
+      // Make items tappable for per-dish pickup (key by lineId)
+      const items = card.querySelectorAll('.item-row');
+      const totalItems = items.length;
+      items.forEach(function(row, idx) {
+        row.classList.add('tappable');
+        var key = row.getAttribute('data-key') || String(idx);
+        row.onclick = function() { toggleItemPickup(orderId, key); };
+      });
+      // Add pickup hint + progress bar
+      const cardBody = card.querySelector('.card-body');
+      if (cardBody && !cardBody.querySelector('.pickup-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'pickup-hint';
+        hint.textContent = 'Tap each item as staff picks up';
+        cardBody.appendChild(hint);
+        const prog = document.createElement('div');
+        prog.className = 'pickup-progress';
+        prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+        cardBody.appendChild(prog);
+      }
+    }
+
+    if (orderData[orderId]) orderData[orderId].status = 'ready';
+    updateStats();
+
+    const resp = await syncOrder(orderId, { status: 'ready' });
+    if (!resp || !resp.ok) {
+      // Restore prior status + cookedItems, then rebuild the card.
+      if (orderData[orderId]) {
+        orderData[orderId].status = prevStatus;
+        if (prevCookedItems !== undefined) orderData[orderId].cookedItems = prevCookedItems;
+      }
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'mark ready');
+    }
+  };
+
+  // Count true entries in {key:bool} but only for keys that match an item still present.
+  function activeTrueCount(stateMap, items) {
+    if (!stateMap) return 0;
+    let n = 0;
+    items.forEach(function(it, i) {
+      const k = it.lineId || String(i);
+      if (stateMap[k]) n++;
+    });
+    return n;
+  }
+
+  function itemKey(item, idx) { return item.lineId || String(idx); }
+
+  // ── Toggle individual item cooked (during preparing) ──
+  // N3/N4 pattern: optimistically apply, await the PATCH, revert row class +
+  // progress on failure and surface the error like markPaid does.
+  window.toggleItemCooked = async function(orderId, key) {
+    const order = orderData[orderId];
+    if (!order || order.status !== 'preparing') return;
+
+    if (!order.cookedItems) order.cookedItems = {};
+    const prevValue = !!order.cookedItems[key];
+    order.cookedItems[key] = !prevValue;
+
+    const card = document.getElementById('card-' + orderId);
+    if (!card) return;
+
+    const row = card.querySelector('.item-row[data-key="' + (window.CSS && CSS.escape ? CSS.escape(key) : key.replace(/"/g, '\\"')) + '"]');
+    if (row) row.classList.toggle('cooked', !!order.cookedItems[key]);
+
+    const totalItems = order.items.length;
+    const cookedCount = activeTrueCount(order.cookedItems, order.items);
+    const pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+
+    const progFill = card.querySelector('.cook-progress .prog-fill');
+    if (progFill) progFill.style.width = pct + '%';
+    const progText = card.querySelector('.cook-progress span');
+    if (progText) progText.textContent = cookedCount + '/' + totalItems;
+
+    const resp = await syncOrder(orderId, { status: 'preparing', cookedItems: order.cookedItems });
+    if (!resp || !resp.ok) {
+      // Revert the just-applied tap: data, row class, and progress bar.
+      order.cookedItems[key] = prevValue;
+      if (row) row.classList.toggle('cooked', prevValue);
+      const revCount = activeTrueCount(order.cookedItems, order.items);
+      const revPct = totalItems > 0 ? Math.round((revCount / totalItems) * 100) : 0;
+      if (progFill) progFill.style.width = revPct + '%';
+      if (progText) progText.textContent = revCount + '/' + totalItems;
+      showSyncError(card, resp, 'update item');
+      return;
+    }
+
+    if (cookedCount === totalItems && totalItems > 0) {
+      setTimeout(function() { markReady(orderId); }, 500);
+    }
+  };
+
+  // ── Toggle individual item pickup ──
+  window.toggleItemPickup = async function(orderId, key) {
+    const order = orderData[orderId];
+    if (!order || order.status !== 'ready') return;
+
+    if (!order.pickedItems) order.pickedItems = {};
+    const prevValue = !!order.pickedItems[key];
+    order.pickedItems[key] = !prevValue;
+
+    const card = document.getElementById('card-' + orderId);
+    if (!card) return;
+
+    const row = card.querySelector('.item-row[data-key="' + (window.CSS && CSS.escape ? CSS.escape(key) : key.replace(/"/g, '\\"')) + '"]');
+    if (row) row.classList.toggle('picked', !!order.pickedItems[key]);
+
+    const totalItems = order.items.length;
+    const pickedCount = activeTrueCount(order.pickedItems, order.items);
+    const pct = totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0;
+
+    const progFill = card.querySelector('.pickup-progress .prog-fill');
+    if (progFill) progFill.style.width = pct + '%';
+    const progText = card.querySelector('.pickup-progress span');
+    if (progText) progText.textContent = pickedCount + '/' + totalItems;
+
+    const resp = await syncOrder(orderId, { status: 'ready', pickedItems: order.pickedItems });
+    if (!resp || !resp.ok) {
+      // Revert the just-applied tap: data, row class, and progress bar.
+      order.pickedItems[key] = prevValue;
+      if (row) row.classList.toggle('picked', prevValue);
+      const revCount = activeTrueCount(order.pickedItems, order.items);
+      const revPct = totalItems > 0 ? Math.round((revCount / totalItems) * 100) : 0;
+      if (progFill) progFill.style.width = revPct + '%';
+      if (progText) progText.textContent = revCount + '/' + totalItems;
+      showSyncError(card, resp, 'update item');
+      return;
+    }
+
+    if (pickedCount === totalItems && totalItems > 0) {
+      setTimeout(function() { markPickedUp(orderId); }, 500);
+    }
+  };
+
+  // ── Shared PATCH helper with auth ──
+  function syncOrder(orderId, body) {
+    return fetch(BACKEND + '/orders/' + encodeURIComponent(orderId), {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body)
+    }).then(function(r) {
+      if (!r.ok) console.error('PATCH', orderId, 'failed', r.status);
+      return r;
+    }).catch(function(e) { console.error('Failed to sync:', e); });
+  }
+
+  // ── Shared sync-failure banner (same look/behaviour as markPaid's error) ──
+  function showSyncError(card, resp, action) {
+    if (!card) return;
+    var status = resp ? resp.status : 'network';
+    var banner = document.createElement('div');
+    banner.style.cssText = 'background:#f44336;color:#fff;padding:8px;text-align:center;font-size:12px;border-radius:6px;margin:6px 12px';
+    banner.textContent = "Couldn't " + action + " (HTTP " + status + "). Try again.";
+    card.appendChild(banner);
+    setTimeout(function() { banner.remove(); }, 4000);
+  }
+
+  // ── Rebuild a single card's DOM from orderData (used to revert a failed
+  // stage transition back to its prior status). Mirrors the re-render path
+  // already used by the poll loop (see the 'received' branch).
+  function rerenderCard(orderId) {
+    const order = orderData[orderId];
+    const card = document.getElementById('card-' + orderId);
+    if (!order || !card || !card.parentNode) return null;
+    const fresh = document.createElement('div');
+    fresh.innerHTML = renderCard(order);
+    const newCard = fresh.firstChild;
+    card.parentNode.replaceChild(newCard, card);
+    return newCard;
+  }
+
+  // ── Mark order picked up ──
+  window.markPickedUp = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    // Capture prior state so a failed sync can fully revert (status + the
+    // pickedItems we back-fill optimistically below).
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
+    const prevPickedItems = orderData[orderId] ? orderData[orderId].pickedItems : undefined;
+    if (card) {
+      card.classList.remove('ready');
+      card.classList.add('picked_up');
+      // Update status badge
+      const badge = card.querySelector('.status-badge');
+      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+      // Remove tappable state and pickup hint/progress
+      card.querySelectorAll('.item-row').forEach(function(row) {
+        row.classList.remove('tappable', 'picked');
+        row.onclick = null;
+      });
+      const hint = card.querySelector('.pickup-hint');
+      if (hint) hint.remove();
+      const prog = card.querySelector('.pickup-progress');
+      if (prog) prog.remove();
+      // Replace PICKED UP button with PAID BY CUSTOMER (full width)
+      const pickupBtn = card.querySelector('.btn-pickup');
+      if (pickupBtn) {
+        const paidBtn = document.createElement('button');
+        paidBtn.className = 'btn-paid';
+        paidBtn.textContent = 'PAID BY CUSTOMER';
+        paidBtn.onclick = function() { markPaid(orderId); };
+        pickupBtn.parentNode.insertBefore(paidBtn, pickupBtn);
+        pickupBtn.remove();
+      }
+    }
+
+    // N14: audit-trail preservation — if the cook taps PICKED UP without
+    // having marked individual items, populate pickedItems with all lineIds
+    // so the order record shows every item was handed off.
+    if (orderData[orderId]) {
+      orderData[orderId].status = 'picked_up';
+      if (!orderData[orderId].pickedItems) orderData[orderId].pickedItems = {};
+      orderData[orderId].items.forEach(function(item, idx) {
+        const key = item.lineId || String(idx);
+        orderData[orderId].pickedItems[key] = true;
+      });
+    }
+    updateStats();
+
+    const resp = await syncOrder(orderId, {
+      status: 'picked_up',
+      pickedItems: orderData[orderId] ? orderData[orderId].pickedItems : undefined,
+    });
+    if (!resp || !resp.ok) {
+      // Restore prior status + pickedItems, then rebuild the card.
+      if (orderData[orderId]) {
+        orderData[orderId].status = prevStatus;
+        if (prevPickedItems === undefined) delete orderData[orderId].pickedItems;
+        else orderData[orderId].pickedItems = prevPickedItems;
+      }
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'mark picked up');
+    }
+  };
+
+  // ── Mark order paid (sends to history) ──
+  // N3/N4 fix: await the PATCH, only commit local state on success. On failure
+  // restore the card and surface the error to the cook instead of silently
+  // re-adding it on the next poll (which used to look like a "new arrival"
+  // chime for an order the cook thought they'd closed).
+  window.markPaid = async function(orderId) {
+    const card = document.getElementById('card-' + orderId);
+    if (paidInFlight.has(orderId)) return;
+    paidInFlight.add(orderId);
+    // Visually disable both buttons in case there's a double-tap.
+    if (card) card.classList.add('done');
+
+    const resp = await syncOrder(orderId, { status: 'done' });
+    if (!resp || !resp.ok) {
+      // Revert the optimistic fade and tell the cook.
+      paidInFlight.delete(orderId);
+      if (card) {
+        card.classList.remove('done');
+        const status = resp ? resp.status : 'network';
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:#f44336;color:#fff;padding:8px;text-align:center;font-size:12px;border-radius:6px;margin:6px 12px';
+        banner.textContent = "Couldn't mark paid (HTTP " + status + "). Try again.";
+        card.appendChild(banner);
+        setTimeout(function() { banner.remove(); }, 4000);
+      }
+      return;
+    }
+
+    // Server confirmed. Now archive locally.
+    if (orderData[orderId]) {
+      const order = orderData[orderId];
+      order.completedAt = new Date().toISOString();
+      if (!completedOrders.some(c => c.id === order.id)) {   // poll hydration may have archived it already
+        completedOrders.unshift(order);
+        if (completedOrders.length > 50) completedOrders.pop();
+        renderHistory();
+      }
+    }
+    doneCount++;
+    updateStats();
+    setTimeout(() => {
+      if (card) card.remove();
+      delete orderData[orderId];
+      paidInFlight.delete(orderId);
+    }, 400);
+  };
+
+  // N13: dead-code removal — `window.markDone` was an unused legacy alias.
+
+  // ── Toggle history ──
+  window.toggleHistory = function() {
+    const list = document.getElementById('historyList');
+    const btn = document.getElementById('historyToggle');
+    list.classList.toggle('open');
+    btn.textContent = list.classList.contains('open') ? 'Hide' : 'Show';
+  };
+
+  // ── Render history ──
+  function renderHistory() {
+    const list = document.getElementById('historyList');
+    const empty = document.getElementById('historyEmpty');
+
+    if (completedOrders.length === 0) {
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    // Remove old history items (keep the empty div)
+    const existing = list.querySelectorAll('.history-item');
+    existing.forEach(el => el.remove());
+
+    completedOrders.forEach(order => {
+      const itemNames = order.items.map(i =>
+        (Number(i.qty) || 0) + 'x ' + i.name + (i.size ? ' (' + i.size + ')' : '')
+      ).join(', ');
+
+      const phoneHtml = order.phoneNumber
+        ? '<div class="hi-phone"><a href="tel:' + escAttr(escTelHref(order.phoneNumber)) + '">' + escHtml(order.phoneNumber) + '</a></div>'
+        : '';
+
+      const html = '<div class="history-item">' +
+        '<div class="hi-left">' +
+          '<span class="hi-table">' + (isPickupOrder(order)
+            ? 'PICKUP' + (order.customerName ? ' &middot; ' + escHtml(order.customerName) : '')
+            : 'T' + escHtml(order.tableNumber)) + '</span>' +
+          '<span class="hi-items">' + escHtml(itemNames) + '</span>' +
+        '</div>' +
+        '<div class="hi-right">' +
+          '<div class="hi-total">$' + (Number(order.total) || 0).toFixed(2) + '</div>' +
+          phoneHtml +
+          '<div class="hi-time">' + escHtml(formatTime(order.completedAt || order.createdAt)) + '</div>' +
+        '</div>' +
+      '</div>';
+
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      list.appendChild(temp.firstChild);
+    });
+  }
+
+  // ── Update stats ──
+  function updateStats() {
+    let activeC = 0;
+    let prepC = 0;
+    let readyC = 0;
+    let pickedUpC = 0;
+    knownOrderIds.forEach(id => {
+      if (!orderData[id]) return;
+      const order = orderData[id];
+      // Filter check: skip orders that don't match current view
+      if (currentFilter === 'kitchen' && !order.items.some(function(i) { return !isDrinkItem(i); })) return;
+      if (currentFilter === 'barista' && !order.items.some(function(i) { return isDrinkItem(i); })) return;
+      if (currentFilter === 'pickup' && !isPickupOrder(order)) return;
+      if (order.status === 'preparing') prepC++;
+      if (order.status === 'ready') readyC++;
+      if (order.status === 'picked_up') pickedUpC++;
+      activeC++;
+    });
+    document.getElementById('activeCount').textContent = activeC;
+    document.getElementById('prepCount').textContent = prepC;
+    document.getElementById('readyCount').textContent = readyC;
+    document.getElementById('pickedUpCount').textContent = pickedUpC;
+    document.getElementById('doneCount').textContent = doneCount;
+    document.getElementById('emptyState').style.display =
+      activeC === 0 ? 'flex' : 'none';
+  }
+
+  // ── Poll orders ──
+  let pollAbort = null;
+  let pollTimer = null;
+  let pollPending = false;
+
+  async function pollOrders() {
+    if (pollPending) return; // dedupe overlapping polls
+    if (pollAbort) pollAbort.abort();
+    pollAbort = new AbortController();
+    pollPending = true;
+    try {
+      const resp = await fetch(BACKEND + '/orders', {
+        headers: authHeaders(),
+        signal: pollAbort.signal,
+      });
+      if (resp.status === 401) {
+        document.getElementById('statusDot').className = 'status-dot error';
+        document.getElementById('statusText').textContent = 'Auth required (add ?token=… to URL)';
+        return;
+      }
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+
+      // N9: anchor elapsed-time math to the server clock so a wrong iPad clock
+      // doesn't produce negative or wildly inflated "X min ago" values.
+      if (data.serverTime) {
+        serverTimeOffset = new Date(data.serverTime).getTime() - Date.now();
+      }
+
+      // Filter to active orders only
+      const active = data.orders.filter(o => o.status !== 'done');
+
+      // Hydrate Order History from the server's completed orders so it survives a
+      // page refresh / redeploy. completedOrders is otherwise only filled during
+      // the current browser session (markPaid / live status transitions), so a
+      // reload showed an empty history even though the orders were safe on the
+      // server (and still in the reports). Dedup by id, newest first, cap 50.
+      (function () {
+        var changed = false;
+        var todayStr = new Date().toDateString();
+        data.orders.forEach(function (o) {
+          if (o.status !== 'done' || hydratedDoneIds.has(o.id)) return;
+          hydratedDoneIds.add(o.id);
+          // Orders this tab is (or was) tracking are archived by markPaid or the
+          // disappeared-order cleanup — hydrating them too would duplicate the
+          // history row (same race the N3 paidInFlight guard exists for).
+          if (knownOrderIds.has(o.id) || paidInFlight.has(o.id)) return;
+          if (completedOrders.some(function (c) { return c.id === o.id; })) return;
+          completedOrders.push(o);
+          // keep the "Paid" header stat consistent with the hydrated history
+          if (new Date(o.completedAt || o.createdAt || 0).toDateString() === todayStr) doneCount++;
+          changed = true;
+        });
+        if (changed) {
+          completedOrders.sort(function (a, b) {
+            return new Date(b.completedAt || b.createdAt || 0) - new Date(a.completedAt || a.createdAt || 0);
+          });
+          if (completedOrders.length > 50) completedOrders.length = 50;
+          renderHistory();
+          updateStats();
+        }
+      })();
+
+      let hasNew = false;
+
+      active.forEach(order => {
+        if (!knownOrderIds.has(order.id)) {
+          knownOrderIds.add(order.id);
+          orderData[order.id] = order;
+          hasNew = true;
+
+          const grid = document.getElementById('ordersGrid');
+          const empty = document.getElementById('emptyState');
+
+          const temp = document.createElement('div');
+          temp.innerHTML = renderCard(order);
+          const card = temp.firstChild;
+
+          if (!isFirstLoad) {
+            card.classList.add('new-arrival', 'flash');
+            setTimeout(() => card.classList.remove('flash'), 1500);
+            setTimeout(() => card.classList.remove('new-arrival'), 5000);
+          }
+
+          grid.insertBefore(card, grid.firstChild === empty ? empty : grid.firstChild);
+        } else {
+          const localOrder = orderData[order.id];
+          if (!localOrder) return;
+          const statusChanged = localOrder.status !== order.status;
+
+          // N6: replace (don't merge) cooked/picked state from the server, so
+          // a second dashboard tab that never observed a clear ends up clean.
+          // If the server omits the field (e.g. after a status reset), clear
+          // it locally too.
+          localOrder.cookedItems = order.cookedItems || {};
+          localOrder.pickedItems = order.pickedItems || {};
+
+          // Mirror in-flight item-count changes from /add-items so the dashboard
+          // sees newly added rows next render.
+          if (Array.isArray(order.items)) localOrder.items = order.items;
+
+          const card = document.getElementById('card-' + order.id);
+          if (!card) return;
+
+          if (statusChanged) {
+            localOrder.status = order.status;
+            // Clear all status classes
+            card.classList.remove('preparing', 'ready', 'picked_up');
+
+            // Clean up any existing per-item UI
+            card.querySelectorAll('.item-row').forEach(function(row) {
+              row.classList.remove('cookable', 'cooked', 'tappable', 'picked');
+              row.onclick = null;
+              var ck = row.querySelector('.cook-check'); if (ck) ck.remove();
+            });
+            var els = card.querySelectorAll('.cook-hint,.cook-progress,.pickup-hint,.pickup-progress');
+            els.forEach(function(el) { el.remove(); });
+
+            var capturedId = order.id; // close over a fresh reference for handlers
+            if (order.status === 'preparing') {
+              card.classList.add('preparing');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Preparing'; badge.style.background = '#ff9800'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) {
+                btnGroup.innerHTML = '';
+                var readyBtn = document.createElement('button');
+                readyBtn.className = 'btn-ready';
+                var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE', pickup: 'READY (PICKUP)' };
+                readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
+                readyBtn.onclick = function() { markSectionDone(capturedId); };
+                btnGroup.appendChild(readyBtn);
+              }
+              var items = card.querySelectorAll('.item-row');
+              var totalItems = items.length;
+              items.forEach(function(row, idx) {
+                row.classList.add('cookable');
+                var key = row.getAttribute('data-key') || String(idx);
+                var check = document.createElement('span');
+                check.className = 'cook-check'; check.textContent = '✓';
+                row.appendChild(check);
+                row.onclick = function() { toggleItemCooked(capturedId, key); };
+              });
+              var cardBody = card.querySelector('.card-body');
+              if (cardBody) {
+                var hint = document.createElement('div');
+                hint.className = 'cook-hint'; hint.textContent = 'Tap each item when cooked';
+                cardBody.appendChild(hint);
+                var prog = document.createElement('div');
+                prog.className = 'cook-progress';
+                prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+                cardBody.appendChild(prog);
+              }
+            } else if (order.status === 'ready') {
+              card.classList.add('ready');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) {
+                btnGroup.innerHTML = '';
+                var pickupBtn = document.createElement('button');
+                pickupBtn.className = 'btn-pickup';
+                pickupBtn.textContent = 'PICKED UP';
+                pickupBtn.onclick = function() { markPickedUp(capturedId); };
+                btnGroup.appendChild(pickupBtn);
+              }
+              var items = card.querySelectorAll('.item-row');
+              var totalItems = items.length;
+              items.forEach(function(row, idx) {
+                row.classList.add('tappable');
+                var key = row.getAttribute('data-key') || String(idx);
+                row.onclick = function() { toggleItemPickup(capturedId, key); };
+              });
+              var cardBody = card.querySelector('.card-body');
+              if (cardBody) {
+                var hint = document.createElement('div');
+                hint.className = 'pickup-hint'; hint.textContent = 'Tap each item as staff picks up';
+                cardBody.appendChild(hint);
+                var prog = document.createElement('div');
+                prog.className = 'pickup-progress';
+                prog.innerHTML = '<span>0/' + totalItems + '</span><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div>';
+                cardBody.appendChild(prog);
+              }
+            } else if (order.status === 'picked_up') {
+              card.classList.add('picked_up');
+              var badge = card.querySelector('.status-badge');
+              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+              var btnGroup = card.querySelector('.btn-group');
+              if (btnGroup) {
+                btnGroup.innerHTML = '';
+                var paidBtn = document.createElement('button');
+                paidBtn.className = 'btn-paid';
+                paidBtn.textContent = 'PAID BY CUSTOMER';
+                paidBtn.onclick = function() { markPaid(capturedId); };
+                btnGroup.appendChild(paidBtn);
+              }
+            } else if (order.status === 'received') {
+              // N2: status reverted (POST /add-items resets to received). Without
+              // this branch the card had no buttons rebuilt and became unusable
+              // until reload. Full re-render is cleanest because items may have
+              // grown and we need fresh data-key attributes for the new lines.
+              var fresh = document.createElement('div');
+              fresh.innerHTML = renderCard(order);
+              var newCard = fresh.firstChild;
+              newCard.classList.add('flash');
+              setTimeout(function() { newCard.classList.remove('flash'); }, 1500);
+              card.parentNode.replaceChild(newCard, card);
+            }
+          }
+
+          // Sync per-item visual state from server (keyed by data-key, which is lineId)
+          if (order.status === 'preparing' && order.cookedItems) {
+            var rows = card.querySelectorAll('.item-row');
+            var totalItems = rows.length;
+            var cookedCount = 0;
+            rows.forEach(function(row) {
+              var k = row.getAttribute('data-key');
+              if (k && order.cookedItems[k]) {
+                row.classList.add('cooked');
+                cookedCount++;
+              } else {
+                row.classList.remove('cooked');
+              }
+            });
+            var pct = totalItems > 0 ? Math.round((cookedCount / totalItems) * 100) : 0;
+            var progFill = card.querySelector('.cook-progress .prog-fill');
+            if (progFill) progFill.style.width = pct + '%';
+            var progText = card.querySelector('.cook-progress span');
+            if (progText) progText.textContent = cookedCount + '/' + totalItems;
+          }
+          if (order.status === 'ready' && order.pickedItems) {
+            var rows = card.querySelectorAll('.item-row');
+            var totalItems = rows.length;
+            var pickedCount = 0;
+            rows.forEach(function(row) {
+              var k = row.getAttribute('data-key');
+              if (k && order.pickedItems[k]) {
+                row.classList.add('picked');
+                pickedCount++;
+              } else {
+                row.classList.remove('picked');
+              }
+            });
+            var pct = totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0;
+            var progFill = card.querySelector('.pickup-progress .prog-fill');
+            if (progFill) progFill.style.width = pct + '%';
+            var progText = card.querySelector('.pickup-progress span');
+            if (progText) progText.textContent = pickedCount + '/' + totalItems;
+          }
+        }
+      });
+
+      // Remove cards for orders that disappeared server-side.
+      // N3 fix: don't double-count or double-archive — if markPaid is currently
+      // handling this order (or already did), skip the archive/increment so we
+      // don't end up with "2" in the Paid stat or duplicate history entries.
+      const activeIds = new Set(active.map(o => o.id));
+      knownOrderIds.forEach(id => {
+        if (activeIds.has(id)) return;
+        const card = document.getElementById('card-' + id);
+        if (card) card.remove();
+        // If markPaid owns this disappearance, do nothing else here.
+        if (paidInFlight.has(id) || !orderData[id]) {
+          knownOrderIds.delete(id);
+          return;
+        }
+        // Otherwise: order disappeared via some other path (manual server
+        // edit, DELETE /orders, etc.) — archive it once.
+        orderData[id].completedAt = new Date().toISOString();
+        if (!completedOrders.some(c => c.id === id)) {   // poll hydration may have archived it already
+          completedOrders.unshift(orderData[id]);
+          if (completedOrders.length > 50) completedOrders.pop();
+          renderHistory();
+        }
+        delete orderData[id];
+        knownOrderIds.delete(id);
+        doneCount++;
+      });
+
+      if (hasNew && !isFirstLoad) {
+        playChime();
+      }
+
+      isFirstLoad = false;
+
+      document.getElementById('statusDot').className = 'status-dot live';
+      document.getElementById('statusText').textContent = 'Live';
+
+      updateStats();
+    } catch(e) {
+      if (e && e.name === 'AbortError') return; // intentional cancel — not an error
+      console.error('Poll error:', e);
+      document.getElementById('statusDot').className = 'status-dot error';
+      document.getElementById('statusText').textContent = 'Offline';
+    } finally {
+      pollPending = false;
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollOrders();
+    pollTimer = setInterval(pollOrders, POLL_INTERVAL);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollAbort) { pollAbort.abort(); pollAbort = null; }
+  }
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) stopPolling();
+    else startPolling();
+  });
+
+  // ── Update elapsed times ──
+  function updateElapsed() {
+    document.querySelectorAll('.elapsed[data-created]').forEach(el => {
+      el.textContent = elapsed(el.dataset.created);
+    });
+  }
+
+  // ── Init ──
+  document.addEventListener('click', function unlock() {
+    ensureAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    document.removeEventListener('click', unlock);
+  }, { once: true });
+
+  startPolling();
+  setInterval(updateElapsed, 30000);
+})();
+</script>
+
+</body>
+</html>
