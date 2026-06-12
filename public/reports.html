@@ -90,9 +90,13 @@
   }
 
   /* Items table */
+  .table-scroll { margin: 0 24px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-scroll .items-table { margin: 0; min-width: 520px; }
   .items-table {
     margin: 0 24px; background: #2a2318; border: 1px solid #3d3428; border-radius: 10px; overflow: hidden;
   }
+  .bill-link { color: inherit; text-decoration: none; display: block; }
+  .bill-link:hover, .bill-link:focus { color: #e8c477; text-decoration: underline; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 11px 16px; text-align: left; font-size: 13px; }
   th {
@@ -133,7 +137,7 @@
 
   @media (max-width: 768px) {
     header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
-    .stats, .hourly, .items-table, .week-bars, .hour-labels { margin-left: 12px; margin-right: 12px; }
+    .stats, .hourly, .items-table, .table-scroll, .week-bars, .hour-labels { margin-left: 12px; margin-right: 12px; }
   }
 
   /* PAID/UNPAID pills + bills rows */
@@ -159,7 +163,10 @@
     .section-head { padding:12px 16px 4px; }
     .section-head h2 { color:#000 !important; }
     .items-table { margin:0 16px; }
+    .table-scroll { margin:0 16px; overflow:visible !important; }
+    .table-scroll .items-table { margin:0 !important; min-width:0 !important; }
     .items-table table, .items-table th, .items-table td { color:#000 !important; background:#fff !important; border-color:#bbb !important; }
+    .bill-link { color:#000 !important; }
     .bill-items { max-width:none; white-space:normal; color:#000 !important; }
     .pill.paid { color:#1b7a3d !important; } .pill.unpaid { color:#b00 !important; }
     tr { page-break-inside:avoid; }
@@ -179,9 +186,9 @@
   </div>
 </header>
 
-<div class="tabs">
-  <button class="tab active" id="tabToday" onclick="switchView('today')">Today</button>
-  <button class="tab" id="tabWeek" onclick="switchView('week')">Last 7 days</button>
+<div class="tabs" role="tablist">
+  <button class="tab active" id="tabToday" role="tab" aria-selected="true" onclick="switchView('today')">Today</button>
+  <button class="tab" id="tabWeek" role="tab" aria-selected="false" onclick="switchView('week')">Last 7 days</button>
 </div>
 
 <div id="content"><div class="loading">Loading…</div></div>
@@ -219,29 +226,71 @@
 
   var view = "today";
   var data = { today: null, week: null };
+  var errors = { today: null, week: null };
   window.switchView = function(which) {
     view = which;
+    document.getElementById("tabToday").setAttribute("aria-selected", which === "today");
+    document.getElementById("tabWeek").setAttribute("aria-selected", which === "week");
     document.getElementById("tabToday").classList.toggle("active", which === "today");
     document.getElementById("tabWeek").classList.toggle("active", which === "week");
     render();
   };
+  window.fetchReports = null; // assigned below; exposed for Retry buttons
+
+  // Fetch one endpoint, updating data[key]/errors[key] independently.
+  // Keeps the last good data on transient failure instead of wiping it.
+  function fetchOne(key, path) {
+    return fetch(BACKEND + path, { headers: { Authorization: "Bearer " + token } })
+      .then(function(r) {
+        if (!r.ok) {
+          if (r.status === 401) {
+            errors[key] = { kind: "auth", msg: "Session expired — reopen the dashboard from its ?token= link." };
+          } else {
+            errors[key] = { kind: "http", msg: "Couldn't load — retry." };
+          }
+          return; // keep existing data[key] if any
+        }
+        return r.json().then(function(json) {
+          data[key] = json;
+          errors[key] = null;
+        });
+      })
+      .catch(function() {
+        errors[key] = { kind: "network", msg: "Couldn't load — retry." };
+        // keep existing data[key]
+      });
+  }
 
   function fetchReports() {
-    Promise.all([
-      fetch(BACKEND + "/reports/today", { headers: { Authorization: "Bearer " + token } }).then(function(r) { return r.json(); }),
-      fetch(BACKEND + "/reports/week", { headers: { Authorization: "Bearer " + token } }).then(function(r) { return r.json(); }),
-    ]).then(function(arr) {
-      data.today = arr[0]; data.week = arr[1];
-      render();
-    }).catch(function(e) {
-      document.getElementById("content").innerHTML = '<div class="empty">Couldn\'t load reports — check connection.</div>';
-    });
+    // Independent fetches: one can render while the other shows its own error.
+    return Promise.all([
+      fetchOne("today", "/reports/today"),
+      fetchOne("week", "/reports/week"),
+    ]).then(function() { render(); });
+  }
+  window.fetchReports = fetchReports;
+
+  function errorBlock(key) {
+    var err = errors[key];
+    if (!err) return "";
+    if (err.kind === "auth") {
+      return '<div class="empty">' + escapeHtml(err.msg) + '</div>';
+    }
+    return '<div class="empty">' + escapeHtml(err.msg) +
+      '<div style="margin-top:14px;"><button class="tab" onclick="fetchReports()">Retry</button></div></div>';
   }
 
   function render() {
     var d = data[view];
-    if (!d) { document.getElementById("content").innerHTML = '<div class="loading">Loading…</div>'; return; }
+    // No good data yet: show this view's error (if any) or the loading state.
+    if (!d) {
+      if (errors[view]) { document.getElementById("content").innerHTML = errorBlock(view); return; }
+      document.getElementById("content").innerHTML = '<div class="loading">Loading…</div>'; return;
+    }
+    try {
     var html = "";
+    // Have stale-but-good data and a fresh error: keep data, surface an inline banner.
+    if (errors[view]) html += errorBlock(view);
     if (view === "today") html += '<div class="print-only print-title">CRISPY EATERY &mdash; End of Day Report<div class="pt-sub">' + escapeHtml(d.date || "") + '</div></div>';
     // Stats row
     if (view === "today") {
@@ -264,11 +313,12 @@
 
     // Hourly heatmap (today) or weekly bars
     if (view === "today") {
-      var max = Math.max.apply(null, d.hourly.map(function(h) { return h.revenue; }).concat([1]));
+      var hourly = Array.isArray(d.hourly) ? d.hourly : [];
+      var max = Math.max.apply(null, hourly.map(function(h) { return (h && h.revenue) || 0; }).concat([1]));
       html += '<div class="section-head"><h2>Hourly breakdown</h2><div class="sub">Bars scale to today\'s busiest hour</div></div>';
       html += '<div class="hourly">';
       for (var i = 0; i < 24; i++) {
-        var h = d.hourly[i];
+        var h = hourly[i] || { hour: i, orders: 0, revenue: 0 };
         var pct = max ? Math.max(2, Math.round((h.revenue / max) * 100)) : 2;
         html += '<div class="bar" style="height:' + pct + '%">' +
           '<div class="tt">' + pad(h.hour) + ':00 · ' + h.orders + ' orders · ' + fmt(h.revenue) + '</div>' +
@@ -282,10 +332,11 @@
       }
       html += '</div>';
     } else {
-      var maxRev = Math.max.apply(null, d.days.map(function(x) { return x.revenue; }).concat([1]));
+      var days = Array.isArray(d.days) ? d.days : [];
+      var maxRev = Math.max.apply(null, days.map(function(x) { return (x && x.revenue) || 0; }).concat([1]));
       html += '<div class="section-head"><h2>Last 7 days</h2><div class="sub">Daily revenue</div></div>';
       html += '<div class="week-bars">';
-      d.days.forEach(function(day) {
+      days.forEach(function(day) {
         var pct = Math.max(2, Math.round((day.revenue / maxRev) * 100));
         html += '<div class="day">' +
           '<div class="day-val">' + (day.revenue > 0 ? fmt(day.revenue) : "—") + '</div>' +
@@ -297,20 +348,21 @@
     }
 
     // Items table
+    var itemsSold = Array.isArray(d.itemsSold) ? d.itemsSold : [];
     html += '<div class="section-head"><h2>Items sold</h2><div class="sub">Sorted by revenue</div></div>';
-    if (!d.itemsSold.length) {
+    if (!itemsSold.length) {
       html += '<div class="empty">No items sold ' + (view === "today" ? "today yet" : "this week") + '.</div>';
     } else {
-      html += '<div class="items-table"><table>' +
+      html += '<div class="table-scroll"><div class="items-table"><table>' +
         '<thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead><tbody>';
-      d.itemsSold.forEach(function(it) {
+      itemsSold.forEach(function(it) {
         html += '<tr>' +
           '<td>' + escapeHtml(it.name) + '</td>' +
           '<td class="num qty">' + it.qty + '</td>' +
           '<td class="num rev">' + fmt(it.revenue) + '</td>' +
           '</tr>';
       });
-      html += '</tbody></table></div>';
+      html += '</tbody></table></div></div>';
     }
 
     // Today's bills list (today view only)
@@ -320,27 +372,35 @@
       if (!bills.length) {
         html += '<div class="empty">No bills today yet.</div>';
       } else {
-        html += '<div class="items-table"><table><thead><tr>' +
+        html += '<div class="table-scroll"><div class="items-table"><table><thead><tr>' +
           '<th>Bill</th><th>Time</th><th>Table</th><th>Items</th><th class="num">Total</th><th>Status</th><th class="num">Fee</th>' +
           '</tr></thead><tbody>';
         bills.forEach(function(b) {
           var itemsStr = (b.items || []).map(function(i){ return (i.qty || 1) + "x " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", ");
           var paid = b.paymentStatus === "paid";
           var url = "/bill/?order=" + encodeURIComponent(b.id) + (b.billToken ? "&t=" + encodeURIComponent(b.billToken) : "");
-          html += '<tr class="bill-row" onclick="window.open(\'' + url + '\',\'_blank\')">' +
-            '<td>' + escapeHtml(b.id) + '</td>' +
+          html += '<tr class="bill-row">' +
+            '<td><a class="bill-link" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(b.id) + '</a></td>' +
             '<td>' + escapeHtml(timeOf(b.createdAt)) + '</td>' +
-            '<td>T' + escapeHtml(b.tableNumber) + '</td>' +
+            '<td>' + (b.orderType === 'pickup-drinks' || String(b.tableNumber).toUpperCase() === 'PICKUP'
+              ? escapeHtml(b.customerName ? 'Pickup · ' + b.customerName : 'Pickup')
+              : 'T' + escapeHtml(b.tableNumber)) + '</td>' +
             '<td class="bill-items">' + escapeHtml(itemsStr) + '</td>' +
             '<td class="num">' + fmt(b.total) + '</td>' +
             '<td>' + (paid ? '<span class="pill paid">PAID</span>' : '<span class="pill unpaid">UNPAID</span>') + '</td>' +
             '<td class="num rev">' + fmt(b.onlineSurcharge || 0) + '</td>' +
             '</tr>';
         });
-        html += '</tbody></table></div>';
+        html += '</tbody></table></div></div>';
       }
     }
     document.getElementById("content").innerHTML = html;
+    } catch (e) {
+      // A malformed report shouldn't blank the page.
+      document.getElementById("content").innerHTML =
+        '<div class="empty">Couldn\'t display this report.' +
+        '<div style="margin-top:14px;"><button class="tab" onclick="fetchReports()">Retry</button></div></div>';
+    }
   }
 
   function statCard(label, value, sub) {

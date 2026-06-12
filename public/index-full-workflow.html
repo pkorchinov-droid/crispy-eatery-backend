@@ -222,6 +222,26 @@
     text-align: center;
   }
 
+  /* Drinks-only pickup pre-orders: sage badge, stays sage across statuses
+     (placed after the status rules above so it wins the source-order tie). */
+  .table-badge.pickup,
+  .order-card .table-badge.pickup {
+    background: #7a8362;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .pickup-info {
+    background: #242a1c;
+    border-bottom: 1px solid #3a4230;
+    color: #b8c49a;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 18px;
+  }
+  .pickup-info b { color: #d6e0b4; }
+
   .status-badge {
     display: none;
     background: #ff9800;
@@ -795,6 +815,11 @@
     border-color: #42a5f5;
   }
 
+  .filter-btn.active[data-filter="pickup"] {
+    background: #7a8362;
+    border-color: #7a8362;
+  }
+
   /* Filter-based hiding */
   body.filter-kitchen .order-card:not([data-has-kitchen="true"]) { display: none; }
   body.filter-kitchen .item-row[data-type="barista"] { display: none; }
@@ -803,6 +828,10 @@
   body.filter-barista .order-card:not([data-has-barista="true"]) { display: none; }
   body.filter-barista .item-row[data-type="kitchen"] { display: none; }
   body.filter-barista .section-label { display: none; }
+
+  /* Pickup view: only pickup pre-orders, all their items (drinks-only anyway) */
+  body.filter-pickup .order-card:not([data-pickup="true"]) { display: none; }
+  body.filter-pickup .section-label { display: none; }
 
   /* ── Responsive ─────────────────────────────────── */
   @media (max-width: 768px) {
@@ -895,9 +924,9 @@
   <div class="header-actions">
     <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
-    <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print">🖨 Printer</a>
-    <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts">🧾 Receipt info</a>
-    <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders">👥 Groups</a>
+    <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print" aria-label="Printer setup"><span aria-hidden="true">🖨</span> Printer</a>
+    <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts" aria-label="Receipt info"><span aria-hidden="true">🧾</span> Receipt info</a>
+    <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders" aria-label="Groups"><span aria-hidden="true">👥</span> Groups</a>
   </div>
   <div class="stats">
     <div class="stat">
@@ -933,6 +962,7 @@
   <button class="filter-btn active" onclick="setFilter('all')" data-filter="all">All</button>
   <button class="filter-btn" onclick="setFilter('kitchen')" data-filter="kitchen">Kitchen</button>
   <button class="filter-btn" onclick="setFilter('barista')" data-filter="barista">Barista</button>
+  <button class="filter-btn" onclick="setFilter('pickup')" data-filter="pickup">☕ Pickup</button>
 </div>
 
 <div id="groupsOverlay" style="display:none"></div>
@@ -1064,6 +1094,10 @@
     return isDrink((item && item.name) || '');
   }
 
+  // Drinks-only PICKUP pre-order: flagged by orderType, or by the sentinel
+  // tableNumber "PICKUP" (legacy/partial orders may carry only one of the two).
+  function isPickupOrder(o) { return !!o && (o.orderType === 'pickup-drinks' || String(o.tableNumber || '').toUpperCase() === 'PICKUP'); }
+
   // ── State ──
   let knownOrderIds = new Set();
   let orderData = {};
@@ -1086,7 +1120,7 @@
   // ── View filter ──
   window.setFilter = function(filter) {
     currentFilter = filter;
-    document.body.classList.remove('filter-kitchen', 'filter-barista');
+    document.body.classList.remove('filter-kitchen', 'filter-barista', 'filter-pickup');
     if (filter !== 'all') {
       document.body.classList.add('filter-' + filter);
     }
@@ -1095,7 +1129,7 @@
       btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
     });
     // Update header subtitle
-    const subtitles = { all: 'Kitchen', kitchen: 'Kitchen', barista: 'Barista' };
+    const subtitles = { all: 'Kitchen', kitchen: 'Kitchen', barista: 'Barista', pickup: 'Pickup' };
     document.querySelector('.logo span').textContent = subtitles[filter] || 'Kitchen';
     updateStats();
   };
@@ -1203,7 +1237,14 @@
     L.push('<feed line="1"/>');
     L.push('<text align="left"/>');
     L.push(eposRule());
-    L.push('<text dw="true" dh="true" em="true">TABLE ' + eposEsc(order.tableNumber) + '&#10;</text>');
+    if (isPickupOrder(order)) {
+      // Double-width header = 21 cols on 42-col paper; "PICKUP · " is 9.
+      var pickupName = String(order.customerName || '').toUpperCase().slice(0, 12);
+      L.push('<text dw="true" dh="true" em="true">PICKUP' + (pickupName ? ' · ' + eposEsc(pickupName) : '') + '&#10;</text>');
+      L.push('<text dw="true" dh="false" em="true">READY BY: ' + eposEsc(order.pickupTime || 'ASAP') + '&#10;</text>');
+    } else {
+      L.push('<text dw="true" dh="true" em="true">TABLE ' + eposEsc(order.tableNumber) + '&#10;</text>');
+    }
     L.push('<text dw="false" dh="false" em="false">' + eposEsc(order.id) + '   ' + eposEsc(timeStr) + '&#10;</text>');
     L.push(eposRule());
     L.push('<feed line="1"/>');
@@ -1323,7 +1364,11 @@
     if (!printFails.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
     var rows = printFails.map(function (f) {
       var when = new Date(f.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      var who = f.kind === 'group' ? 'Group: ' + pfEsc(f.table) : 'Table ' + pfEsc(f.table) + ' · ' + pfEsc(f.refId);
+      var pickup = f.kind !== 'group' && String(f.table || '').toUpperCase() === 'PICKUP';
+      var pkOrder = pickup ? pfFindOrder(f.refId) : null;
+      var who = f.kind === 'group' ? 'Group: ' + pfEsc(f.table)
+        : pickup ? 'Pickup' + (pkOrder && pkOrder.customerName ? ' · ' + pfEsc(pkOrder.customerName) : '') + ' · ' + pfEsc(f.refId)
+        : 'Table ' + pfEsc(f.table) + ' · ' + pfEsc(f.refId);
       return '<div class="pf-row" data-key="' + pfEsc(f.key) + '">' +
         '<span>⚠ <b>' + pfEsc(PF_STATION_LABEL[f.station] || f.station) + '</b> — ' + who + '</span>' +
         '<span class="pf-time">' + when + '</span>' +
@@ -1747,7 +1792,8 @@
     L.push(HD);
     L.push('<text align="left"/>');
     L.push(metaRow('ORDER', String(order.id || ''), 'DATE', dateStr));
-    L.push(metaRow('TABLE', String(order.tableNumber || '-'), 'TIME', timeStr));
+    if (isPickupOrder(order)) L.push(metaRow('PICKUP', String(order.customerName || '-').slice(0, 18), 'READY', String(order.pickupTime || 'ASAP')));
+    else L.push(metaRow('TABLE', String(order.tableNumber || '-'), 'TIME', timeStr));
     L.push(HD);
     L.push('<text align="left"/>');
     L.push(cols('ITEM', 'AMOUNT', false, false));
@@ -1830,6 +1876,7 @@
     const isPreparing = order.status === 'preparing';
     const isReady = order.status === 'ready';
     const isPickedUp = order.status === 'picked_up';
+    const isPickup = isPickupOrder(order);
     // Split items into kitchen (food) and barista (drinks)
     const kitchenIndices = [];
     const baristaIndices = [];
@@ -1949,13 +1996,18 @@
     const phoneHtml = order.phoneNumber
       ? '<div class="order-phone"><a href="tel:' + escAttr(escTelHref(order.phoneNumber)) + '">' + escHtml(order.phoneNumber) + '</a></div>'
       : '';
-    return '<div class="order-card' + statusClass + '" id="card-' + safeId + '" data-id="' + safeId + '" data-has-kitchen="' + hasKitchen + '" data-has-barista="' + hasBarista + '">' +
+    const pickupInfo = isPickup
+      ? '<div class="pickup-info">for <b>' + escHtml(order.customerName || 'customer') + '</b> &middot; ready by <b>' + escHtml(order.pickupTime || 'ASAP') + '</b></div>'
+      : '';
+    return '<div class="order-card' + statusClass + '" id="card-' + safeId + '" data-id="' + safeId + '" data-has-kitchen="' + hasKitchen + '" data-has-barista="' + hasBarista + '" data-pickup="' + isPickup + '">' +
       '<div class="card-header">' +
         '<div style="display:flex;align-items:center">' +
-          '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>' +
+          (isPickup
+            ? '<div class="table-badge pickup">&#9749; PICKUP</div>'
+            : '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>') +
           '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + escHtml(badgeText) + '</span>' +
-          '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)">&#128424;</button>' +
-          '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)">&#129534;</button>' +
+          '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)" aria-label="Print kitchen ticket">&#128424;</button>' +
+          '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)" aria-label="Print GST receipt">&#129534;</button>' +
         '</div>' +
         '<div class="order-meta">' +
           '<div class="order-id">' + escHtml(order.id) + '</div>' +
@@ -1964,6 +2016,7 @@
           phoneHtml +
         '</div>' +
       '</div>' +
+      pickupInfo +
       '<div class="card-body">' + itemsHtml + orderNotes + cookHint + pickupHint + '</div>' +
       '<div class="card-footer">' +
         '<div class="order-total">$' + (Number(order.total) || 0).toFixed(2) + '</div>' +
@@ -1979,8 +2032,9 @@
     var order = orderData[orderId];
     if (!order || order.status !== 'preparing') return;
 
-    // If viewing ALL, just mark everything ready
-    if (currentFilter === 'all') {
+    // If viewing ALL (or PICKUP — those orders are drinks-only, no split needed),
+    // just mark everything ready
+    if (currentFilter === 'all' || currentFilter === 'pickup') {
       markReady(orderId);
       return;
     }
@@ -2031,7 +2085,7 @@
         btnGroup.innerHTML = '';
         const readyBtn = document.createElement('button');
         readyBtn.className = 'btn-ready';
-        var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE' };
+        var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE', pickup: 'READY (PICKUP)' };
         readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
         readyBtn.onclick = function() { markSectionDone(orderId); };
         btnGroup.appendChild(readyBtn);
@@ -2065,15 +2119,27 @@
     }
 
     // Update local data
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
     if (orderData[orderId]) orderData[orderId].status = 'preparing';
     updateStats();
 
-    await syncOrder(orderId, { status: 'preparing' });
+    const resp = await syncOrder(orderId, { status: 'preparing' });
+    if (!resp || !resp.ok) {
+      // Revert local status + rebuild the card to its prior (received) form.
+      if (orderData[orderId]) orderData[orderId].status = prevStatus;
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'start preparing');
+    }
   };
 
   // ── Mark order ready (kitchen done) ──
   window.markReady = async function(orderId) {
     const card = document.getElementById('card-' + orderId);
+    // Capture prior state so a failed sync can fully revert (status + the
+    // cookedItems we clear optimistically below).
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
+    const prevCookedItems = orderData[orderId] ? orderData[orderId].cookedItems : undefined;
     if (card) {
       card.classList.remove('preparing');
       card.classList.add('ready');
@@ -2091,7 +2157,7 @@
       if (cookHintEl) cookHintEl.remove();
       const cookProgEl = card.querySelector('.cook-progress');
       if (cookProgEl) cookProgEl.remove();
-      // Clear cookedItems data
+      // Clear cookedItems data (captured above for revert-on-failure)
       if (orderData[orderId]) delete orderData[orderId].cookedItems;
       // Replace buttons with PICKED UP only
       const btnGroup = card.querySelector('.btn-group');
@@ -2128,7 +2194,17 @@
     if (orderData[orderId]) orderData[orderId].status = 'ready';
     updateStats();
 
-    await syncOrder(orderId, { status: 'ready' });
+    const resp = await syncOrder(orderId, { status: 'ready' });
+    if (!resp || !resp.ok) {
+      // Restore prior status + cookedItems, then rebuild the card.
+      if (orderData[orderId]) {
+        orderData[orderId].status = prevStatus;
+        if (prevCookedItems !== undefined) orderData[orderId].cookedItems = prevCookedItems;
+      }
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'mark ready');
+    }
   };
 
   // Count true entries in {key:bool} but only for keys that match an item still present.
@@ -2145,12 +2221,15 @@
   function itemKey(item, idx) { return item.lineId || String(idx); }
 
   // ── Toggle individual item cooked (during preparing) ──
-  window.toggleItemCooked = function(orderId, key) {
+  // N3/N4 pattern: optimistically apply, await the PATCH, revert row class +
+  // progress on failure and surface the error like markPaid does.
+  window.toggleItemCooked = async function(orderId, key) {
     const order = orderData[orderId];
     if (!order || order.status !== 'preparing') return;
 
     if (!order.cookedItems) order.cookedItems = {};
-    order.cookedItems[key] = !order.cookedItems[key];
+    const prevValue = !!order.cookedItems[key];
+    order.cookedItems[key] = !prevValue;
 
     const card = document.getElementById('card-' + orderId);
     if (!card) return;
@@ -2167,7 +2246,18 @@
     const progText = card.querySelector('.cook-progress span');
     if (progText) progText.textContent = cookedCount + '/' + totalItems;
 
-    syncOrder(orderId, { status: 'preparing', cookedItems: order.cookedItems });
+    const resp = await syncOrder(orderId, { status: 'preparing', cookedItems: order.cookedItems });
+    if (!resp || !resp.ok) {
+      // Revert the just-applied tap: data, row class, and progress bar.
+      order.cookedItems[key] = prevValue;
+      if (row) row.classList.toggle('cooked', prevValue);
+      const revCount = activeTrueCount(order.cookedItems, order.items);
+      const revPct = totalItems > 0 ? Math.round((revCount / totalItems) * 100) : 0;
+      if (progFill) progFill.style.width = revPct + '%';
+      if (progText) progText.textContent = revCount + '/' + totalItems;
+      showSyncError(card, resp, 'update item');
+      return;
+    }
 
     if (cookedCount === totalItems && totalItems > 0) {
       setTimeout(function() { markReady(orderId); }, 500);
@@ -2175,12 +2265,13 @@
   };
 
   // ── Toggle individual item pickup ──
-  window.toggleItemPickup = function(orderId, key) {
+  window.toggleItemPickup = async function(orderId, key) {
     const order = orderData[orderId];
     if (!order || order.status !== 'ready') return;
 
     if (!order.pickedItems) order.pickedItems = {};
-    order.pickedItems[key] = !order.pickedItems[key];
+    const prevValue = !!order.pickedItems[key];
+    order.pickedItems[key] = !prevValue;
 
     const card = document.getElementById('card-' + orderId);
     if (!card) return;
@@ -2197,7 +2288,18 @@
     const progText = card.querySelector('.pickup-progress span');
     if (progText) progText.textContent = pickedCount + '/' + totalItems;
 
-    syncOrder(orderId, { status: 'ready', pickedItems: order.pickedItems });
+    const resp = await syncOrder(orderId, { status: 'ready', pickedItems: order.pickedItems });
+    if (!resp || !resp.ok) {
+      // Revert the just-applied tap: data, row class, and progress bar.
+      order.pickedItems[key] = prevValue;
+      if (row) row.classList.toggle('picked', prevValue);
+      const revCount = activeTrueCount(order.pickedItems, order.items);
+      const revPct = totalItems > 0 ? Math.round((revCount / totalItems) * 100) : 0;
+      if (progFill) progFill.style.width = revPct + '%';
+      if (progText) progText.textContent = revCount + '/' + totalItems;
+      showSyncError(card, resp, 'update item');
+      return;
+    }
 
     if (pickedCount === totalItems && totalItems > 0) {
       setTimeout(function() { markPickedUp(orderId); }, 500);
@@ -2216,9 +2318,38 @@
     }).catch(function(e) { console.error('Failed to sync:', e); });
   }
 
+  // ── Shared sync-failure banner (same look/behaviour as markPaid's error) ──
+  function showSyncError(card, resp, action) {
+    if (!card) return;
+    var status = resp ? resp.status : 'network';
+    var banner = document.createElement('div');
+    banner.style.cssText = 'background:#f44336;color:#fff;padding:8px;text-align:center;font-size:12px;border-radius:6px;margin:6px 12px';
+    banner.textContent = "Couldn't " + action + " (HTTP " + status + "). Try again.";
+    card.appendChild(banner);
+    setTimeout(function() { banner.remove(); }, 4000);
+  }
+
+  // ── Rebuild a single card's DOM from orderData (used to revert a failed
+  // stage transition back to its prior status). Mirrors the re-render path
+  // already used by the poll loop (see the 'received' branch).
+  function rerenderCard(orderId) {
+    const order = orderData[orderId];
+    const card = document.getElementById('card-' + orderId);
+    if (!order || !card || !card.parentNode) return null;
+    const fresh = document.createElement('div');
+    fresh.innerHTML = renderCard(order);
+    const newCard = fresh.firstChild;
+    card.parentNode.replaceChild(newCard, card);
+    return newCard;
+  }
+
   // ── Mark order picked up ──
   window.markPickedUp = async function(orderId) {
     const card = document.getElementById('card-' + orderId);
+    // Capture prior state so a failed sync can fully revert (status + the
+    // pickedItems we back-fill optimistically below).
+    const prevStatus = orderData[orderId] ? orderData[orderId].status : undefined;
+    const prevPickedItems = orderData[orderId] ? orderData[orderId].pickedItems : undefined;
     if (card) {
       card.classList.remove('ready');
       card.classList.add('picked_up');
@@ -2259,10 +2390,21 @@
     }
     updateStats();
 
-    await syncOrder(orderId, {
+    const resp = await syncOrder(orderId, {
       status: 'picked_up',
       pickedItems: orderData[orderId] ? orderData[orderId].pickedItems : undefined,
     });
+    if (!resp || !resp.ok) {
+      // Restore prior status + pickedItems, then rebuild the card.
+      if (orderData[orderId]) {
+        orderData[orderId].status = prevStatus;
+        if (prevPickedItems === undefined) delete orderData[orderId].pickedItems;
+        else orderData[orderId].pickedItems = prevPickedItems;
+      }
+      updateStats();
+      const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
+      showSyncError(reverted, resp, 'mark picked up');
+    }
   };
 
   // ── Mark order paid (sends to history) ──
@@ -2348,7 +2490,9 @@
 
       const html = '<div class="history-item">' +
         '<div class="hi-left">' +
-          '<span class="hi-table">T' + escHtml(order.tableNumber) + '</span>' +
+          '<span class="hi-table">' + (isPickupOrder(order)
+            ? 'PICKUP' + (order.customerName ? ' &middot; ' + escHtml(order.customerName) : '')
+            : 'T' + escHtml(order.tableNumber)) + '</span>' +
           '<span class="hi-items">' + escHtml(itemNames) + '</span>' +
         '</div>' +
         '<div class="hi-right">' +
@@ -2376,6 +2520,7 @@
       // Filter check: skip orders that don't match current view
       if (currentFilter === 'kitchen' && !order.items.some(function(i) { return !isDrinkItem(i); })) return;
       if (currentFilter === 'barista' && !order.items.some(function(i) { return isDrinkItem(i); })) return;
+      if (currentFilter === 'pickup' && !isPickupOrder(order)) return;
       if (order.status === 'preparing') prepC++;
       if (order.status === 'ready') readyC++;
       if (order.status === 'picked_up') pickedUpC++;
@@ -2518,7 +2663,7 @@
                 btnGroup.innerHTML = '';
                 var readyBtn = document.createElement('button');
                 readyBtn.className = 'btn-ready';
-                var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE' };
+                var labels = { all: 'READY (ALL)', kitchen: 'KITCHEN DONE', barista: 'BARISTA DONE', pickup: 'READY (PICKUP)' };
                 readyBtn.textContent = labels[currentFilter] || 'READY (ALL)';
                 readyBtn.onclick = function() { markSectionDone(capturedId); };
                 btnGroup.appendChild(readyBtn);
