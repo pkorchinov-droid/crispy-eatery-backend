@@ -206,6 +206,102 @@
       color: #8a3a25;
     }
 
+    /* Payment status chip */
+    .pay-status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .pay-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 50px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+    }
+    .pay-chip.paid {
+      background: rgba(122,131,98,0.18);
+      color: #5a6340;
+    }
+    .pay-chip.unpaid {
+      background: rgba(194,90,58,0.12);
+      color: #8a3a25;
+    }
+    .pay-chip.pending {
+      background: rgba(194,90,58,0.10);
+      color: #a06a3a;
+    }
+    .pay-chip .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* GST line */
+    .gst-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 8px 0 0;
+      font-size: 12px;
+      color: #8a7558;
+    }
+    .gst-row .gst-amount {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 13px;
+    }
+    .gst-note {
+      font-size: 10px;
+      color: #b6a988;
+      line-height: 1.5;
+      margin-top: 6px;
+    }
+
+    /* Pay now button (accent) */
+    .pay-btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 50px;
+      border: none;
+      background: #c25a3a;
+      color: #fbf6ec;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 16px;
+    }
+    .pay-btn:hover { background: #a84a2e; }
+    .pay-btn:active { transform: scale(0.99); }
+
+    /* Staff-payment note */
+    .pay-note {
+      text-align: center;
+      font-size: 12px;
+      color: #8a7558;
+      margin-top: 14px;
+      line-height: 1.5;
+    }
+
+    /* Inline form error text */
+    .field-error {
+      font-size: 12px;
+      color: #8a3a25;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .email-input.invalid {
+      border-color: #c25a3a;
+      box-shadow: 0 0 0 3px rgba(194,90,58,0.1);
+    }
+
     /* Loading state */
     .loading {
       text-align: center;
@@ -294,6 +390,54 @@
         timeStyle: 'short'
       });
 
+      // GST-inclusive amount = total * 3/23 (online prices already include GST + surcharge)
+      var gstHtml =
+        '<div class="gst-row">' +
+          '<span>GST (incl.)</span>' +
+          '<span class="gst-amount">' + fmt(order.total * 3 / 23) + '</span>' +
+        '</div>' +
+        '<div class="gst-note">Online prices include GST and a small service surcharge.</div>';
+
+      // Payment status chip
+      var pStatus = order.paymentStatus || 'unpaid';
+      var pay = order.payment;
+      var chipClass, chipText;
+      if (pStatus === 'paid' || pay) {
+        chipClass = 'paid';
+        var scheme = (pay && pay.scheme) ? pay.scheme : 'Card';
+        var last4 = (pay && pay.last4) ? (' ····' + escHtml(String(pay.last4))) : '';
+        chipText = 'Paid · ' + escHtml(String(scheme)) + last4;
+      } else if (pStatus === 'pending') {
+        chipClass = 'pending';
+        chipText = 'Payment pending';
+      } else if (pStatus === 'failed') {
+        chipClass = 'unpaid';
+        chipText = 'Payment failed';
+      } else if (pStatus === 'refunded') {
+        chipClass = 'pending';
+        chipText = 'Refunded';
+      } else {
+        chipClass = 'unpaid';
+        chipText = 'Unpaid';
+      }
+      var chipHtml =
+        '<div class="pay-status">' +
+          '<span class="pay-chip ' + chipClass + '"><span class="dot"></span>' + chipText + '</span>' +
+        '</div>';
+
+      // Pay-now / staff-note logic (only for unpaid or failed states)
+      var payActionHtml = '';
+      if (pStatus === 'unpaid' || pStatus === 'failed') {
+        var pi = order.paymentIntent;
+        if (pi && pi.hostedUrl) {
+          payActionHtml =
+            '<button class="pay-btn" id="payBtn">Pay now</button>';
+        } else if (pi && pi.clientSecret) {
+          payActionHtml =
+            '<div class="pay-note">Ask staff to take payment for this bill.</div>';
+        }
+      }
+
       app.innerHTML =
         '<div class="header">' +
           '<div class="brand">Crispy Eatery</div>' +
@@ -303,22 +447,33 @@
         '<div class="card">' +
           '<div style="display:flex;justify-content:space-between;margin-bottom:14px">' +
             '<div><div class="order-meta"><div><div class="label">Order</div><div class="value">' + escHtml(order.id) + '</div></div></div></div>' +
-            '<div><div class="order-meta" style="border:none;margin:0;padding:0"><div><div class="label">Table</div><div class="value">' + escHtml(String(order.tableNumber)) + '</div></div></div></div>' +
+            '<div><div class="order-meta" style="border:none;margin:0;padding:0"><div>' +
+              (order.orderType === 'pickup-drinks' || String(order.tableNumber).toUpperCase() === 'PICKUP'
+                ? '<div class="label">Pickup</div><div class="value">' + escHtml(String(order.customerName || '')) + (order.pickupTime ? '<span style="display:block;font-size:12px;color:#8a7558">ready by ' + escHtml(String(order.pickupTime)) + '</span>' : '') + '</div>'
+                : '<div class="label">Table</div><div class="value">' + escHtml(String(order.tableNumber)) + '</div>') +
+            '</div></div></div>' +
           '</div>' +
           '<div>' + itemsHtml + '</div>' +
           '<div class="total-row">' +
             '<span class="total-label">Total</span>' +
             '<span class="total-amount">' + fmt(order.total) + '</span>' +
           '</div>' +
+          gstHtml +
+          chipHtml +
         '</div>' +
+
+        payActionHtml +
 
         '<div class="order-time">' + orderTime + '</div>' +
 
         '<div class="email-section">' +
-          '<label class="label">Email yourself a copy</label>' +
-          '<input type="email" class="email-input" id="emailInput" placeholder="your@email.com" />' +
-          '<button class="send-btn" id="sendBtn" onclick="sendBill()">Email My Bill</button>' +
-          '<div id="statusMsg"></div>' +
+          '<form id="emailForm" novalidate>' +
+            '<label class="label" for="emailInput">Email yourself a copy</label>' +
+            '<input type="email" class="email-input" id="emailInput" name="email" placeholder="your@email.com" autocomplete="email" aria-label="Email address for your bill" />' +
+            '<div class="field-error" id="emailError" aria-live="polite" hidden></div>' +
+            '<button type="submit" class="send-btn" id="sendBtn">Email My Bill</button>' +
+          '</form>' +
+          '<div id="statusMsg" aria-live="polite"></div>' +
         '</div>' +
 
         '<div class="footer">' +
@@ -326,6 +481,23 @@
           '<p style="color:#b6a988">341 Remuera Road</p>' +
           '<p style="color:#b6a988">7 am — 3:30 pm · daily</p>' +
         '</div>';
+
+      // Wire up Pay-now redirect (avoids inline-quoting the URL)
+      var payBtn = document.getElementById('payBtn');
+      if (payBtn && order.paymentIntent && order.paymentIntent.hostedUrl) {
+        payBtn.addEventListener('click', function() {
+          window.location.href = order.paymentIntent.hostedUrl;
+        });
+      }
+
+      // Wire up email form (Enter submits on mobile keyboards)
+      var emailForm = document.getElementById('emailForm');
+      if (emailForm) {
+        emailForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+          sendBill();
+        });
+      }
     }
 
     function renderNotFound() {
@@ -337,14 +509,22 @@
         '</div>' +
         '<div class="not-found">' +
           '<h2>Order not found</h2>' +
-          '<p>Please check your order number and try again.</p>' +
+          '<p>We couldn\'t find that bill. Please rescan the QR code on your table or ask a staff member.</p>' +
         '</div>' +
-        '<div style="text-align:center;margin-top:20px">' +
-          '<label class="label" style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:0.3em;color:#8a7558;margin-bottom:8px">Enter your order number</label>' +
-          '<input type="text" class="email-input" id="orderInput" placeholder="#001" style="max-width:160px;text-align:center;margin:0 auto 12px" />' +
-          '<br/>' +
-          '<button class="send-btn" style="max-width:200px;margin:0 auto" onclick="lookupOrder()">Look Up</button>' +
-        '</div>';
+        '<form id="lookupForm" novalidate style="text-align:center;margin-top:20px">' +
+          '<label class="label" for="orderInput" style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:0.3em;color:#8a7558;margin-bottom:8px">Enter your order number</label>' +
+          '<input type="text" inputmode="numeric" class="email-input" id="orderInput" name="order" placeholder="#001" aria-label="Order number" style="max-width:160px;text-align:center;margin:0 auto 8px" />' +
+          '<div class="field-error" id="orderError" aria-live="polite" hidden style="text-align:center"></div>' +
+          '<button type="submit" class="send-btn" style="max-width:200px;margin:0 auto">Look Up</button>' +
+        '</form>';
+
+      var lookupForm = document.getElementById('lookupForm');
+      if (lookupForm) {
+        lookupForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+          lookupOrder();
+        });
+      }
     }
 
     function renderError(msg) {
@@ -374,16 +554,20 @@
       // Even with valid ID format, the backend requires a billToken for new orders,
       // so manual lookup will 404 unless the customer also has the token from the
       // QR-menu confirmation. That's intentional: prevents enumeration.
+      var errEl = document.getElementById('orderError');
       var m = id.replace(/^#/, '').match(/^(\d{1,4})$/);
       if (!m) {
-        var el = document.getElementById('orderInput');
-        if (el) {
-          el.style.borderColor = '#c25a3a';
-          el.placeholder = 'Numbers only, e.g. 001';
-          el.value = '';
+        input.classList.add('invalid');
+        if (errEl) {
+          errEl.textContent = 'Please enter your order number using digits only, e.g. 001.';
+          errEl.hidden = false;
         }
+        // Keep the user's typed value so they can correct it.
+        input.focus();
         return;
       }
+      input.classList.remove('invalid');
+      if (errEl) errEl.hidden = true;
       window.location.search = '?order=' + encodeURIComponent('#' + m[1]);
     }
 
@@ -413,16 +597,26 @@
       var emailInput = document.getElementById('emailInput');
       var sendBtn = document.getElementById('sendBtn');
       var statusMsg = document.getElementById('statusMsg');
+      var emailError = document.getElementById('emailError');
       var email = emailInput.value.trim();
 
+      // Reset inline validation state (keep the typed value either way).
+      emailInput.classList.remove('invalid');
+      if (emailError) emailError.hidden = true;
+
       if (!EMAIL_RE.test(email) || email.length > 254) {
-        statusMsg.className = 'status error';
-        statusMsg.textContent = 'Please enter a valid email address';
+        emailInput.classList.add('invalid');
+        if (emailError) {
+          emailError.textContent = 'Please enter a valid email address, e.g. you@example.com.';
+          emailError.hidden = false;
+        }
+        emailInput.focus();
         return;
       }
 
       sendBtn.disabled = true;
       sendBtn.textContent = 'Sending...';
+      statusMsg.className = '';
       statusMsg.innerHTML = '';
 
       try {
@@ -439,8 +633,16 @@
 
         if (res.ok && data && data.success) {
           statusMsg.className = 'status success';
-          statusMsg.textContent = 'Bill sent to ' + email + '!';
+          statusMsg.textContent = 'Sent to ' + email + '! Check your spam folder if it doesn\'t arrive.';
           sendBtn.textContent = 'Sent!';
+          // Re-enable so a typo'd address can be retried (not a permanent dead-end).
+          setTimeout(function() {
+            var btn = document.getElementById('sendBtn');
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = 'Send to another address';
+            }
+          }, 1500);
         } else {
           statusMsg.className = 'status error';
           statusMsg.textContent = (data && data.error)
