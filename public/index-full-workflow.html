@@ -256,6 +256,25 @@
     animation: pulse 1.5s infinite;
   }
 
+  /* "Printed" confirmation chip — set once PREP fires all four bills (kitchen,
+     barista, full order, GST·unpaid). Device-local: printing is iPad-local. */
+  .printed-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #2e7d32;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-left: 8px;
+    white-space: nowrap;
+  }
+  .printed-chip.warn { background: #b0832f; }   /* a station printer failed — see red bar */
+
   .order-meta {
     text-align: right;
   }
@@ -1878,6 +1897,116 @@
       });
   };
 
+  // ── Printed-bills tracking ──────────────────────────────────────
+  // Pressing PREP fires all four slips at once and then flags the card "Printed".
+  // Stored device-local in localStorage (NOT the backend): printing is iPad-local
+  // over ePOS and the backend PATCH whitelist carries no printed flag, so this
+  // keeps the chip across poll re-renders and a tab reload without a backend
+  // change. Keyed by billToken (globally unique) so a reused #001 — order IDs
+  // reset to #001 after a deploy wipes orders.json — can't inherit a stale flag.
+  var PRINTED_KEY = 'printedOrders.v1';
+  function printedKeyFor(order) {
+    if (!order) return '';
+    return String(order.billToken || ((order.id || '') + '|' + (order.createdAt || '')));
+  }
+  function getPrintedMap() {
+    try { return JSON.parse(localStorage.getItem(PRINTED_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function isOrderPrinted(order) {
+    var k = printedKeyFor(order);
+    return !!(k && getPrintedMap()[k]);
+  }
+  function setOrderPrinted(order, info) {
+    var k = printedKeyFor(order);
+    if (!k) return;
+    try {
+      var m = getPrintedMap();
+      m[k] = Object.assign({ at: new Date().toISOString() }, info || {});
+      var keys = Object.keys(m);
+      while (keys.length > 300) { delete m[keys.shift()]; }   // bound growth on an always-on iPad
+      localStorage.setItem(PRINTED_KEY, JSON.stringify(m));
+    } catch (e) {}
+  }
+  function printedChipHtml(order) {
+    if (!isOrderPrinted(order)) return '';
+    var info = getPrintedMap()[printedKeyFor(order)] || {};
+    var warn = info.fail > 0 ? ' warn' : '';
+    return '<span class="printed-chip' + warn + '" title="Bills sent to printers (kitchen · barista · full · GST)">&#128424; Printed</span>';
+  }
+  // Inject/refresh the Printed chip on a LIVE card. markPreparing mutates the card
+  // in place rather than re-rendering, so the chip is added to the DOM directly;
+  // placed before the print buttons to match renderCard's source order.
+  function applyPrintedChip(orderId) {
+    var card = document.getElementById('card-' + orderId);
+    if (!card) return;
+    var row = card.querySelector('.card-header > div');
+    if (!row || row.querySelector('.printed-chip')) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = printedChipHtml(orderData[orderId]);
+    var chip = tmp.firstChild;
+    if (!chip) return;
+    var firstBtn = row.querySelector('.btn-print');
+    if (firstBtn) row.insertBefore(chip, firstBtn);
+    else row.appendChild(chip);
+  }
+
+  // Print EVERY bill for an order in one go: KITCHEN + BARISTA + FULL ORDER (no
+  // prices) plus the GST receipt (with prices; UNPAID at prep time). Mirrors
+  // printTicket's station split + printReceipt's GST slip — same fail keys, same
+  // reprint bar — but fires as one batch with a single combined toast, then flags
+  // the card "Printed". Wired to PREP; the 🖨/🧾 header buttons remain for reprints.
+  window.printAllBills = function (orderId) {
+    var order = orderData[orderId];
+    if (!order) { toast('Order not found', 'err'); return Promise.resolve(); }
+    var items = order.items || [];
+    var kIp = getKitchenPrinterIP();
+    var bIp = getBaristaPrinterIP();
+    var fIp = getFullPrinterIP();
+    var rIp = getReceiptPrinterIP();
+
+    var jobs = [];
+    var combined = !bIp;   // no barista IP → one combined kitchen ticket (printTicket fallback)
+    if (!combined) {
+      var food = items.filter(function (i) { return !isDrinkItem(i); });
+      var drinks = items.filter(function (i) { return isDrinkItem(i); });
+      if (food.length) jobs.push({ kind: 'order', station: 'KITCHEN', label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
+      if (drinks.length) jobs.push({ kind: 'order', station: 'BARISTA', label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
+      if (fIp && items.length) jobs.push({ kind: 'order', station: 'FULL', label: 'full', ip: fIp, xml: buildStationTicketXml(order, items, 'FULL ORDER') });
+    } else if (items.length) {
+      jobs.push({ kind: 'order', station: 'ORDER', label: 'order', ip: kIp, xml: buildStationTicketXml(order, items, 'ORDER') });
+    }
+    // GST receipt always prints (its own dedicated .66 printer); UNPAID here.
+    jobs.push({ kind: 'receipt', station: 'RECEIPT', label: 'GST', ip: rIp, xml: buildReceiptXml(order) });
+    if (!jobs.length) { toast('Nothing to print', 'err'); return Promise.resolve(); }
+
+    toast('Printing ' + order.id + ' — kitchen · barista · full · GST…');
+    return Promise.all(jobs.map(function (j) {
+      return sendEpos(j.xml, j.ip)
+        .then(function (res) { return { j: j, ok: res.ok, reason: res.reason }; })
+        .catch(function () { return { j: j, ok: false, reason: 'unreachable' }; });
+    })).then(function (rs) {
+      rs.forEach(function (r) {
+        var key = r.j.kind + ':' + order.id + ':' + r.j.station;
+        if (r.ok) resolvePrintFailKey(key);
+        else recordPrintFail({ kind: r.j.kind, refId: order.id, station: r.j.station, ip: r.j.ip, table: order.tableNumber, reason: r.reason || 'printer error' });
+      });
+      // Once the station slips are clean, supersede any stale fail keys left by
+      // the OTHER print mode (combined vs split), exactly like printTicket does.
+      var orderJobs = rs.filter(function (r) { return r.j.kind === 'order'; });
+      var allOrderOk = orderJobs.length && orderJobs.every(function (r) { return r.ok; });
+      if (allOrderOk) {
+        if (combined) ['KITCHEN', 'BARISTA', 'FULL'].forEach(function (st) { resolvePrintFailKey('order:' + order.id + ':' + st); });
+        else resolvePrintFailKey('order:' + order.id + ':ORDER');
+      }
+      var ok = rs.filter(function (r) { return r.ok; });
+      var bad = rs.filter(function (r) { return !r.ok; });
+      setOrderPrinted(order, { ok: ok.length, fail: bad.length });
+      applyPrintedChip(order.id);
+      if (!bad.length) toast('🖨 ' + order.id + ' printed — ' + ok.map(function (r) { return r.j.label; }).join(' + '), 'ok');
+      else toast(bad[0].j.label + ' FAILED (' + bad[0].j.ip + ') — see red bar', 'err');
+    });
+  };
+
   window.receiptSetup = function () {
     var info = getReceiptInfo();
     var fields = [['name', 'Business / trading name'], ['legal', 'Legal entity name'], ['addr', 'Address'], ['gst', 'GST number'], ['web', 'Website']];
@@ -2023,6 +2152,7 @@
             ? '<div class="table-badge pickup">&#9749; PICKUP</div>'
             : '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>') +
           '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + escHtml(badgeText) + '</span>' +
+          printedChipHtml(order) +
           '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)" aria-label="Print kitchen ticket">&#128424;</button>' +
           '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)" aria-label="Print GST receipt">&#129534;</button>' +
         '</div>' +
@@ -2147,6 +2277,10 @@
       updateStats();
       const reverted = rerenderCard(orderId) || document.getElementById('card-' + orderId);
       showSyncError(reverted, resp, 'start preparing');
+    } else {
+      // Order confirmed preparing → fire all four bills (kitchen · barista ·
+      // full order · GST·unpaid) and flag the card "Printed".
+      printAllBills(orderId);
     }
   };
 
