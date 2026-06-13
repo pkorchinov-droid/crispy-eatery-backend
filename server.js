@@ -476,6 +476,13 @@ const VALID_STATUSES = new Set([
   "picked_up",
   "done",
 ]);
+const VALID_PAYMENT_STATUSES = new Set([
+  "unpaid",
+  "pending",
+  "paid",
+  "failed",
+  "refunded",
+]);
 const EMAIL_RE = /^[^\s@<>"',;:\\]+@[^\s@<>"',;:\\]+\.[^\s@<>"',;:\\]{2,}$/;
 
 function toFiniteNumber(v, fallback) {
@@ -1420,13 +1427,24 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
         return;
       }
 
-      const { status, cookedItems, pickedItems } = req.body || {};
-      if (!status && cookedItems === undefined && pickedItems === undefined) {
+      const { status, cookedItems, pickedItems, paymentStatus, paymentMethod } =
+        req.body || {};
+      if (
+        !status &&
+        cookedItems === undefined &&
+        pickedItems === undefined &&
+        paymentStatus === undefined &&
+        paymentMethod === undefined
+      ) {
         res.status(400).json({ error: "Status or item state required" });
         return;
       }
       if (status && !VALID_STATUSES.has(status)) {
         res.status(400).json({ error: "Invalid status" });
+        return;
+      }
+      if (paymentStatus !== undefined && !VALID_PAYMENT_STATUSES.has(paymentStatus)) {
+        res.status(400).json({ error: "Invalid paymentStatus" });
         return;
       }
 
@@ -1458,10 +1476,30 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
         }
         orders[idx].pickedItems = m;
       }
+      // Payment confirmation — staff tapping "PAID BY CUSTOMER" records the order
+      // as paid (cash or card) at the counter. Stamp paidAt once so reports and
+      // the GST receipt have a payment time. paymentMethod is sanitized before
+      // it is stored or logged.
+      const cleanMethod =
+        paymentMethod !== undefined ? sanitizeString(paymentMethod, 24) : undefined;
+      if (paymentStatus !== undefined) {
+        orders[idx].paymentStatus = paymentStatus;
+        if (paymentStatus === "paid" && !orders[idx].paidAt) {
+          orders[idx].paidAt = new Date().toISOString();
+        }
+      }
+      if (cleanMethod !== undefined) {
+        orders[idx].paymentMethod = cleanMethod;
+      }
       orders[idx].updatedAt = new Date().toISOString();
       persistOrders(orders);
 
-      console.log(`[orders] ${orders[idx].id} → ${status || "(state update)"}`);
+      console.log(
+        `[orders] ${orders[idx].id} → ${status || "(state update)"}` +
+          (paymentStatus !== undefined
+            ? ` [${paymentStatus}${orders[idx].paymentMethod ? " · " + orders[idx].paymentMethod : ""}]`
+            : "")
+      );
       res.json({ success: true, order: orders[idx] });
     } catch (err) {
       console.error("[patch] Error:", err.message);
