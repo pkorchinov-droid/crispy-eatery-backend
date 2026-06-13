@@ -892,6 +892,23 @@
   #printFailBar .pf-btns { margin-left:auto; display:flex; gap:16px; }
   #printFailBar .pf-actions { margin-top:10px; display:flex; gap:16px; justify-content:flex-end; }
 
+  /* ── Tender prompt (shown on PAID BY CUSTOMER → picks the receipt's PAID box) ── */
+  .tender-overlay{position:fixed;inset:0;z-index:4000;background:rgba(24,18,12,.66);
+    display:flex;align-items:center;justify-content:center;padding:20px;-webkit-tap-highlight-color:transparent;}
+  .tender-card{background:#fffdf8;border-radius:18px;padding:24px 22px;width:100%;max-width:380px;
+    box-shadow:0 30px 60px -20px rgba(0,0,0,.55);text-align:center;}
+  .tender-title{font-size:20px;font-weight:800;color:#2b1f17;}
+  .tender-sub{font-size:14px;color:#8a7558;margin-top:4px;}
+  .tender-q{font-size:12px;color:#6b5a44;margin:18px 0 10px;text-transform:uppercase;letter-spacing:.07em;}
+  .tender-btns{display:flex;flex-direction:column;gap:10px;}
+  .tb{border:1px solid #e6dcc7;background:#fff;border-radius:12px;min-height:56px;font-size:17px;
+    font-weight:700;cursor:pointer;color:#2b1f17;transition:transform .1s;}
+  .tb:active{transform:scale(.97);}
+  .tb-card{background:#c25a3a;border-color:#c25a3a;color:#fff;}
+  .tb-cash{background:#2e7d32;border-color:#2e7d32;color:#fff;}
+  .tender-cancel{margin-top:16px;border:none;background:transparent;color:#8a7558;
+    font-size:14px;cursor:pointer;text-decoration:underline;min-height:44px;}
+
   /* ── Group / corporate Upcoming overlay ── */
   #groupsOverlay{position:fixed;inset:0;z-index:3000;background:rgba(24,18,12,.62);overflow:auto;}
   .g-panel{max-width:780px;margin:26px auto;background:#fffdf8;border-radius:16px;padding:20px 22px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);}
@@ -2407,19 +2424,76 @@
     }
   };
 
+  // ── Tender prompt ──
+  // Shown when staff tap PAID BY CUSTOMER. The customer pays at the counter with
+  // cash or card; the choice drives the PAID box on the auto-printed GST receipt
+  // (buildReceiptXml reads order.paymentMethod). Resolves to 'EFTPOS' (Card) or
+  // 'CASH', or null if the staff cancel (order stays active, nothing marked paid).
+  function askTender(order) {
+    return new Promise(function (resolve) {
+      var sub = '';
+      if (order) {
+        sub = isPickupOrder(order)
+          ? ('Pickup' + (order.customerName ? ' · ' + escHtml(order.customerName) : ''))
+          : ('Table ' + escHtml(String(order.tableNumber || '-')));
+        sub += ' · $' + (Number(order.total) || 0).toFixed(2);
+      }
+      var ov = document.createElement('div');
+      ov.className = 'tender-overlay';
+      ov.innerHTML =
+        '<div class="tender-card" role="dialog" aria-modal="true" aria-label="Payment received">' +
+          '<div class="tender-title">Payment received</div>' +
+          '<div class="tender-sub">' + sub + '</div>' +
+          '<div class="tender-q">How did the customer pay?</div>' +
+          '<div class="tender-btns">' +
+            '<button class="tb tb-card" data-m="EFTPOS">💳 Card</button>' +
+            '<button class="tb tb-cash" data-m="CASH">💵 Cash</button>' +
+          '</div>' +
+          '<button class="tender-cancel" data-cancel="1">Cancel</button>' +
+        '</div>';
+      function done(val) {
+        ov.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(val);
+      }
+      function onKey(e) { if (e.key === 'Escape') done(null); }
+      ov.addEventListener('click', function (e) {
+        if (e.target === ov) { done(null); return; }     // backdrop tap = cancel
+        var b = e.target.closest('button');
+        if (!b) return;
+        if (b.hasAttribute('data-cancel')) { done(null); return; }
+        if (b.hasAttribute('data-m')) { done(b.getAttribute('data-m')); }
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(ov);
+    });
+  }
+
   // ── Mark order paid (sends to history) ──
   // N3/N4 fix: await the PATCH, only commit local state on success. On failure
   // restore the card and surface the error to the cook instead of silently
   // re-adding it on the next poll (which used to look like a "new arrival"
   // chime for an order the cook thought they'd closed).
+  // Upgrade (2026-06-13): tapping PAID BY CUSTOMER now (1) asks for the tender,
+  // (2) records the order as paid on the server, and (3) auto-prints the GST
+  // receipt to .66 with a PAID box. Cancelling the tender leaves the order active.
   window.markPaid = async function(orderId) {
-    const card = document.getElementById('card-' + orderId);
     if (paidInFlight.has(orderId)) return;
+    const order = orderData[orderId];
+
+    // Hold the in-flight lock across the prompt so a double-tap can't open two
+    // dialogs or double-archive; release it if the staff cancel.
     paidInFlight.add(orderId);
+    const method = await askTender(order);
+    if (method === null) { paidInFlight.delete(orderId); return; }   // cancelled
+
+    const card = document.getElementById('card-' + orderId);
     // Visually disable both buttons in case there's a double-tap.
     if (card) card.classList.add('done');
 
-    const resp = await syncOrder(orderId, { status: 'done' });
+    // Record paid + done on the server — the source of truth for reports,
+    // reloads and reprints. The customer just paid at the counter (cash/card).
+    const resp = await syncOrder(orderId, { status: 'done', paymentStatus: 'paid', paymentMethod: method });
     if (!resp || !resp.ok) {
       // Revert the optimistic fade and tell the cook.
       paidInFlight.delete(orderId);
@@ -2435,10 +2509,13 @@
       return;
     }
 
-    // Server confirmed. Now archive locally.
-    if (orderData[orderId]) {
-      const order = orderData[orderId];
+    // Server confirmed. Mark paid locally so the receipt (and any reprint from
+    // history) shows the PAID box with the chosen tender, then auto-print to .66.
+    if (order) {
+      order.paymentStatus = 'paid';
+      order.paymentMethod = method;
       order.completedAt = new Date().toISOString();
+      printReceipt(orderId);   // fire-and-forget; records a reprintable fail if .66 is unreachable
       if (!completedOrders.some(c => c.id === order.id)) {   // poll hydration may have archived it already
         completedOrders.unshift(order);
         if (completedOrders.length > 50) completedOrders.pop();
