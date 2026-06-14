@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Admin · Restaurants</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14110e; --panel:#1d1812; --line:#3a3026; --gold:#e8c477; --ink:#f3ead9; --muted:#a99a82; --green:#5fb87a; --red:#d9774e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:22px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header h1 { font-family:Georgia,serif; font-size:22px; margin:0; color:var(--gold); font-weight:normal; }
+  header .sub { color:var(--muted); font-size:13px; }
+  .wrap { max-width:980px; margin:0 auto; padding:24px 20px 80px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:22px; }
+  .panel h2 { font-family:Georgia,serif; font-weight:normal; color:var(--gold); margin:0 0 14px; font-size:17px; }
+  h3 { margin:0; font-size:18px; font-weight:500; color:var(--ink); }
+  .muted-sub { color:var(--muted); font-size:14px; margin:4px 0 18px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:0 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+  input, textarea, select { width:100%; background:#0f0c09; border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:9px 11px; font-size:14px; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { outline:none; border-color:var(--gold); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+  .field { margin-bottom:14px; }
+  .hint { font-size:11px; color:var(--muted); margin-top:3px; }
+  code { background:#0f0c09; border:1px solid var(--line); border-radius:6px; padding:2px 6px; font-size:12px; }
+  button { background:var(--gold); color:#1a1208; border:none; border-radius:8px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:7px; }
+  button:hover { filter:brightness(1.07); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--gold); border:1px solid var(--line); font-weight:500; }
+  .msg { padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; display:none; }
+  .msg.err { background:rgba(217,119,78,.15); color:#f0a988; border:1px solid rgba(217,119,78,.4); }
+  .result { border:1px dashed var(--gold); border-radius:10px; padding:16px; background:rgba(232,196,119,.06); }
+  .kv { display:flex; gap:10px; align-items:center; margin:7px 0; font-size:13px; flex-wrap:wrap; }
+  .kv span.k { color:var(--muted); min-width:140px; }
+  .kv code { flex:1; min-width:200px; word-break:break-all; padding:5px 8px; }
+  .copy { font-size:11px; padding:5px 9px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  td a { color:var(--gold); text-decoration:none; }
+  td a:hover { text-decoration:underline; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; border:1px solid var(--line); color:var(--muted); }
+  .tokenbar { display:flex; gap:10px; align-items:flex-end; }
+  .tokenbar .field { flex:1; margin:0; }
+  .swatch { width:22px; height:22px; border-radius:5px; border:1px solid var(--line); display:inline-block; vertical-align:middle; }
+
+  /* ── Wizard ── */
+  .wizard-grid { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:26px; align-items:start; }
+  @media (max-width:720px){ .wizard-grid { grid-template-columns:1fr; } }
+  .stepper { position:relative; display:grid; grid-template-columns:repeat(4,1fr); margin-bottom:26px; }
+  .stepper .line { position:absolute; top:16px; left:12.5%; right:12.5%; height:2px; background:var(--line); }
+  .stepper .st { position:relative; text-align:center; }
+  .stepper .dot { width:34px; height:34px; border-radius:50%; margin:0 auto; display:flex; align-items:center; justify-content:center; font-size:14px; background:var(--panel); border:1.5px solid var(--line); color:var(--muted); }
+  .stepper .st.active .dot, .stepper .st.done .dot { background:var(--gold); border-color:var(--gold); color:#1a1208; font-weight:600; }
+  .stepper .lbl { font-size:12px; margin-top:6px; color:var(--muted); }
+  .stepper .st.active .lbl { color:var(--ink); }
+  .swatches { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .swatch-c { width:30px; height:30px; border-radius:50%; cursor:pointer; border:none; }
+  .swatch-c.sel { outline:2px solid var(--gold); outline-offset:2px; }
+  .sec { border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; }
+  .sec-head { display:flex; gap:8px; margin-bottom:10px; align-items:center; }
+  .sec-title { flex:1; font-weight:500; }
+  .dish { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .dish .d-photo { width:38px; height:38px; border-radius:8px; border:1.5px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--muted); flex-shrink:0; }
+  .dish .d-name { flex:1; min-width:0; }
+  .dish .d-price { width:84px; flex-shrink:0; }
+  .rm { background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:18px; padding:0 6px; line-height:1; }
+  .rm:hover { color:var(--red); filter:none; }
+  .add-dish, .add-sec, .dashbtn { background:transparent; border:1px dashed var(--line); color:var(--gold); font-size:13px; padding:7px 12px; cursor:pointer; border-radius:8px; font-weight:500; }
+  .wiz-nav { display:flex; gap:10px; align-items:center; margin-top:24px; }
+  .pv-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:8px; }
+  /* Live preview = faithful mini of the real customer menu (cream + Fraunces). */
+  .phone { background:#f4ede0; border:1px solid var(--line); border-radius:24px; overflow:hidden; color:#2b1f17; font-family:'Inter Tight',-apple-system,sans-serif; }
+  .pv-eyebrow { font-size:10px; letter-spacing:.15em; text-transform:uppercase; font-weight:600; }
+  .pv-table { font-size:10px; color:#8a7c69; margin-top:2px; }
+  .pv-pills { display:flex; gap:6px; padding:12px 0 12px 15px; overflow:hidden; }
+  .pv-pill { font-size:8.5px; letter-spacing:.08em; text-transform:uppercase; font-weight:600; padding:5px 10px; border-radius:20px; white-space:nowrap; }
+  .pv-title { font-family:'Fraunces',Georgia,serif; font-style:italic; font-weight:400; font-size:31px; line-height:.9; padding:2px 15px 0; }
+  .pv-sub { font-size:9px; letter-spacing:.15em; text-transform:uppercase; color:#9a8c76; padding:9px 15px 4px; }
+  .pv-row { display:flex; align-items:stretch; }
+  .pv-rtext { flex:1; min-width:0; padding:12px 0 12px 15px; border-bottom:1.2px dotted #d2c4ab; }
+  .pv-iname { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:15px; line-height:1.06; }
+  .pv-iprice { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:14px; white-space:nowrap; }
+  .pv-rimg { width:84px; flex-shrink:0; align-self:stretch; background:#ece1cd; display:flex; align-items:center; justify-content:center; min-height:64px; }
+  .pv-bar { padding:12px 15px; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#f4ede0; }
+  .pv-empty { color:#a99a82; font-size:12px; text-align:center; padding:26px 14px; }
+  .done-check { width:54px; height:54px; border-radius:50%; background:rgba(95,184,122,.15); color:var(--green); display:flex; align-items:center; justify-content:center; margin:0 auto 10px; font-size:28px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Platform Admin</h1>
+  <span class="sub">Provision &amp; manage restaurants on the shared ordering backend</span>
+</header>
+<div class="wrap">
+
+  <div class="panel" id="authPanel">
+    <h2>Sign in</h2>
+    <div class="tokenbar">
+      <div class="field">
+        <label>Platform admin token</label>
+        <input type="password" id="adminToken" placeholder="PLATFORM_ADMIN_TOKEN" autocomplete="off" />
+        <div class="hint">Stored in this browser only. Set <code>PLATFORM_ADMIN_TOKEN</code> on the backend.</div>
+      </div>
+      <button id="signIn">Unlock</button>
+    </div>
+    <div class="msg err" id="authMsg"></div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <div class="panel">
+      <h2>Add a restaurant</h2>
+      <div class="wizard-grid">
+        <div>
+          <div class="stepper" id="stepper">
+            <div class="line"></div>
+            <div class="st active"><div class="dot">1</div><div class="lbl">Basics</div></div>
+            <div class="st"><div class="dot">2</div><div class="lbl">Style</div></div>
+            <div class="st"><div class="dot">3</div><div class="lbl">Menu</div></div>
+            <div class="st"><div class="dot">4</div><div class="lbl">Done</div></div>
+          </div>
+
+          <div id="step-1">
+            <h3>Let's set up your restaurant</h3>
+            <p class="muted-sub">Takes about 2 minutes — you can change anything later.</p>
+            <div class="field">
+              <label>What's it called?</label>
+              <input id="w_name" placeholder="e.g. Joe's Diner" autocomplete="off" />
+            </div>
+            <div class="hint" id="slugHint">Its web address will be <code>…/?r=</code></div>
+          </div>
+
+          <div id="step-2" style="display:none">
+            <h3>Pick your look</h3>
+            <p class="muted-sub">Your brand colour shows in the menu header and accents.</p>
+            <div class="field">
+              <label>Brand colour</label>
+              <div class="swatches" id="swatches"></div>
+              <input type="color" id="w_color_custom" value="#c25a3a" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
+            </div>
+            <div class="field">
+              <label>Logo (optional)</label>
+              <div style="display:flex; align-items:center; gap:12px;">
+                <div id="w_logo_preview" style="width:48px;height:48px;border-radius:10px;border:1.5px dashed var(--line);display:flex;align-items:center;justify-content:center;color:var(--muted);overflow:hidden;flex-shrink:0;font-size:18px;">+</div>
+                <label class="dashbtn" style="cursor:pointer;">Choose image<input type="file" id="w_logo" accept="image/*" style="display:none;" /></label>
+              </div>
+              <div class="hint">Shows in the menu header. A PNG with a transparent background looks best.</div>
+            </div>
+            <div class="grid3">
+              <div class="field"><label>Currency symbol</label><input id="w_currency" value="$" /></div>
+              <div class="field"><label>Currency code</label><input id="w_currencyCode" value="NZD" /></div>
+              <div class="field"><label>Tax rate</label><input id="w_gst" value="0.15" /><div class="hint">0.15 = 15% incl.</div></div>
+            </div>
+            <div class="grid">
+              <div class="field"><label>Timezone</label><input id="w_tz" value="Pacific/Auckland" /></div>
+              <div class="field"><label>Locale</label><input id="w_locale" value="en-NZ" /></div>
+            </div>
+          </div>
+
+          <div id="step-3" style="display:none">
+            <h3>Add your menu</h3>
+            <p class="muted-sub">Sections and dishes. Photos are added later in the menu editor — they appear automatically.</p>
+            <div id="menuEditor"></div>
+          </div>
+
+          <div id="step-4" style="display:none">
+            <div id="doneBox"></div>
+          </div>
+
+          <div class="msg err" id="wizMsg"></div>
+          <div class="wiz-nav" id="wizNav">
+            <button class="ghost" id="backBtn">Back</button>
+            <button id="nextBtn" style="margin-left:auto;">Continue</button>
+          </div>
+        </div>
+
+        <div id="previewWrap">
+          <div class="pv-label">Live preview</div>
+          <div class="phone" id="preview"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Print QR codes</h2>
+      <div class="grid3">
+        <div class="field">
+          <label>Restaurant</label>
+          <select id="qr_slug"></select>
+        </div>
+        <div class="field">
+          <label>Tables</label>
+          <input id="qr_tables" value="1-20" />
+          <div class="hint">Count (20), range (1-22), or list (1,2,5)</div>
+        </div>
+        <div class="field" style="display:flex; align-items:flex-end;">
+          <button id="qr_go" style="width:100%;">Open printable pack</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Customer site URL</label>
+        <input id="qr_base" placeholder="https://your-menu.netlify.app" />
+        <div class="hint">Where the customer app is hosted — the QR codes point here. Remembered in this browser.</div>
+      </div>
+      <div class="msg err" id="qrMsg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Restaurants <button class="ghost copy" id="refresh" style="float:right;font-size:12px;padding:6px 12px">Refresh</button></h2>
+      <table>
+        <thead><tr><th>Theme</th><th>Name</th><th>Slug</th><th>Currency</th><th>Token</th><th>Links</th></tr></thead>
+        <tbody id="tlist"><tr><td colspan="6" style="color:var(--muted)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var TOKEN = null;
+  try { TOKEN = localStorage.getItem("platformToken"); } catch(e){}
+  var $ = function(id){ return document.getElementById(id); };
+  function show(el, msg, kind){ el.textContent = msg; el.className = "msg " + kind; el.style.display = "block"; }
+  function hide(el){ el.style.display = "none"; }
+  function headers(){ return { "Authorization":"Bearer "+TOKEN, "Content-Type":"application/json" }; }
+  function origin(){ return window.location.origin; }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+  function slugify(s){ return String(s||"").toLowerCase().trim().replace(/[\s_]+/g,"-").replace(/[^a-z0-9-]/g,"").replace(/-+/g,"-").replace(/^-+|-+$/g,"").slice(0,40); }
+  var PHOTO_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5L5 20"/></svg>';
+
+  // ── Auth ──
+  function enterApp(){ $("authPanel").style.display="none"; $("app").style.display="block"; initWizard(); loadList(); }
+  function tryAuth(tok){
+    return fetch("/admin/tenants", { headers:{ "Authorization":"Bearer "+tok } })
+      .then(function(r){ if(r.ok) return r.json(); throw new Error(r.status===401?"Wrong token":"Backend error "+r.status); });
+  }
+  $("signIn").onclick = function(){
+    var tok = $("adminToken").value.trim();
+    if(!tok){ show($("authMsg"),"Enter the platform token","err"); return; }
+    tryAuth(tok).then(function(){ TOKEN=tok; try{localStorage.setItem("platformToken",tok);}catch(e){} hide($("authMsg")); enterApp(); })
+      .catch(function(e){ show($("authMsg"), e.message, "err"); });
+  };
+
+  // ── Wizard state ──
+  var STEP = 1;
+  var PRESETS = ["#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c","#854f0b"];
+  var state = {};
+  function freshState(){
+    return { name:"", slug:"", themeColor:"#c25a3a", currency:"$", currencyCode:"NZD", gstRate:"0.15",
+             timezone:"Pacific/Auckland", locale:"en-NZ", logoFile:null, logoPreviewUrl:null,
+             sections:[{ title:"", items:[{ name:"", price:"" }] }] };
+  }
+
+  function initWizard(){
+    state = freshState();
+    // bind step-1
+    $("w_name").value = "";
+    $("w_name").oninput = function(){
+      state.name = this.value; state.slug = slugify(this.value);
+      $("slugHint").innerHTML = 'Its web address will be <code>…/?r=' + esc(state.slug) + '</code>';
+      renderPreview();
+    };
+    // bind step-2 region fields
+    bindField("w_currency","currency"); bindField("w_currencyCode","currencyCode");
+    bindField("w_gst","gstRate"); bindField("w_tz","timezone"); bindField("w_locale","locale");
+    $("w_color_custom").value = state.themeColor;
+    $("w_color_custom").oninput = function(){ state.themeColor = this.value; renderSwatches(); renderPreview(); };
+    // logo upload (optional) — local preview now, uploaded to Supabase after create
+    $("w_logo").value = "";
+    $("w_logo_preview").innerHTML = "+";
+    $("w_logo").onchange = function(){
+      var f = this.files && this.files[0];
+      if(!f) return;
+      state.logoFile = f;
+      if(state.logoPreviewUrl){ try{ URL.revokeObjectURL(state.logoPreviewUrl); }catch(e){} }
+      state.logoPreviewUrl = URL.createObjectURL(f);
+      $("w_logo_preview").innerHTML = '<img src="'+state.logoPreviewUrl+'" style="width:100%;height:100%;object-fit:contain;" alt="logo" />';
+      renderPreview();
+    };
+    renderSwatches(); renderMenuEditor(); renderPreview(); goStep(1);
+  }
+  function bindField(id, key){ var el=$(id); el.value = state[key]; el.oninput = function(){ state[key]=this.value; renderPreview(); }; }
+
+  function renderSwatches(){
+    var h = $("swatches");
+    h.innerHTML = PRESETS.map(function(c){
+      var sel = c.toLowerCase()===String(state.themeColor).toLowerCase() ? " sel" : "";
+      return '<span class="swatch-c'+sel+'" data-c="'+c+'" style="background:'+c+'"></span>';
+    }).join("");
+    h.querySelectorAll(".swatch-c").forEach(function(el){
+      el.onclick = function(){ state.themeColor = el.getAttribute("data-c"); $("w_color_custom").value = state.themeColor; renderSwatches(); renderPreview(); };
+    });
+  }
+
+  // ── Menu editor (re-rendered only on structural change to preserve focus) ──
+  function renderMenuEditor(){
+    var host = $("menuEditor");
+    host.innerHTML = state.sections.map(function(sec, si){
+      return '<div class="sec">'
+        + '<div class="sec-head">'
+        +   '<input class="sec-title" data-si="'+si+'" value="'+esc(sec.title)+'" placeholder="Section name (e.g. Breakfast)" />'
+        +   '<button class="rm rm-sec" data-si="'+si+'" title="Remove section">&times;</button>'
+        + '</div>'
+        + sec.items.map(function(it, ii){
+            return '<div class="dish">'
+              + '<div class="d-photo" title="Add photos in the menu editor">'+PHOTO_SVG+'</div>'
+              + '<input class="d-name" data-si="'+si+'" data-ii="'+ii+'" value="'+esc(it.name)+'" placeholder="Dish name" />'
+              + '<input class="d-price" data-si="'+si+'" data-ii="'+ii+'" value="'+esc(it.price)+'" placeholder="0.00" inputmode="decimal" />'
+              + '<button class="rm rm-dish" data-si="'+si+'" data-ii="'+ii+'" title="Remove dish">&times;</button>'
+            + '</div>';
+          }).join("")
+        + '<button class="add-dish" data-si="'+si+'">+ Add dish</button>'
+      + '</div>';
+    }).join("") + '<button class="add-sec" id="addSec">+ Add section</button>';
+
+    host.querySelectorAll(".sec-title").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].title = el.value; renderPreview(); }; });
+    host.querySelectorAll(".d-name").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].items[+el.dataset.ii].name = el.value; renderPreview(); }; });
+    host.querySelectorAll(".d-price").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].items[+el.dataset.ii].price = el.value; renderPreview(); }; });
+    host.querySelectorAll(".rm-sec").forEach(function(el){ el.onclick = function(){ state.sections.splice(+el.dataset.si,1); if(!state.sections.length) state.sections.push({title:"",items:[{name:"",price:""}]}); renderMenuEditor(); renderPreview(); }; });
+    host.querySelectorAll(".rm-dish").forEach(function(el){ el.onclick = function(){ state.sections[+el.dataset.si].items.splice(+el.dataset.ii,1); renderMenuEditor(); renderPreview(); }; });
+    host.querySelectorAll(".add-dish").forEach(function(el){ el.onclick = function(){ state.sections[+el.dataset.si].items.push({name:"",price:""}); renderMenuEditor(); renderPreview(); }; });
+    $("addSec").onclick = function(){ state.sections.push({title:"",items:[{name:"",price:""}]}); renderMenuEditor(); renderPreview(); };
+  }
+
+  // ── Live preview — faithful mini of the real customer menu ──
+  // A muted plate ring stands in for each dish photo (uploaded later in the editor).
+  var PLATE_SVG = '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#c4b399" stroke-width="1.1"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/></svg>';
+  function renderPreview(){
+    var color = state.themeColor || "#c25a3a";
+    var cur = state.currency || "$";
+    var name = ((state.name||"").trim() || "Your restaurant");
+    // sections that have any content
+    var secs = state.sections.filter(function(s){ return (s.title||"").trim() || s.items.some(function(i){ return (i.name||"").trim(); }); });
+    // category pills (first active, like the real app's selected category)
+    var pills = (secs.length ? secs : [{title:"Menu"}]).map(function(s, i){
+      var t = (s.title||"").trim() || "Section";
+      var style = i===0 ? "background:#2b1f17;color:#f4ede0;" : "background:transparent;color:#8a7c69;border:1px solid #d2c4ab;";
+      return '<span class="pv-pill" style="'+style+'">'+esc(t)+'</span>';
+    }).join("");
+    // the first section is the visible category
+    var first = secs[0];
+    var title = first ? ((first.title||"").trim() || "Menu") : "Menu";
+    var items = first ? first.items.filter(function(i){ return (i.name||"").trim(); }) : [];
+    var rows = items.map(function(it, idx){
+      var pn = parseFloat(it.price);
+      var price = (it.price!=="" && !isNaN(pn)) ? cur + pn.toFixed(2) : "";
+      var last = idx === items.length - 1 ? "border-bottom:none;" : "";
+      return '<div class="pv-row">'
+        + '<div class="pv-rtext" style="'+last+'"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;"><span class="pv-iname">'+esc(it.name)+'</span><span class="pv-iprice">'+price+'</span></div></div>'
+        + '<div class="pv-rimg">'+PLATE_SVG+'</div>'
+      + '</div>';
+    }).join("");
+    var logo = state.logoPreviewUrl ? '<img src="'+state.logoPreviewUrl+'" style="height:26px;width:auto;object-fit:contain;display:block;margin-bottom:7px;" alt="logo" />' : '';
+    $("preview").innerHTML =
+      '<div style="padding:15px 15px 0;">'+logo+'<div class="pv-eyebrow" style="color:'+color+';">'+esc(name)+'</div><div class="pv-table">Table 10 · ordering</div></div>'
+      + '<div class="pv-pills">'+pills+'</div>'
+      + '<div class="pv-title">'+esc(title)+'</div>'
+      + '<div class="pv-sub">Served from open till close</div>'
+      + (rows || '<div class="pv-empty">Your dishes appear here as you add them — each with its own photo.</div>')
+      + '<div class="pv-bar" style="background:'+color+';"><span style="opacity:.9;">Your table</span><span style="font-family:\'Fraunces\',Georgia,serif;font-size:14px;">View order</span></div>';
+  }
+
+  // ── Steps ──
+  function goStep(n){ STEP=n; renderStep(); }
+  function renderStep(){
+    for(var i=1;i<=4;i++){ var el=$("step-"+i); if(el) el.style.display = (i===STEP)?"block":"none"; }
+    document.querySelectorAll(".stepper .st").forEach(function(s, idx){
+      var n=idx+1; s.className = "st" + (n===STEP?" active":(n<STEP?" done":""));
+      s.querySelector(".dot").innerHTML = (n<STEP) ? "&#10003;" : String(n);
+    });
+    $("backBtn").style.visibility = (STEP>1 && STEP<4) ? "visible" : "hidden";
+    $("nextBtn").style.display = (STEP<4) ? "inline-flex" : "none";
+    $("nextBtn").textContent = (STEP===3) ? "Create restaurant" : "Continue";
+    $("previewWrap").style.display = (STEP<4) ? "block" : "none";
+    $("wizNav").style.display = (STEP<4) ? "flex" : "none";
+    hide($("wizMsg"));
+  }
+  $("nextBtn").onclick = function(){
+    if(STEP===1){ if(!(state.name||"").trim()){ show($("wizMsg"),"Give your restaurant a name to continue.","err"); return; } goStep(2); }
+    else if(STEP===2){ goStep(3); }
+    else if(STEP===3){ createRestaurant(); }
+  };
+  $("backBtn").onclick = function(){ if(STEP>1 && STEP<4) goStep(STEP-1); };
+
+  function buildMenuPayload(){
+    var menu = { version:1, categoryOrder:[], categories:{} }, usedId = {};
+    state.sections.forEach(function(sec){
+      var title=(sec.title||"").trim();
+      var items=sec.items.filter(function(i){ return (i.name||"").trim(); });
+      if(!title && !items.length) return;
+      var base=slugify(title||"section")||"section", slug=base, n=1;
+      while(menu.categories[slug]){ n++; slug=base+"-"+n; }
+      menu.categoryOrder.push(slug);
+      menu.categories[slug] = { title: title||"Menu", subtitle:"", items: items.map(function(it){
+        var ib=slugify(it.name)||"item", id=ib, k=1;
+        while(usedId[id]){ k++; id=ib+"-"+k; } usedId[id]=1;
+        var item={ id:id, name:(it.name||"").trim() };
+        var pn=parseFloat(it.price); if(!isNaN(pn) && pn>=0) item.price=Math.round(pn*100)/100;
+        return item;
+      })};
+    });
+    return menu;
+  }
+
+  function createRestaurant(){
+    hide($("wizMsg"));
+    var payload = {
+      name: state.name.trim(),
+      slug: state.slug || undefined,
+      themeColor: state.themeColor,
+      currency: (state.currency||"$").trim() || "$",
+      currencyCode: (state.currencyCode||"NZD").trim() || "NZD",
+      gstRate: parseFloat(state.gstRate) || 0,
+      timezone: (state.timezone||"Pacific/Auckland").trim() || "Pacific/Auckland",
+      locale: (state.locale||"en-NZ").trim() || "en-NZ",
+      menu: buildMenuPayload()
+    };
+    $("nextBtn").disabled = true;
+    fetch("/admin/tenants", { method:"POST", headers:headers(), body:JSON.stringify(payload) })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        $("nextBtn").disabled = false;
+        if(!res.ok){ show($("wizMsg"), res.j.error || "Failed to create restaurant", "err"); return; }
+        var d = res.j;
+        var finish = function(){ renderDone(d); goStep(4); loadList(); };
+        if(state.logoFile){
+          var fd = new FormData(); fd.append("logo", state.logoFile);
+          fetch("/admin/tenants/"+encodeURIComponent(d.slug)+"/logo", { method:"POST", headers:{ "Authorization":"Bearer "+TOKEN }, body:fd })
+            .then(function(r){ return r.json().catch(function(){ return {}; }); })
+            .then(function(lr){ if(lr && lr.logoUrl){ d.logoUrl = lr.logoUrl; } else if(lr && lr.error){ d.logoNote = lr.error; } })
+            .catch(function(){})
+            .then(finish);
+        } else { finish(); }
+      })
+      .catch(function(e){ $("nextBtn").disabled = false; show($("wizMsg"), e.message, "err"); });
+  }
+
+  function renderDone(d){
+    $("doneBox").innerHTML =
+      '<div style="text-align:center; margin-bottom:14px;">'
+      +   '<div class="done-check">&#10003;</div>'
+      +   '<h3>&ldquo;'+esc(d.name)+'&rdquo; is live</h3>'
+      +   '<p class="muted-sub" style="margin-top:4px;">Save the staff token below — it is shown once.</p>'
+      + '</div>'
+      + '<div class="result">'
+      +   '<div class="kv"><span class="k">Staff token</span><code id="r_token">'+esc(d.staffToken)+'</code><button class="ghost copy" data-c="r_token">Copy</button></div>'
+      +   '<div class="kv"><span class="k">Dashboard</span><code id="r_dash">'+origin()+esc(d.dashboardUrl)+'</code><button class="ghost copy" data-c="r_dash">Copy</button></div>'
+      +   '<div class="kv"><span class="k">Menu editor &middot; add photos</span><code id="r_menu">'+origin()+esc(d.menuAdminUrl)+'</code><button class="ghost copy" data-c="r_menu">Copy</button></div>'
+      +   '<div class="kv"><span class="k">Customer link</span><code id="r_cust">'+origin()+'/'+esc(d.customerQuery)+'</code><button class="ghost copy" data-c="r_cust">Copy</button></div>'
+      + '</div>'
+      + (d.logoNote ? '<div class="msg err" style="display:block;">Logo not saved: '+esc(d.logoNote)+' — you can add it later in the menu editor.</div>' : '')
+      + '<div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">'
+      +   '<button id="donePrintQr">Print QR codes</button>'
+      +   '<button class="ghost" id="doneAnother">Set up another</button>'
+      + '</div>';
+    $("donePrintQr").onclick = function(){ openQrPack(d.slug); };
+    $("doneAnother").onclick = function(){ initWizard(); };
+  }
+
+  // ── QR pack ──
+  function openQrPack(slug){
+    var base=""; try { base = localStorage.getItem("qrBase") || ""; } catch(e){}
+    var sel=$("qr_slug"); if(sel) sel.value = slug;
+    if(!/^https?:\/\//i.test(base)){
+      $("qr_base").focus();
+      $("qr_base").scrollIntoView({ behavior:"smooth", block:"center" });
+      show($("qrMsg"), "Enter your customer site URL above, then click Open printable pack.", "err");
+      return;
+    }
+    var tables = ($("qr_tables").value.trim()) || "1-20";
+    window.open("/admin/qr-pack?token="+encodeURIComponent(TOKEN)+"&slug="+encodeURIComponent(slug)+"&base="+encodeURIComponent(base)+"&tables="+encodeURIComponent(tables), "_blank");
+  }
+  try { var savedBase = localStorage.getItem("qrBase"); if(savedBase) $("qr_base").value = savedBase; } catch(e){}
+  $("qr_go").onclick = function(){
+    hide($("qrMsg"));
+    var slug = $("qr_slug").value;
+    var base = $("qr_base").value.trim();
+    var tables = $("qr_tables").value.trim() || "1-20";
+    if(!slug){ show($("qrMsg"),"Create a restaurant first","err"); return; }
+    if(!/^https?:\/\//i.test(base)){ show($("qrMsg"),"Enter the customer site URL (https://…)","err"); return; }
+    try { localStorage.setItem("qrBase", base); } catch(e){}
+    window.open("/admin/qr-pack?token="+encodeURIComponent(TOKEN)+"&slug="+encodeURIComponent(slug)+"&base="+encodeURIComponent(base)+"&tables="+encodeURIComponent(tables), "_blank");
+  };
+
+  // ── Restaurants list ──
+  function loadList(){
+    fetch("/admin/tenants", { headers: headers() }).then(function(r){ return r.json(); }).then(function(list){
+      var tb = $("tlist"), sel = $("qr_slug");
+      if(sel){
+        var prev = sel.value;
+        sel.innerHTML = (Array.isArray(list)?list:[]).map(function(t){ return '<option value="'+esc(t.slug)+'">'+esc(t.name)+' ('+esc(t.slug)+')</option>'; }).join("");
+        if(prev) sel.value = prev;
+      }
+      if(!Array.isArray(list) || !list.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--muted)">No restaurants yet.</td></tr>'; return; }
+      tb.innerHTML = list.map(function(t){
+        var c = t.config||{};
+        var cust = origin()+"/?r="+t.slug;
+        return '<tr>'+
+          '<td><span class="swatch" style="background:'+(c.themeColor||"#888")+'"></span></td>'+
+          '<td>'+esc(t.name)+'</td>'+
+          '<td><code style="font-size:11px">'+esc(t.slug)+'</code></td>'+
+          '<td>'+esc(c.currencyCode||"")+'</td>'+
+          '<td>'+(t.hasToken?'<span class="pill">set</span>':'<span class="pill" style="color:var(--red)">none</span>')+'</td>'+
+          '<td><a href="'+cust+'" target="_blank">customer</a></td>'+
+          '</tr>';
+      }).join("");
+    });
+  }
+  $("refresh").onclick = loadList;
+
+  document.addEventListener("click", function(e){
+    var b = e.target.closest && e.target.closest(".copy[data-c]");
+    if(!b) return;
+    var node = $(b.getAttribute("data-c")); if(!node) return;
+    var txt = node.textContent;
+    navigator.clipboard && navigator.clipboard.writeText(txt);
+    var old = b.textContent; b.textContent = "Copied"; setTimeout(function(){ b.textContent = old; }, 1200);
+  });
+
+  // Auto-enter if we already have a token that still works.
+  if(TOKEN){ tryAuth(TOKEN).then(enterApp).catch(function(){ TOKEN=null; }); }
+})();
+</script>
+</body>
+</html>
