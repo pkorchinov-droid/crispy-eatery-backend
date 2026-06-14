@@ -11,6 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Resend } = require("resend");
+const QRCode = require("qrcode");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -234,14 +235,45 @@ setInterval(() => {
   for (const [k, v] of rlBuckets) if (now > v.resetAt) rlBuckets.delete(k);
 }, 120000).unref();
 
-// ── Auth middleware ────────────────────────────────────────
+// ── Auth & tenant-resolution middleware ────────────────────
+// Staff routes: the bearer/query token identifies BOTH the user and the tenant.
+// We look up which restaurant owns that token and attach its store.
 function requireStaff(req, res, next) {
-  if (!STAFF_TOKEN) {
-    return res.status(503).json({ error: "Staff auth not configured" });
+  const t = findTenantByToken(getReqToken(req));
+  if (!t) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-  const header = req.get("authorization") || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : req.query.token;
-  if (!token || !safeEqual(String(token), STAFF_TOKEN)) {
+  req.tenant = t;
+  req.store = tenantStore(t.slug);
+  next();
+}
+
+// Public routes: resolve the tenant from a valid staff token if present (so the
+// backoffice pages, which always carry the token, hit their own data), else
+// from the ?r=<slug> query param / X-Tenant header, else the default tenant.
+function resolveTenant(req, res, next) {
+  if (req.tenant) return next();
+  const byToken = findTenantByToken(getReqToken(req));
+  if (byToken) {
+    req.tenant = byToken;
+    req.store = tenantStore(byToken.slug);
+    return next();
+  }
+  const slug = normalizeSlug((req.query && req.query.r) || req.get("x-tenant") || DEFAULT_TENANT);
+  const t = getTenant(slug);
+  if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+  req.tenant = t;
+  req.store = tenantStore(t.slug);
+  next();
+}
+
+// Platform owner (you) — guards the provisioning console. Separate secret from
+// any restaurant's staff token.
+function requirePlatformAdmin(req, res, next) {
+  const want = process.env.PLATFORM_ADMIN_TOKEN || "";
+  if (!want) return res.status(503).json({ error: "Platform admin not configured (set PLATFORM_ADMIN_TOKEN)" });
+  const tok = getReqToken(req);
+  if (!tok || !safeEqual(String(tok), want)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -261,30 +293,201 @@ function atomicWriteSync(filePath, content) {
   fs.renameSync(tmp, filePath);
 }
 
-// ── Order storage ──────────────────────────────────────────
-const ORDERS_FILE = path.join(__dirname, "orders.json");
+// ══════════════════════════════════════════════════════════
+// ── MULTI-TENANT STORAGE ───────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// Each restaurant ("tenant") gets its own data namespace. On disk that is
+// data/<slug>/{orders,menu,groups,customers}.json; in the Supabase mirror it is
+// the key "tenant:<slug>:<name>". The runtime source of truth is still the
+// local file (handlers stay synchronous); Supabase is the write-through backup
+// that survives Render's ephemeral disk wipe. A request resolves to one tenant
+// (by staff token, ?r= slug, or the default) and gets a `req.store` whose
+// load*/persist* methods read/write only that tenant's namespace.
+const DATA_DIR = path.join(__dirname, "data");
+const MENU_SEED_FILE = path.join(__dirname, "menu-seed.json");
+const TENANTS_FILE = path.join(DATA_DIR, "tenants.json");
+// Requests with no ?r= and no staff token fall back to this tenant, so the QR
+// codes already printed for the original café keep working unchanged.
+const DEFAULT_TENANT = normalizeSlug(process.env.DEFAULT_TENANT || "crispy");
 
-function loadOrders() {
+function ensureDir(d) { try { fs.mkdirSync(d, { recursive: true }); } catch {} }
+function readJson(file, fallback) {
   try {
-    if (fs.existsSync(ORDERS_FILE)) {
-      const raw = fs.readFileSync(ORDERS_FILE, "utf8");
-      if (!raw.trim()) return [];
-      return JSON.parse(raw);
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, "utf8");
+      if (raw.trim()) return JSON.parse(raw);
     }
   } catch (e) {
-    console.error("[orders] Error loading orders file:", e.message);
+    console.error("[storage] read " + path.basename(file) + ":", e.message);
   }
-  return [];
+  return fallback;
+}
+function writeJson(file, value) {
+  ensureDir(path.dirname(file));
+  atomicWriteSync(file, JSON.stringify(value, null, 2));
+}
+function emptyMenu() {
+  return { version: 1, updatedAt: new Date().toISOString(), categoryOrder: [], categories: {} };
+}
+function tKey(slug, name) { return "tenant:" + slug + ":" + name; }
+
+// Factory: a per-tenant store with the same load*/persist* surface the handlers
+// already use, so call-sites stay `store.loadOrders()` etc.
+function tenantStore(slug) {
+  const dir = path.join(DATA_DIR, slug);
+  const ordersFile = path.join(dir, "orders.json");
+  const menuFile = path.join(dir, "menu.json");
+  const groupsFile = path.join(dir, "groups.json");
+  const customersFile = path.join(dir, "customers.json");
+  return {
+    slug,
+    loadOrders() { const a = readJson(ordersFile, []); return Array.isArray(a) ? a : []; },
+    persistOrders(orders) {
+      writeJson(ordersFile, orders);
+      // Strip ephemeral dedup state from the backup copy (not worth mirroring).
+      const forBackup = orders.map((o) => { const { _lastAddHash, _lastAddAt, ...rest } = o; return rest; });
+      return mirrorToSupabase(tKey(slug, "orders"), forBackup);
+    },
+    loadMenu() {
+      // The default tenant seeds its first menu from the shipped menu-seed.json;
+      // every other restaurant starts empty and is filled via the admin UI.
+      if (!fs.existsSync(menuFile) && slug === DEFAULT_TENANT && fs.existsSync(MENU_SEED_FILE)) {
+        try {
+          ensureDir(dir);
+          atomicWriteSync(menuFile, fs.readFileSync(MENU_SEED_FILE, "utf8"));
+          console.log("[menu] seeded " + slug + " menu from menu-seed.json");
+        } catch (e) { console.error("[menu] seed failed:", e.message); }
+      }
+      const m = readJson(menuFile, null);
+      return (m && typeof m === "object") ? m : emptyMenu();
+    },
+    persistMenu(menu) {
+      menu.version = (menu.version || 0) + 1;
+      menu.updatedAt = new Date().toISOString();
+      writeJson(menuFile, menu);
+      return mirrorToSupabase(tKey(slug, "menu"), menu);
+    },
+    loadGroups() { const a = readJson(groupsFile, []); return Array.isArray(a) ? a : []; },
+    persistGroups(groups) { writeJson(groupsFile, groups); return mirrorToSupabase(tKey(slug, "groups"), groups); },
+    loadCustomers() { const a = readJson(customersFile, []); return Array.isArray(a) ? a : []; },
+    persistCustomers(customers) { writeJson(customersFile, customers); return mirrorToSupabase(tKey(slug, "customers"), customers); },
+  };
 }
 
-function persistOrders(orders) {
-  atomicWriteSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-  // Strip ephemeral dedup state from the backup copy (not worth mirroring).
-  const forBackup = orders.map((o) => {
-    const { _lastAddHash, _lastAddAt, ...rest } = o;
-    return rest;
+// ── Tenant registry ────────────────────────────────────────
+// One row per restaurant: { slug, name, config, staffTokenHash, createdAt }.
+// Stored as data/tenants.json + mirrored to Supabase under the key "tenants".
+// config carries everything that used to be hardcoded for Crispy (branding,
+// surcharge, GST rate, currency, timezone, email sender, feature flags).
+function baseConfig() {
+  return {
+    name: "Restaurant",
+    established: "",       // masthead tagline e.g. "Est. 2014" ("" hides it)
+    themeColor: "#c25a3a",
+    logoUrl: null,
+    currency: "$",        // display symbol
+    currencyCode: "NZD",  // ISO code for payment intents
+    gstRate: 0.15,        // tax-inclusive rate; receipt GST = total * rate/(1+rate)
+    locale: "en-NZ",
+    timezone: "Pacific/Auckland",
+    emailFrom: "",        // "Name <addr@domain>"; empty → generic sender
+    surcharge: {},        // category slug → dollars added on the online menu
+    surchargeDefault: 0,  // applied to categories not in the map
+    features: { groups: true, preorder: true, printing: true },
+  };
+}
+function mergeConfig(stored) {
+  stored = stored || {};
+  const b = baseConfig();
+  // Copy only DEFINED scalar overrides so a partial config (or an explicit
+  // `undefined`) never wipes a default. surcharge/features merge specially.
+  for (const k of Object.keys(stored)) {
+    if (k === "surcharge" || k === "features") continue;
+    if (stored[k] !== undefined) b[k] = stored[k];
+  }
+  b.surcharge = Object.assign({}, stored.surcharge || {});
+  b.features = Object.assign(b.features, stored.features || {});
+  return b;
+}
+const TENANTS = new Map(); // slug → { slug, name, config, staffTokenHash, createdAt }
+function hashToken(tok) { return crypto.createHash("sha256").update(String(tok)).digest("hex"); }
+function normalizeSlug(s) {
+  // Slugify: spaces/underscores → hyphens, drop the rest, collapse/trim hyphens.
+  // Idempotent (safe to apply on both write and lookup): "Joe's Diner" →
+  // "joes-diner", and "joes-diner" → "joes-diner".
+  return String(s || "")
+    .toLowerCase().trim()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+function loadTenantsIntoCache() {
+  const obj = readJson(TENANTS_FILE, {}) || {};
+  TENANTS.clear();
+  for (const slug of Object.keys(obj)) {
+    const rec = obj[slug] || {};
+    TENANTS.set(slug, {
+      slug,
+      name: rec.name || slug,
+      config: mergeConfig(rec.config),
+      staffTokenHash: rec.staffTokenHash || "",
+      createdAt: rec.createdAt || null,
+    });
+  }
+}
+function tenantsToDisk() {
+  const o = {};
+  for (const t of TENANTS.values()) {
+    o[t.slug] = { name: t.name, config: t.config, staffTokenHash: t.staffTokenHash, createdAt: t.createdAt };
+  }
+  return o;
+}
+function persistTenants() {
+  const snap = tenantsToDisk();
+  writeJson(TENANTS_FILE, snap);
+  return mirrorToSupabase("tenants", snap);
+}
+function getTenant(slug) { return TENANTS.get(normalizeSlug(slug)) || null; }
+function allTenants() { return [...TENANTS.values()]; }
+function saveTenant(rec) {
+  rec.config = mergeConfig(rec.config);
+  TENANTS.set(rec.slug, rec);
+  persistTenants();
+  return rec;
+}
+// Resolve a tenant from a staff token (sha256 + timing-safe compare across the
+// handful of tenants). The token IS the tenant identity for staff requests.
+function findTenantByToken(token) {
+  if (!token) return null;
+  const h = hashToken(token);
+  for (const t of TENANTS.values()) {
+    if (t.staffTokenHash && safeEqual(h, t.staffTokenHash)) return t;
+  }
+  return null;
+}
+// Boot fallback: if no tenants exist yet (fresh checkout, migration not run),
+// materialize the default café from the legacy STAFF_TOKEN + menu-seed so the
+// app works out of the box. The migration script is only needed to carry over
+// existing production data.
+function ensureDefaultTenant() {
+  if (TENANTS.size > 0) return;
+  const cfg = mergeConfig({
+    name: "Crispy Eatery",
+    established: "Est. 2014",
+    surcharge: { coffee: 0.20, tea: 0.20, signature: 0.20, "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60, sides: 0.20 },
+    surchargeDefault: 0.60,
+    emailFrom: "Crispy Eatery <bills@eatery.crispycatering.com>",
   });
-  return mirrorToSupabase("orders", forBackup);
+  saveTenant({
+    slug: DEFAULT_TENANT,
+    name: "Crispy Eatery",
+    config: cfg,
+    staffTokenHash: STAFF_TOKEN ? hashToken(STAFF_TOKEN) : "",
+    createdAt: new Date().toISOString(),
+  });
+  console.log("[tenant] auto-created default tenant '" + DEFAULT_TENANT + "'" + (STAFF_TOKEN ? "" : " (no STAFF_TOKEN → its dashboard is locked until a token is set)"));
 }
 
 function nextOrderId(orders) {
@@ -305,26 +508,10 @@ function nextOrderId(orders) {
   return `#${String(max + 1).padStart(3, "0")}`;
 }
 
-// ── Group (corporate pre-order) storage ────────────────────
+// ── Group (corporate pre-order) helpers ────────────────────
 // A "group" is one booking (company + date + arrival time) that many people join
-// by code and add their own NAMED order to — one combined bill. Mirrored to
-// Supabase (key "groups") like orders, so a booking survives a redeploy.
-const GROUPS_FILE = path.join(__dirname, "groups.json");
-function loadGroups() {
-  try {
-    if (fs.existsSync(GROUPS_FILE)) {
-      const raw = fs.readFileSync(GROUPS_FILE, "utf8");
-      if (!raw.trim()) return [];
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr : [];
-    }
-  } catch (e) { console.error("[groups] load error:", e.message); }
-  return [];
-}
-function persistGroups(groups) {
-  atomicWriteSync(GROUPS_FILE, JSON.stringify(groups, null, 2));
-  return mirrorToSupabase("groups", groups);
-}
+// by code and add their own NAMED order to — one combined bill. Group storage
+// now lives in the per-tenant store (req.store.loadGroups/persistGroups).
 const GROUP_CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L ambiguity
 function genGroupCode(groups) {
   const taken = new Set(groups.map((g) => g.code));
@@ -351,11 +538,15 @@ function publicGroupView(g) {
   };
 }
 function fullGroupView(g) { return Object.assign({}, g, { total: groupTotal(g), onlineSurcharge: groupSurcharge(g) }); }
-function isStaffReq(req) {
-  if (!STAFF_TOKEN) return false;
+// Extract a bearer/query staff token from a request (no tenant resolution).
+function getReqToken(req) {
   const h = req.get("authorization") || "";
-  const tok = h.startsWith("Bearer ") ? h.slice(7) : req.query.token;
-  return !!tok && safeEqual(String(tok), STAFF_TOKEN);
+  return h.startsWith("Bearer ") ? h.slice(7) : (req.query && req.query.token) || "";
+}
+// "Is this request from staff of ANY tenant?" — used by the rate limiter (runs
+// before tenant resolution) to exempt trusted staff.
+function isStaffReq(req) {
+  return !!findTenantByToken(getReqToken(req));
 }
 function validGroupDate(v) {
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -368,44 +559,10 @@ function validGroupDate(v) {
 }
 function validGroupTime(v) { return typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v); }
 
-// ── Menu storage ───────────────────────────────────────────
-// menu-seed.json ships with the repo and is the canonical default; menu.json
-// is the runtime mutable copy. On Render free-tier the disk is ephemeral, so
-// edits made via the backoffice survive UNTIL the next backend deploy (same
-// caveat as orders.json — fix later with a real DB).
-const MENU_FILE = path.join(__dirname, "menu.json");
-const MENU_SEED_FILE = path.join(__dirname, "menu-seed.json");
-
-function loadMenu() {
-  // Boot path: if menu.json missing, seed from menu-seed.json
-  if (!fs.existsSync(MENU_FILE) && fs.existsSync(MENU_SEED_FILE)) {
-    try {
-      const seed = fs.readFileSync(MENU_SEED_FILE, "utf8");
-      atomicWriteSync(MENU_FILE, seed);
-      console.log("[menu] seeded menu.json from menu-seed.json");
-    } catch (e) {
-      console.error("[menu] Failed to seed:", e.message);
-    }
-  }
-  try {
-    if (fs.existsSync(MENU_FILE)) {
-      const raw = fs.readFileSync(MENU_FILE, "utf8");
-      if (raw.trim()) return JSON.parse(raw);
-    }
-  } catch (e) {
-    console.error("[menu] Error loading menu file:", e.message);
-  }
-  // Last-resort empty menu — shouldn't happen if seed file is present
-  return { version: 1, updatedAt: new Date().toISOString(), categoryOrder: [], categories: {} };
-}
-
-function persistMenu(menu) {
-  menu.version = (menu.version || 0) + 1;
-  menu.updatedAt = new Date().toISOString();
-  atomicWriteSync(MENU_FILE, JSON.stringify(menu, null, 2));
-  mirrorToSupabase("menu", menu);
-}
-
+// ── Menu helpers ───────────────────────────────────────────
+// Menu storage now lives in the per-tenant store (req.store.loadMenu /
+// persistMenu). The default tenant seeds its first menu from menu-seed.json;
+// other restaurants start empty and are filled via the admin UI.
 function slugify(s) {
   return String(s || "")
     .toLowerCase()
@@ -425,29 +582,34 @@ function findItem(menu, id) {
   return null;
 }
 
-// ── Customer email storage ─────────────────────────────────
-const CUSTOMERS_FILE = path.join(__dirname, "customers.json");
-
-function loadCustomers() {
-  try {
-    if (fs.existsSync(CUSTOMERS_FILE)) {
-      const raw = fs.readFileSync(CUSTOMERS_FILE, "utf8");
-      if (!raw.trim()) return [];
-      return JSON.parse(raw);
-    }
-  } catch (e) {
-    console.error("[customers] Error loading file:", e.message);
+// Build a starter menu skeleton (empty categories) from a list of names or
+// {title, subtitle} — used when provisioning a new restaurant so its owner can
+// start adding items in the existing menu-admin screen immediately.
+function menuFromCategoryList(list) {
+  const menu = emptyMenu();
+  if (!Array.isArray(list)) return menu;
+  for (const c of list) {
+    const title = (typeof c === "string" ? c : (c && c.title) || "").trim();
+    if (!title) continue;
+    let slug = slugify(c && c.slug ? c.slug : title);
+    let n = 1;
+    while (menu.categories[slug]) { n += 1; slug = slugify(title) + "-" + n; }
+    menu.categoryOrder.push(slug);
+    menu.categories[slug] = {
+      title: title.slice(0, 40),
+      subtitle: (c && c.subtitle) ? String(c.subtitle).slice(0, 80) : "",
+      items: [],
+    };
   }
-  return [];
+  return menu;
 }
 
-function persistCustomers(customers) {
-  atomicWriteSync(CUSTOMERS_FILE, JSON.stringify(customers, null, 2));
-  mirrorToSupabase("customers", customers);
-}
-
-function saveCustomerEmail(email, orderId, tableNumber, total) {
-  const customers = loadCustomers();
+// ── Customer email helpers ─────────────────────────────────
+// Customer storage now lives in the per-tenant store; saveCustomerEmail takes
+// the resolved req.store so a returning-customer record lands in the right
+// restaurant's namespace.
+function saveCustomerEmail(store, email, orderId, tableNumber, total) {
+  const customers = store.loadCustomers();
   const existing = customers.find((c) => c.email === email);
   if (existing) {
     existing.visits += 1;
@@ -464,7 +626,7 @@ function saveCustomerEmail(email, orderId, tableNumber, total) {
       orders: [orderId],
     });
   }
-  persistCustomers(customers);
+  store.persistCustomers(customers);
   console.log(`[customers] Saved ${maskPII(email)} (${existing ? "returning" : "new"} customer)`);
 }
 
@@ -660,27 +822,215 @@ function checkBillToken(order, req) {
   return safeEqual(supplied, order.billToken);
 }
 
-// ── Health check ───────────────────────────────────────────
+// ── Health check (platform-level) ──────────────────────────
 app.get("/", (_req, res) => {
-  const orders = loadOrders();
   res.json({
     status: "ok",
-    mode: "local",
-    totalOrders: orders.length,
+    mode: "multi-tenant",
+    tenants: TENANTS.size,
     note: "Doshii integration pending — orders stored locally",
   });
 });
 
 app.get("/health", (_req, res) => {
+  res.json({ status: "ok", mode: "multi-tenant", tenants: TENANTS.size });
+});
+
+// ══════════════════════════════════════════════════════════
+// ── TENANTS: public branding + platform-admin provisioning ─
+// ══════════════════════════════════════════════════════════
+
+// Public branding config the customer SPA fetches on boot to rebrand itself
+// (name, theme colour, logo, currency, GST rate). No secrets — safe to expose.
+app.get("/tenant/:slug", (req, res) => {
+  const t = getTenant(req.params.slug);
+  if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+  const c = t.config || {};
+  res.set("Cache-Control", "no-cache");
   res.json({
-    status: "ok",
-    mode: "local",
-    totalOrders: loadOrders().length,
+    slug: t.slug,
+    name: c.name || t.name,
+    established: c.established || "",
+    themeColor: c.themeColor || "#c25a3a",
+    logoUrl: c.logoUrl || null,
+    currency: c.currency || "$",
+    currencyCode: c.currencyCode || "NZD",
+    gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
+    locale: c.locale || "en-NZ",
+    timezone: c.timezone || "Pacific/Auckland",
+    features: c.features || {},
   });
 });
 
+// The provisioning console — a static form (no secrets in the HTML; it prompts
+// for the platform token and uses it for the API calls below).
+app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin-console.html")));
+
+// Admin view of a tenant (never leaks the token, only whether one is set).
+function tenantAdminView(t) {
+  return { slug: t.slug, name: t.name, createdAt: t.createdAt, hasToken: !!t.staffTokenHash, config: t.config };
+}
+// Fields a platform admin may set on create/update (everything else is derived).
+function configOverridesFromBody(b) {
+  const o = {};
+  for (const k of ["name", "themeColor", "logoUrl", "currency", "currencyCode", "gstRate", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "features"]) {
+    if (b[k] !== undefined) o[k] = b[k];
+  }
+  return o;
+}
+
+app.get("/admin/tenants", requirePlatformAdmin, (_req, res) => {
+  res.json(allTenants().map(tenantAdminView));
+});
+
+// Provision a new restaurant. Returns the staff token ONCE (only its hash is
+// stored). Seeds an empty menu (or an optional supplied menu) so the owner can
+// start editing in the existing /dashboard/menu-admin.html screen.
+app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
+  const b = req.body || {};
+  const slug = normalizeSlug(b.slug || b.name || "");
+  if (!slug) return res.status(400).json({ error: "A slug or name is required" });
+  if (getTenant(slug)) return res.status(409).json({ error: "A restaurant with that slug already exists: " + slug });
+  const name = sanitizeString(b.name, 80) || slug;
+  const cfg = mergeConfig(Object.assign(configOverridesFromBody(b), { name }));
+  const staffToken = crypto.randomBytes(24).toString("hex");
+  withWriteLock(() => {
+    saveTenant({ slug, name, config: cfg, staffTokenHash: hashToken(staffToken), createdAt: new Date().toISOString() });
+    // Seed the menu: a full supplied menu, else a skeleton from a category list,
+    // else empty. Gives the owner something to edit in menu-admin right away.
+    const seedMenu = (b.menu && typeof b.menu === "object" && b.menu.categories)
+      ? b.menu
+      : (Array.isArray(b.categories) && b.categories.length ? menuFromCategoryList(b.categories) : emptyMenu());
+    tenantStore(slug).persistMenu(seedMenu);
+    console.log(`[tenant] provisioned '${slug}' (${name})`);
+  });
+  res.json({
+    success: true,
+    slug,
+    name,
+    staffToken,                                  // SHOW ONCE — not recoverable
+    dashboardUrl: `/dashboard?token=${staffToken}`,
+    menuAdminUrl: `/dashboard/menu-admin.html?token=${staffToken}`,
+    customerQuery: `?r=${slug}`,
+    note: "Save the staffToken now — only its hash is stored.",
+  });
+});
+
+// Update a restaurant's config and/or rotate its staff token.
+app.patch("/admin/tenants/:slug", requirePlatformAdmin, (req, res) => {
+  const t = getTenant(req.params.slug);
+  if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+  const b = req.body || {};
+  const out = { success: true, slug: t.slug };
+  withWriteLock(() => {
+    if (b.name != null) t.name = sanitizeString(b.name, 80) || t.name;
+    t.config = mergeConfig(Object.assign({}, t.config, configOverridesFromBody(b)));
+    if (b.name != null) t.config.name = t.name;
+    if (b.regenerateToken) {
+      const staffToken = crypto.randomBytes(24).toString("hex");
+      t.staffTokenHash = hashToken(staffToken);
+      out.staffToken = staffToken;
+      out.dashboardUrl = `/dashboard?token=${staffToken}`;
+    }
+    saveTenant(t);
+    console.log(`[tenant] updated '${t.slug}'${b.regenerateToken ? " (token rotated)" : ""}`);
+  });
+  res.json(out);
+});
+
+// ── Printable QR pack for a restaurant (platform admin) ────
+// Renders a print-ready page of QR codes — one per table — each encoding
+// <base>/?r=<slug>&table=<n>. Server-generates the QR PNGs as data URIs so it
+// works under the strict CSP (no external scripts needed).
+function parseTableList(spec) {
+  const s = String(spec || "").trim();
+  if (/^\d+$/.test(s)) {
+    const n = Math.min(parseInt(s, 10), 300);
+    return Array.from({ length: Math.max(n, 0) }, (_, i) => String(i + 1));
+  }
+  const out = [];
+  for (const tok of s.split(",").map((x) => x.trim()).filter(Boolean)) {
+    const m = tok.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      let a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+      if (a > b) { const z = a; a = b; b = z; }
+      for (let i = a; i <= b && out.length < 300; i++) out.push(String(i));
+    } else if (/^[A-Za-z0-9]{1,4}$/.test(tok)) {
+      out.push(tok);
+    }
+  }
+  return out;
+}
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function qrPackHtml(name, slug, themeColor, cards) {
+  const safeName = escapeHtml(name);
+  const accent = /^#[0-9a-fA-F]{6}$/.test(themeColor || "") ? themeColor : "#c25a3a";
+  const cells = cards.map((c) => `
+    <div class="card">
+      <div class="tnum">Table ${escapeHtml(c.tn)}</div>
+      <img src="${c.dataUri}" alt="QR code for table ${escapeHtml(c.tn)}" />
+      <div class="rname">${safeName}</div>
+      <div class="hint">Scan · Order · Pay at counter</div>
+    </div>`).join("");
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${safeName} — QR codes</title>
+<style>
+  :root{ --accent:${accent}; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#f3f1ec; color:#1c1813; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .bar{ position:sticky; top:0; background:#fff; border-bottom:1px solid #e2ddd2; padding:14px 22px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .bar h1{ font-size:17px; margin:0; font-weight:600; }
+  .bar .meta{ color:#7a7060; font-size:13px; }
+  .bar button{ margin-left:auto; background:var(--accent); color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:16px; padding:22px; }
+  .card{ background:#fff; border:1px solid #e2ddd2; border-radius:12px; padding:18px 14px 14px; text-align:center; break-inside:avoid; }
+  .card .tnum{ font-size:13px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+  .card img{ width:100%; max-width:200px; height:auto; image-rendering:pixelated; }
+  .card .rname{ font-size:15px; font-weight:600; margin-top:8px; }
+  .card .hint{ font-size:11px; color:#8a8070; margin-top:2px; letter-spacing:.04em; }
+  @media print{ .bar{ display:none; } body{ background:#fff; } .grid{ padding:0; gap:10px; } .card{ border-color:#ccc; } }
+</style></head><body>
+<div class="bar">
+  <h1>${safeName}</h1>
+  <span class="meta">${cards.length} QR code${cards.length === 1 ? "" : "s"} · ?r=${escapeHtml(slug)}</span>
+  <button onclick="window.print()">Print / Save as PDF</button>
+</div>
+<div class="grid">${cells}</div>
+</body></html>`;
+}
+
+app.get("/admin/qr-pack", requirePlatformAdmin, async (req, res) => {
+  try {
+    const slug = normalizeSlug(req.query.slug || "");
+    const t = getTenant(slug);
+    if (!t) return res.status(404).send("Unknown restaurant — check the slug.");
+    const base = String(req.query.base || "").trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(base)) {
+      return res.status(400).send("Add a valid customer site URL, e.g. ?base=https://yourapp.netlify.app");
+    }
+    const tables = parseTableList(req.query.tables || "12");
+    if (!tables.length) return res.status(400).send("No tables — pass a count (?tables=20) or a range (?tables=1-22).");
+    const cards = [];
+    for (const tn of tables) {
+      const url = `${base}/?r=${encodeURIComponent(slug)}&table=${encodeURIComponent(tn)}`;
+      const dataUri = await QRCode.toDataURL(url, { margin: 1, width: 512, errorCorrectionLevel: "M" });
+      cards.push({ tn, url, dataUri });
+    }
+    const cfg = t.config || {};
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(qrPackHtml(cfg.name || t.name, slug, cfg.themeColor, cards));
+  } catch (e) {
+    console.error("[qr] pack error:", e.message);
+    res.status(500).send("Failed to build QR pack.");
+  }
+});
+
 // ── POST /order — receive order from QR menu (PUBLIC) ─────
-app.post("/order", (req, res) => {
+app.post("/order", resolveTenant, (req, res) => {
+  const { loadOrders, persistOrders, loadMenu } = req.store;
   withWriteLock(() => {
     try {
       const { tableNumber, items, notes, guestCount, phoneNumber, orderType, customerName, pickupTime } = req.body || {};
@@ -761,7 +1111,7 @@ app.post("/order", (req, res) => {
         createdAt: new Date().toISOString(),
       };
       order.total = clampMoney(order.total);
-      order.onlineSurcharge = orderSurcharge(normalizedItems, menu);
+      order.onlineSurcharge = orderSurcharge(normalizedItems, menu, req.tenant.config);
 
       orders.push(order);
       persistOrders(orders);
@@ -810,7 +1160,7 @@ app.use("/bill", express.static(path.join(__dirname, "public", "bill")));
 
 // ── GET /orders — staff ────────────────────────────────────
 app.get("/orders", requireStaff, (req, res) => {
-  let orders = loadOrders();
+  let orders = req.store.loadOrders();
   const status = req.query.status;
   if (status) {
     if (!VALID_STATUSES.has(status)) {
@@ -839,14 +1189,14 @@ app.get("/orders", requireStaff, (req, res) => {
 
 // ── GET /orders/by-table/:table — public, for QR "add to tab" ─
 // Returns minimal info (no PII) so the customer page can detect an open tab.
-app.get("/orders/by-table/:table", (req, res) => {
+app.get("/orders/by-table/:table", resolveTenant, (req, res) => {
   const table = String(req.params.table || "");
   // The PICKUP pseudo-table is not a shared tab — aggregating every pickup
   // order into one public feed would let anyone enumerate the pickup queue.
   if (isPickupSentinel(table)) {
     return res.json({ count: 0, orders: [] });
   }
-  const orders = loadOrders().filter(
+  const orders = req.store.loadOrders().filter(
     (o) => String(o.tableNumber) === table && o.status !== "done"
   );
   res.json({
@@ -871,33 +1221,29 @@ app.get("/orders/by-table/:table", (req, res) => {
 // ── Online ordering surcharge ──────────────────────────────
 // A few cents added to each item's price ON THE CUSTOMER MENU ONLY. It is baked
 // into the displayed (GST-inclusive) price — NOT a separate checkout fee — per
-// NZ Fair Trading guidance (avoids "drip pricing"). Base prices in menu.json,
+// NZ Fair Trading guidance (avoids "drip pricing"). Base prices in the menu,
 // the admin (/menu?raw=1) and the in-store/Lightspeed flow are untouched.
-// Tune per category here; set a value to 0 to exempt a category.
-const ONLINE_SURCHARGE = {
-  // drinks
-  coffee: 0.20, tea: 0.20, signature: 0.20,
-  // food
-  "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60,
-  // cheap add-on sides — keep light
-  sides: 0.20,
-};
-const ONLINE_SURCHARGE_DEFAULT = 0.60; // any future/unknown category
-function categorySurcharge(slug) {
-  const v = ONLINE_SURCHARGE[slug];
-  return typeof v === "number" ? v : ONLINE_SURCHARGE_DEFAULT;
+// The per-category map + default now come from each tenant's config
+// (config.surcharge / config.surchargeDefault), so every restaurant sets its
+// own (or none).
+function categorySurcharge(slug, cfg) {
+  cfg = cfg || {};
+  const map = cfg.surcharge || {};
+  const v = map[slug];
+  return typeof v === "number" ? v : (Number(cfg.surchargeDefault) || 0);
 }
 function bumpPrice(n, add) {
   return typeof n === "number" ? Math.round((n + add) * 100) / 100 : n;
 }
 // Return a COPY of the menu with the per-category surcharge added to every
 // price/size. Never mutates the cached base menu.
-function withOnlineSurcharge(menu) {
+function withOnlineSurcharge(menu, cfg) {
+  cfg = cfg || {};
   const out = JSON.parse(JSON.stringify(menu || {}));
   for (const slug of (out.categoryOrder || [])) {
     const cat = out.categories && out.categories[slug];
     if (!cat || !Array.isArray(cat.items)) continue;
-    const add = categorySurcharge(slug);
+    const add = categorySurcharge(slug, cfg);
     if (!add) continue;
     for (const it of cat.items) {
       if (typeof it.price === "number") it.price = bumpPrice(it.price, add);
@@ -906,7 +1252,11 @@ function withOnlineSurcharge(menu) {
       }
     }
   }
-  out.onlineSurcharge = { drink: ONLINE_SURCHARGE.coffee, food: ONLINE_SURCHARGE.mains, sides: ONLINE_SURCHARGE.sides };
+  out.onlineSurcharge = {
+    drink: categorySurcharge("coffee", cfg),
+    food: categorySurcharge("mains", cfg),
+    sides: categorySurcharge("sides", cfg),
+  };
   return out;
 }
 
@@ -930,12 +1280,12 @@ function findItemCategory(menu, line) {
 }
 // Online-surcharge INCOME earned on a set of order lines (the per-category fee
 // × qty). This is the "developer fee" the owner keeps from online ordering.
-function orderSurcharge(items, menu) {
+function orderSurcharge(items, menu, cfg) {
   let s = 0;
   for (const it of (items || [])) {
     const slug = findItemCategory(menu, it);
     if (slug == null) continue;
-    s += categorySurcharge(slug) * (Number(it.qty) || 1);
+    s += categorySurcharge(slug, cfg) * (Number(it.qty) || 1);
   }
   return Math.round(s * 100) / 100;
 }
@@ -944,16 +1294,25 @@ function orderSurcharge(items, menu) {
 // this on boot and falls back to the bundled menu if we're unreachable.
 // ?raw=1 returns BASE prices (used by the staff menu admin); the default
 // response has the online surcharge baked into each price.
-app.get("/menu", (req, res) => {
-  const menu = loadMenu();
+app.get("/menu", resolveTenant, (req, res) => {
+  const menu = req.store.loadMenu();
   res.set("Cache-Control", "no-cache");
   const raw = req.query && (req.query.raw === "1" || req.query.raw === "true");
-  res.json(raw ? menu : withOnlineSurcharge(menu));
+  const out = raw ? Object.assign({}, menu) : withOnlineSurcharge(menu, req.tenant.config);
+  // Brand fields so the customer SPA can render the right name/tagline on first
+  // paint (the menu is fetched before the app renders).
+  const c = req.tenant.config || {};
+  out.restaurantName = c.name || req.tenant.name;
+  out.established = c.established || "";
+  out.themeColor = c.themeColor || "#c25a3a";
+  out.logoUrl = c.logoUrl || null;
+  res.json(out);
 });
 
 // PATCH /menu/items/:id — staff, update any subset of an item's fields.
 // Allowed fields: name, desc, price, sizes, tags, outOfStock, imgRight, img.
 app.patch("/menu/items/:id", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1017,6 +1376,7 @@ app.patch("/menu/items/:id", requireStaff, (req, res) => {
 // POST /menu/items — staff, add a new item to a category.
 // Body: { categorySlug, name, price (or sizes), desc?, tags?, img?, imgRight? }
 app.post("/menu/items", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1087,6 +1447,7 @@ const imageUpload = multer({
 });
 
 app.post("/menu/items/:id/image", requireStaff, imageUpload.single("image"), async (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   try {
     if (!supabase) {
       return res.status(503).json({
@@ -1104,7 +1465,8 @@ app.post("/menu/items/:id/image", requireStaff, imageUpload.single("image"), asy
       .jpeg({ quality: 85, progressive: true })
       .toBuffer();
 
-    const fileName = `${req.params.id}-${Date.now()}.jpg`;
+    // Namespace the object by tenant so two restaurants can't collide on an id.
+    const fileName = `${req.store.slug}/${req.params.id}-${Date.now()}.jpg`;
     const { error: upErr } = await supabase.storage
       .from("menu-images")
       .upload(fileName, resized, { contentType: "image/jpeg", upsert: false });
@@ -1138,8 +1500,43 @@ app.post("/menu/items/:id/image", requireStaff, imageUpload.single("image"), asy
   }
 });
 
+// POST /admin/tenants/:slug/logo — platform admin, upload a restaurant logo.
+// Multipart field "logo". Resized to ≤512px square (contain), stored in Supabase
+// Storage, saved as config.logoUrl. Sent as a separate multipart request (not in
+// the JSON create body) so it isn't bound by the 64kb json limit.
+async function processLogo(slug, buffer) {
+  const resized = await sharp(buffer)
+    .rotate()
+    .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+    .png()
+    .toBuffer();
+  const fileName = slug + "/logo-" + Date.now() + ".png";
+  const { error } = await supabase.storage.from("menu-images").upload(fileName, resized, { contentType: "image/png", upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("menu-images").getPublicUrl(fileName).data.publicUrl;
+}
+app.post("/admin/tenants/:slug/logo", requirePlatformAdmin, imageUpload.single("logo"), async (req, res) => {
+  try {
+    const t = getTenant(req.params.slug);
+    if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+    if (!supabase) return res.status(503).json({ error: "Logo upload requires Supabase Storage (SUPABASE_URL + SUPABASE_SERVICE_KEY)." });
+    if (!req.file) return res.status(400).json({ error: "No logo file provided (field 'logo')" });
+    const url = await processLogo(t.slug, req.file.buffer);
+    await new Promise((resolve, reject) => withWriteLock(() => {
+      try { t.config = mergeConfig(Object.assign({}, t.config, { logoUrl: url })); saveTenant(t); resolve(); }
+      catch (e) { reject(e); }
+    }));
+    console.log(`[tenant] logo uploaded for '${t.slug}' → ${url}`);
+    res.json({ success: true, logoUrl: url });
+  } catch (err) {
+    console.error("[tenant] logo upload error:", err.message);
+    res.status(500).json({ error: "Failed to upload logo: " + err.message });
+  }
+});
+
 // DELETE /menu/items/:id — staff, remove an item from the menu.
 app.delete("/menu/items/:id", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1160,6 +1557,7 @@ app.delete("/menu/items/:id", requireStaff, (req, res) => {
 // Body: { text: "..." } to set, { text: null } or { text: "" } to clear.
 // Banner is part of the menu payload returned to customers via GET /menu.
 app.patch("/menu/specials", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1184,6 +1582,7 @@ app.patch("/menu/specials", requireStaff, (req, res) => {
 // (e.g. breakfast) closes for the day.
 // Body: { soldOut: boolean }  (default true)
 app.post("/menu/categories/:slug/sold-out-all", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1210,6 +1609,7 @@ app.post("/menu/categories/:slug/sold-out-all", requireStaff, (req, res) => {
 // Body: { categorySlug, itemIds: ["id-1", "id-2", ...] }
 // Must list every item currently in the category (no add/remove via this endpoint).
 app.post("/menu/reorder", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
   withWriteLock(() => {
     try {
       const menu = loadMenu();
@@ -1240,11 +1640,86 @@ app.post("/menu/reorder", requireStaff, (req, res) => {
   });
 });
 
+// ── Menu category management (staff) ───────────────────────
+// Lets a restaurant define its own sections (e.g. "Breakfast", "Coffee") so a
+// brand-new tenant can build its menu from scratch.
+// POST /menu/categories — add a category. Body: { title, slug?, subtitle? }
+app.post("/menu/categories", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const b = req.body || {};
+      const title = String(b.title || "").trim();
+      if (!title || title.length > 40) return res.status(400).json({ error: "Title required (≤40 chars)" });
+      let slug = slugify(b.slug ? b.slug : title);
+      let n = 1;
+      while (menu.categories[slug]) { n += 1; slug = slugify(title) + "-" + n; }
+      if (!Array.isArray(menu.categoryOrder)) menu.categoryOrder = [];
+      if (!menu.categories) menu.categories = {};
+      menu.categoryOrder.push(slug);
+      menu.categories[slug] = { title: title.slice(0, 40), subtitle: b.subtitle ? String(b.subtitle).slice(0, 80) : "", items: [] };
+      persistMenu(menu);
+      console.log(`[menu] category added ${slug}`);
+      res.json({ success: true, slug, category: menu.categories[slug], version: menu.version });
+    } catch (err) {
+      console.error("[menu] category add error:", err.message);
+      res.status(500).json({ error: "Failed to add category" });
+    }
+  });
+});
+
+// PATCH /menu/categories/:slug — rename a category (title/subtitle).
+app.patch("/menu/categories/:slug", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const cat = menu.categories[req.params.slug];
+      if (!cat) return res.status(404).json({ error: "Unknown category" });
+      const b = req.body || {};
+      if (b.title != null) { const t = String(b.title).trim(); if (t) cat.title = t.slice(0, 40); }
+      if (b.subtitle != null) cat.subtitle = String(b.subtitle).slice(0, 80);
+      persistMenu(menu);
+      res.json({ success: true, slug: req.params.slug, category: cat, version: menu.version });
+    } catch (err) {
+      console.error("[menu] category rename error:", err.message);
+      res.status(500).json({ error: "Failed to rename category" });
+    }
+  });
+});
+
+// DELETE /menu/categories/:slug — remove an empty category (force=1 to drop a
+// non-empty one and all its items).
+app.delete("/menu/categories/:slug", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const slug = req.params.slug;
+      const cat = menu.categories[slug];
+      if (!cat) return res.status(404).json({ error: "Unknown category" });
+      const force = req.query && (req.query.force === "1" || req.query.force === "true");
+      if ((cat.items || []).length > 0 && !force) {
+        return res.status(409).json({ error: "Category not empty — pass ?force=1 to delete it and its items" });
+      }
+      delete menu.categories[slug];
+      menu.categoryOrder = (menu.categoryOrder || []).filter((s) => s !== slug);
+      persistMenu(menu);
+      console.log(`[menu] category deleted ${slug}`);
+      res.json({ success: true, version: menu.version });
+    } catch (err) {
+      console.error("[menu] category delete error:", err.message);
+      res.status(500).json({ error: "Failed to delete category" });
+    }
+  });
+});
+
 // ── GET /orders/:id — public (for bill page lookup) ───────
 // Requires ?t=<billToken> for orders created with a token. Returns redacted
 // data (no phone, no cooked/picked state, no internal fields).
-app.get("/orders/:id", (req, res) => {
-  const orders = loadOrders();
+app.get("/orders/:id", resolveTenant, (req, res) => {
+  const orders = req.store.loadOrders();
   const order = orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found" });
   if (!checkBillToken(order, req)) {
@@ -1268,6 +1743,7 @@ app.get("/orders/:id", (req, res) => {
       price: i.price,
       notes: i.notes,
     })),
+    adjustments: (Array.isArray(order.adjustments) ? order.adjustments : []).map((a) => ({ label: a.label, amount: a.amount })),
     total: order.total,
     status: order.status,
     createdAt: order.createdAt,
@@ -1297,7 +1773,8 @@ app.get("/orders/:id", (req, res) => {
 });
 
 // ── POST /orders/:id/add-items — public (QR "add to order") ─
-app.post("/orders/:id/add-items", (req, res) => {
+app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
+  const { loadOrders, persistOrders, loadMenu } = req.store;
   withWriteLock(() => {
     try {
       const orders = loadOrders();
@@ -1381,8 +1858,8 @@ app.post("/orders/:id/add-items", (req, res) => {
       }
 
       orders[idx].items = mergedItems;
-      orders[idx].total = clampMoney(projectedTotal);
-      orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu()));
+      orders[idx].total = clampMoney(projectedTotal + adjustmentsTotal(orders[idx]));
+      orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu(), req.tenant.config));
       // Only (re)flag a brand-new/idle tab as "received". Don't drag an order
       // that's already preparing/ready/picked_up back to the start of the board.
       if (!["preparing", "ready", "picked_up"].includes(orders[idx].status)) {
@@ -1418,6 +1895,7 @@ app.post("/orders/:id/add-items", (req, res) => {
 
 // ── PATCH /orders/:id — staff ──────────────────────────────
 app.patch("/orders/:id", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
   withWriteLock(() => {
     try {
       const orders = loadOrders();
@@ -1508,8 +1986,178 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
   });
 });
 
+// ── POST /orders/merge — staff: combine a table's orders into one ──────────
+// Body: { table } merges ALL open (non-done, unpaid, dine-in) orders for that
+// table, OR { orderIds:[...] } merges a specific set. The earliest order is the
+// "primary" (keeps its id + billToken); the others' items fold into it and are
+// removed, so one table = one order + one bill.
+const STATUS_ORDER = ["received", "preparing", "ready", "picked_up", "done"];
+function leastProgressed(statuses) {
+  let best = "done", bestIdx = STATUS_ORDER.length;
+  for (const s of statuses) {
+    const i = STATUS_ORDER.indexOf(s);
+    if (i >= 0 && i < bestIdx) { bestIdx = i; best = s; }
+  }
+  return best === "done" ? (statuses[0] || "received") : best;
+}
+function isPickupOrderRec(o) {
+  return o.orderType === "pickup-drinks" || isPickupSentinel(o.tableNumber);
+}
+app.post("/orders/merge", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
+  withWriteLock(() => {
+    try {
+      const b = req.body || {};
+      const orders = loadOrders();
+      let targets;
+      if (Array.isArray(b.orderIds) && b.orderIds.length) {
+        const want = new Set(b.orderIds.map(String));
+        targets = orders.filter((o) => want.has(o.id));
+      } else if (b.table != null && String(b.table).trim() !== "") {
+        const tbl = String(b.table);
+        targets = orders.filter((o) => String(o.tableNumber) === tbl && o.status !== "done" && !isPickupOrderRec(o));
+      } else {
+        return res.status(400).json({ error: "Provide a table or orderIds to combine." });
+      }
+
+      if (targets.length < 2) {
+        return res.status(400).json({ error: "Need at least two open orders to combine." });
+      }
+      if (targets.some(isPickupOrderRec)) {
+        return res.status(400).json({ error: "Pickup orders can't be combined." });
+      }
+      const tableSet = new Set(targets.map((o) => String(o.tableNumber)));
+      if (tableSet.size > 1) {
+        return res.status(400).json({ error: "Those orders are from different tables." });
+      }
+      if (targets.some((o) => ["paid", "pending", "refunded"].includes(o.paymentStatus))) {
+        return res.status(409).json({ error: "One or more of these orders is paid or being paid — combine before taking payment." });
+      }
+
+      // Earliest order is the primary (keeps id + billToken so its bill link survives).
+      targets.sort((a, b2) => new Date(a.createdAt || 0) - new Date(b2.createdAt || 0));
+      const primary = targets[0];
+      const others = targets.slice(1);
+
+      const mergedItems = targets.reduce((acc, o) => acc.concat(Array.isArray(o.items) ? o.items : []), []);
+      const projectedTotal = mergedItems.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
+      if (mergedItems.length > 200 || projectedTotal > 9999.99) {
+        return res.status(409).json({ error: "Combined order would be too large — keep them separate." });
+      }
+
+      primary.items = mergedItems;
+      // Carry every order's manual bill adjustments into the combined bill.
+      primary.adjustments = targets.reduce((acc, o) => acc.concat(Array.isArray(o.adjustments) ? o.adjustments : []), []);
+      primary.total = clampMoney(projectedTotal + adjustmentsTotal(primary));
+      primary.onlineSurcharge = clampMoney(targets.reduce((s, o) => s + (Number(o.onlineSurcharge) || 0), 0));
+      primary.guestCount = clampQty(targets.reduce((s, o) => s + (Number(o.guestCount) || 0), 0));
+      const allNotes = targets.map((o) => (o.notes || "").trim()).filter(Boolean);
+      if (allNotes.length) primary.notes = sanitizeString(allNotes.join(" | "), 500);
+      primary.phoneNumber = primary.phoneNumber || (others.map((o) => o.phoneNumber).find(Boolean) || "");
+      primary.status = leastProgressed(targets.map((o) => o.status));
+      // Item indices shift on merge, so cooked/picked maps no longer line up —
+      // clear them; the combined order is re-cooked/printed fresh.
+      delete primary.cookedItems;
+      delete primary.pickedItems;
+      delete primary._lastAddHash;
+      delete primary._lastAddAt;
+      primary.mergedFrom = (primary.mergedFrom || []).concat(others.map((o) => o.id));
+      primary.updatedAt = new Date().toISOString();
+
+      const removeIds = new Set(others.map((o) => o.id));
+      const next = orders.filter((o) => !removeIds.has(o.id));
+      persistOrders(next);
+
+      console.log(`[orders] combined ${targets.length} orders on table ${primary.tableNumber} → ${primary.id} (folded in ${[...removeIds].join(", ")})`);
+      res.json({ success: true, order: primary, mergedCount: targets.length, removed: [...removeIds] });
+    } catch (err) {
+      console.error("[merge] Error:", err.message);
+      res.status(500).json({ error: "Failed to combine orders" });
+    }
+  });
+});
+
+// ── Manual bill adjustments (staff) ────────────────────────
+// A per-order list of manual charges/discounts the bill couldn't capture from
+// the QR menu — e.g. "Decaf shot +1.00", "Extra dish +12.00", "Discount -5.00".
+// They never reach the kitchen ticket; they only adjust the bill total (which is
+// re-derived as items + adjustments wherever the total is set).
+function adjustmentsTotal(order) {
+  const list = order && Array.isArray(order.adjustments) ? order.adjustments : [];
+  return list.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+}
+function recomputeOrderTotal(order) {
+  const itemsSum = (order.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
+  order.total = clampMoney(itemsSum + adjustmentsTotal(order));
+  return order.total;
+}
+
+// POST /orders/:id/adjust — add a manual charge/discount to the bill.
+// Body: { label, amount }  (amount may be negative for a discount/comp)
+app.post("/orders/:id/adjust", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
+  withWriteLock(() => {
+    try {
+      const orders = loadOrders();
+      const idx = orders.findIndex((o) => o.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Order not found" });
+      const o = orders[idx];
+      if (["paid", "pending", "refunded"].includes(o.paymentStatus)) {
+        return res.status(409).json({ error: "Order is paid or being paid — can't change the bill." });
+      }
+      const b = req.body || {};
+      const label = sanitizeString(b.label, 40).trim();
+      const amount = toFiniteNumber(b.amount, NaN);
+      if (!label) return res.status(400).json({ error: "A label is required (e.g. Decaf shot)" });
+      if (!Number.isFinite(amount) || amount === 0) return res.status(400).json({ error: "Enter a non-zero amount" });
+      if (Math.abs(amount) > 9999.99) return res.status(400).json({ error: "Amount is too large" });
+      if (!Array.isArray(o.adjustments)) o.adjustments = [];
+      if (o.adjustments.length >= 30) return res.status(409).json({ error: "Too many adjustments on this order" });
+      const adj = { id: crypto.randomBytes(6).toString("hex"), label, amount: Math.round(amount * 100) / 100, addedAt: new Date().toISOString() };
+      o.adjustments.push(adj);
+      recomputeOrderTotal(o);
+      o.updatedAt = new Date().toISOString();
+      persistOrders(orders);
+      console.log(`[orders] ${o.id} adjust "${label}" ${amount >= 0 ? "+" : ""}${amount} → total $${o.total.toFixed(2)}`);
+      res.json({ success: true, order: o, adjustment: adj });
+    } catch (e) {
+      console.error("[adjust] Error:", e.message);
+      res.status(500).json({ error: "Failed to adjust the bill" });
+    }
+  });
+});
+
+// DELETE /orders/:id/adjust/:adjId — remove a manual adjustment.
+app.delete("/orders/:id/adjust/:adjId", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
+  withWriteLock(() => {
+    try {
+      const orders = loadOrders();
+      const idx = orders.findIndex((o) => o.id === req.params.id);
+      if (idx === -1) return res.status(404).json({ error: "Order not found" });
+      const o = orders[idx];
+      if (["paid", "pending", "refunded"].includes(o.paymentStatus)) {
+        return res.status(409).json({ error: "Order is paid or being paid — can't change the bill." });
+      }
+      if (!Array.isArray(o.adjustments)) o.adjustments = [];
+      const before = o.adjustments.length;
+      o.adjustments = o.adjustments.filter((a) => a.id !== req.params.adjId);
+      if (o.adjustments.length === before) return res.status(404).json({ error: "Adjustment not found" });
+      recomputeOrderTotal(o);
+      o.updatedAt = new Date().toISOString();
+      persistOrders(orders);
+      res.json({ success: true, order: o });
+    } catch (e) {
+      console.error("[adjust] delete error:", e.message);
+      res.status(500).json({ error: "Failed to remove the adjustment" });
+    }
+  });
+});
+
 // ── POST /orders/:id/email-bill — public ──────────────────
-app.post("/orders/:id/email-bill", async (req, res) => {
+app.post("/orders/:id/email-bill", resolveTenant, async (req, res) => {
+  const store = req.store;
+  const cfg = req.tenant.config;
   try {
     const rawEmail = (req.body && req.body.email) || "";
     const email = typeof rawEmail === "string" ? rawEmail.trim() : "";
@@ -1520,7 +2168,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     // Check order existence + token BEFORE checking Resend availability,
     // otherwise a probe (no token) would leak "email service not configured"
     // for an order ID the caller can't see. Keep 404 to avoid enumeration.
-    const orders = loadOrders();
+    const orders = store.loadOrders();
     const order = orders.find((o) => o.id === req.params.id);
     if (!order) return res.status(404).json({ error: "Order not found" });
     if (!checkBillToken(order, req)) {
@@ -1531,20 +2179,26 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       return res.status(503).json({ error: "Email service not configured" });
     }
 
+    const cur = cfg.currency || "$";
     const itemLines = order.items
       .map(
         (i) =>
-          `  ${i.qty}x ${i.name}${i.size ? ` (${i.size})` : ""}  —  $${(i.price * i.qty).toFixed(2)}${i.notes ? `  [${i.notes}]` : ""}`
+          `  ${i.qty}x ${i.name}${i.size ? ` (${i.size})` : ""}  —  ${cur}${(i.price * i.qty).toFixed(2)}${i.notes ? `  [${i.notes}]` : ""}`
       )
       .join("\n");
 
-    const orderTime = new Date(order.createdAt).toLocaleString("en-NZ", {
+    const orderTime = new Date(order.createdAt).toLocaleString(cfg.locale || "en-NZ", {
       dateStyle: "medium",
       timeStyle: "short",
     });
 
+    const adjLines = (Array.isArray(order.adjustments) ? order.adjustments : [])
+      .map((a) => `  ${a.label}  —  ${a.amount < 0 ? "-" : "+"}${cur}${Math.abs(Number(a.amount) || 0).toFixed(2)}`)
+      .join("\n");
+
+    const restaurantName = cfg.name || req.tenant.name;
     const textBody = [
-      `Crispy Eatery — Your Bill`,
+      `${restaurantName} — Your Bill`,
       `═══════════════════════════════`,
       ``,
       `Order: ${order.id}`,
@@ -1553,18 +2207,22 @@ app.post("/orders/:id/email-bill", async (req, res) => {
       ``,
       `Items:`,
       itemLines,
+      ...(adjLines ? [``, `Adjustments:`, adjLines] : []),
       ``,
       `───────────────────────────────`,
-      `TOTAL:  $${order.total.toFixed(2)}`,
+      `TOTAL:  ${cur}${order.total.toFixed(2)}`,
       `───────────────────────────────`,
       ``,
       `Thank you for dining with us!`,
     ].join("\n");
 
+    // Per-tenant sender if configured; otherwise fall back to the platform's
+    // verified domain with the restaurant's name on the From line.
+    const fromAddr = cfg.emailFrom || `${restaurantName} <bills@eatery.crispycatering.com>`;
     const { data, error } = await resend.emails.send({
-      from: "Crispy Eatery <bills@eatery.crispycatering.com>",
+      from: fromAddr,
       to: [email],
-      subject: `Your Bill — Crispy Eatery ${order.id}`,
+      subject: `Your Bill — ${restaurantName} ${order.id}`,
       text: textBody,
     });
 
@@ -1576,7 +2234,7 @@ app.post("/orders/:id/email-bill", async (req, res) => {
     // Persist customer record under the write lock so concurrent emails don't race.
     withWriteLock(() => {
       try {
-        saveCustomerEmail(email, order.id, order.tableNumber, order.total);
+        saveCustomerEmail(store, email, order.id, order.tableNumber, order.total);
       } catch (e) {
         console.error("[customers] Persist error:", e.message);
       }
@@ -1605,7 +2263,8 @@ app.post("/orders/:id/email-bill", async (req, res) => {
 // Response shape is provider-agnostic.  Embedded providers (Stripe Elements)
 // use `clientSecret`; redirect providers (Windcave PxPay, Worldline) use
 // `hostedUrl`.  The customer SPA picks whichever is present.
-app.post("/orders/:id/charge", async (req, res) => {
+app.post("/orders/:id/charge", resolveTenant, async (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
   try {
     const orders = loadOrders();
     const idx = orders.findIndex((o) => o.id === req.params.id);
@@ -1653,7 +2312,7 @@ app.post("/orders/:id/charge", async (req, res) => {
       const created = await provider.createIntent({
         orderId: order.id,
         amount,
-        currency: "NZD",
+        currency: req.tenant.config.currencyCode || "NZD",
         idempotencyKey,
         metadata: {
           orderId: order.id,
@@ -1729,7 +2388,8 @@ app.post("/orders/:id/charge", async (req, res) => {
 // Public, signature-verified inside the provider adapter.  Must run BEFORE
 // express.json so the raw bytes are available for HMAC (configured at the top
 // of this file via app.use("/webhooks", express.raw(...))).
-app.post("/webhooks/:provider", (req, res) => {
+app.post("/webhooks/:provider", resolveTenant, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
   const providerName = req.params.provider;
   let event;
   try {
@@ -1853,6 +2513,7 @@ app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
   if (!ALLOW_MOCK_PAYMENTS || IS_PROD) {
     return res.status(403).json({ error: "simulate-payment disabled (set ALLOW_MOCK_PAYMENTS=true in a non-production env)" });
   }
+  const { loadOrders, persistOrders } = req.store;
   const orders = loadOrders();
   const order = orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found" });
@@ -1887,6 +2548,44 @@ app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
 // ── REPORTS ────────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────
 
+// ── Timezone helpers ───────────────────────────────────────
+// Report day-boundaries and hourly buckets are computed in the TENANT's
+// timezone (config.timezone), not the server process TZ — so "today's sales"
+// is correct for a restaurant in any timezone, not just NZ.
+function tzParts(date, timeZone) {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone, hour12: false, year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const p = {};
+    for (const part of dtf.formatToParts(date)) if (part.type !== "literal") p[part.type] = part.value;
+    let hour = parseInt(p.hour, 10); if (hour === 24) hour = 0;
+    return { year: +p.year, month: +p.month, day: +p.day, hour, minute: +p.minute, second: +p.second };
+  } catch {
+    const d = date;
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes(), second: d.getSeconds() };
+  }
+}
+// ms to add to a UTC instant so it reads as local wall-clock time in `timeZone`.
+function tzOffsetMs(date, timeZone) {
+  const p = tzParts(date, timeZone);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUTC - (date.getTime() - date.getMilliseconds());
+}
+// Real Date for local midnight at the start of "today" in `timeZone`.
+function tzDayStart(now, timeZone) {
+  const p = tzParts(now, timeZone);
+  const wallMidnightAsUTC = Date.UTC(p.year, p.month - 1, p.day, 0, 0, 0);
+  return new Date(wallMidnightAsUTC - tzOffsetMs(now, timeZone));
+}
+// YYYY-MM-DD for an instant as seen in `timeZone`.
+function tzDateStr(date, timeZone) {
+  const p = tzParts(date, timeZone);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
 // Helpers: build a date range filter, aggregate orders into report shape.
 function ordersBetween(orders, fromIso, toIso) {
   const from = new Date(fromIso).getTime();
@@ -1898,14 +2597,14 @@ function ordersBetween(orders, fromIso, toIso) {
   });
 }
 
-function aggregateReport(orders) {
+function aggregateReport(orders, timeZone) {
   const items = new Map();         // name → { qty, revenue }
   const hourly = new Array(24).fill(0).map((_, h) => ({ hour: h, orders: 0, revenue: 0 }));
   const tableSet = new Set();
   let totalRevenue = 0;
   let onlineIncome = 0;
   for (const o of orders) {
-    const h = new Date(o.createdAt).getHours();
+    const h = timeZone ? tzParts(new Date(o.createdAt), timeZone).hour : new Date(o.createdAt).getHours();
     hourly[h].orders += 1;
     hourly[h].revenue += Number(o.total || 0);
     totalRevenue += Number(o.total || 0);
@@ -1936,14 +2635,15 @@ function aggregateReport(orders) {
   };
 }
 
-// GET /reports/today — sales for "today" in the server's timezone.
-app.get("/reports/today", requireStaff, (_req, res) => {
-  const all = loadOrders();
+// GET /reports/today — sales for "today" in the tenant's timezone.
+app.get("/reports/today", requireStaff, (req, res) => {
+  const tz = req.tenant.config.timezone;
+  const all = req.store.loadOrders();
   const now = new Date();
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayStart = tzDayStart(now, tz);
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   const orders = ordersBetween(all, dayStart.toISOString(), dayEnd.toISOString());
-  const agg = aggregateReport(orders);
+  const agg = aggregateReport(orders, tz);
   // Per-bill list (newest first) for the "Today's bills" view + day report.
   const bills = orders.slice().reverse().map((o) => ({
     id: o.id,
@@ -1956,7 +2656,7 @@ app.get("/reports/today", requireStaff, (_req, res) => {
     items: (o.items || []).map((i) => ({ qty: Number(i.qty) || 1, name: i.name, size: i.size || "" })),
   }));
   res.json({
-    date: dayStart.toISOString().slice(0, 10),
+    date: tzDateStr(now, tz),
     serverTime: now.toISOString(),
     ...agg,
     bills,
@@ -1964,10 +2664,12 @@ app.get("/reports/today", requireStaff, (_req, res) => {
 });
 
 // GET /reports/week — last 7 days incl. today; daily totals + aggregated top items.
-app.get("/reports/week", requireStaff, (_req, res) => {
-  const all = loadOrders();
+app.get("/reports/week", requireStaff, (req, res) => {
+  const tz = req.tenant.config.timezone;
+  const locale = req.tenant.config.locale || "en-NZ";
+  const all = req.store.loadOrders();
   const now = new Date();
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayStart = tzDayStart(now, tz);
   const weekStart = new Date(dayStart.getTime() - 6 * 24 * 60 * 60 * 1000);
   const orders = ordersBetween(all, weekStart.toISOString(), new Date(dayStart.getTime() + 24 * 60 * 60 * 1000).toISOString());
   // Per-day buckets
@@ -1978,16 +2680,16 @@ app.get("/reports/week", requireStaff, (_req, res) => {
     const dayOrders = ordersBetween(orders, d.toISOString(), next.toISOString());
     const revenue = dayOrders.reduce((s, o) => s + Number(o.total || 0), 0);
     days.push({
-      date: d.toISOString().slice(0, 10),
-      label: d.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric" }),
+      date: tzDateStr(d, tz),
+      label: d.toLocaleDateString(locale, { weekday: "short", day: "numeric", timeZone: tz }),
       orders: dayOrders.length,
       revenue: Math.round(revenue * 100) / 100,
     });
   }
-  const agg = aggregateReport(orders);
+  const agg = aggregateReport(orders, tz);
   res.json({
-    from: weekStart.toISOString().slice(0, 10),
-    to: dayStart.toISOString().slice(0, 10),
+    from: tzDateStr(weekStart, tz),
+    to: tzDateStr(dayStart, tz),
     serverTime: now.toISOString(),
     days,
     ...agg,
@@ -1995,8 +2697,8 @@ app.get("/reports/week", requireStaff, (_req, res) => {
 });
 
 // ── GET /customers — staff ────────────────────────────────
-app.get("/customers", requireStaff, (_req, res) => {
-  const customers = loadCustomers();
+app.get("/customers", requireStaff, (req, res) => {
+  const customers = req.store.loadCustomers();
   res.json({
     count: customers.length,
     customers: customers.slice().sort((a, b) => b.visits - a.visits),
@@ -2015,9 +2717,10 @@ app.delete("/orders", requireStaff, (req, res) => {
       error: "Add header X-Confirm-Wipe: yes to confirm destruction",
     });
   }
+  const { persistOrders } = req.store;
   withWriteLock(async () => {
     await persistOrders([]); // await the Supabase mirror so the wipe is durable before we ack
-    console.log("[orders] All orders cleared");
+    console.log(`[orders] All orders cleared for ${req.store.slug}`);
     res.json({ success: true, message: "All orders cleared" });
   });
 });
@@ -2028,7 +2731,8 @@ app.delete("/orders", requireStaff, (req, res) => {
 // all routes.
 // ── Corporate / group pre-orders ───────────────────────────
 // Create a group. Public (self-serve via the corporate QR); staff may also create.
-app.post("/groups", (req, res) => {
+app.post("/groups", resolveTenant, (req, res) => {
+  const { loadGroups, persistGroups } = req.store;
   withWriteLock(() => {
     try {
       const b = req.body || {};
@@ -2056,7 +2760,7 @@ app.post("/groups", (req, res) => {
       groups.push(group);
       persistGroups(groups);
       console.log(`\n👥 NEW GROUP ${group.code} — ${group.company} · ${group.date} ${group.arrivalTime} (${group.source})`);
-      res.json({ success: true, code: group.code, id: group.id, joinPath: "/?group=" + group.code, group: publicGroupView(group) });
+      res.json({ success: true, code: group.code, id: group.id, joinPath: "/?r=" + req.store.slug + "&group=" + group.code, group: publicGroupView(group) });
     } catch (e) {
       console.error("[groups] create error:", e.message);
       res.status(500).json({ error: "Failed to create group" });
@@ -2065,15 +2769,16 @@ app.post("/groups", (req, res) => {
 });
 
 // Look up a group by code. Public → redacted view; staff token → full (with items).
-app.get("/groups/:code", (req, res) => {
+app.get("/groups/:code", resolveTenant, (req, res) => {
   const code = String(req.params.code || "").toUpperCase();
-  const g = loadGroups().find((x) => x.code === code);
+  const g = req.store.loadGroups().find((x) => x.code === code);
   if (!g) { res.status(404).json({ error: "Group not found" }); return; }
   res.json(isStaffReq(req) ? fullGroupView(g) : publicGroupView(g));
 });
 
 // A person joins a group with their NAME + order. Public.
-app.post("/groups/:code/join", (req, res) => {
+app.post("/groups/:code/join", resolveTenant, (req, res) => {
+  const { loadGroups, persistGroups, loadMenu } = req.store;
   withWriteLock(() => {
     try {
       const code = String(req.params.code || "").toUpperCase();
@@ -2095,7 +2800,7 @@ app.post("/groups/:code/join", (req, res) => {
         items,
         notes: sanitizeString(b.notes, 300),
         total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0)),
-        onlineSurcharge: orderSurcharge(items, menu),
+        onlineSurcharge: orderSurcharge(items, menu, req.tenant.config),
         createdAt: new Date().toISOString(),
       };
       g.members.push(member);
@@ -2111,14 +2816,15 @@ app.post("/groups/:code/join", (req, res) => {
 });
 
 // List all groups (staff) — powers the dashboard "Upcoming" view.
-app.get("/groups", requireStaff, (_req, res) => {
-  const groups = loadGroups().map(fullGroupView);
+app.get("/groups", requireStaff, (req, res) => {
+  const groups = req.store.loadGroups().map(fullGroupView);
   groups.sort((a, b) => String((a.date || "") + (a.arrivalTime || "")).localeCompare(String((b.date || "") + (b.arrivalTime || ""))));
   res.json(groups);
 });
 
 // Edit a group (staff): company/date/time/table/guestCount/status.
 app.patch("/groups/:id", requireStaff, (req, res) => {
+  const { loadGroups, persistGroups } = req.store;
   withWriteLock(() => {
     try {
       const key = String(req.params.id || "");
@@ -2153,6 +2859,7 @@ app.patch("/groups/:id", requireStaff, (req, res) => {
 
 // Remove one member from a group (staff) — fix a mistake / no-show.
 app.delete("/groups/:id/members/:memberId", requireStaff, (req, res) => {
+  const { loadGroups, persistGroups } = req.store;
   withWriteLock(() => {
     try {
       const key = String(req.params.id || "");
@@ -2174,6 +2881,7 @@ app.delete("/groups/:id/members/:memberId", requireStaff, (req, res) => {
 
 // Delete a whole group (staff) — cleanup test/cancelled bookings.
 app.delete("/groups/:id", requireStaff, (req, res) => {
+  const { loadGroups, persistGroups } = req.store;
   withWriteLock(() => {
     try {
       const key = String(req.params.id || "");
@@ -2210,55 +2918,80 @@ app.use((err, req, res, _next) => {
 });
 
 // ── Boot-time Supabase restore ───────────────────────────
-// If Supabase is configured, pull each blob and seed the corresponding local
-// file when the local file is missing or empty (the post-Render-wipe scenario,
-// since menu.json/orders.json/customers.json are gitignored and never ship).
-// A populated local file is trusted as-is. The local file remains the runtime
-// source of truth — this just gives us survival across deploys.
+// If Supabase is configured, pull the tenant registry and each tenant's blobs
+// and seed the corresponding local file when it's missing or empty (the
+// post-Render-wipe scenario). A populated local file is trusted as-is. The
+// local file remains the runtime source of truth — this just gives us survival
+// across deploys.
 async function restoreFromSupabase() {
   if (!supabase) return;
-  const targets = [
-    { key: "menu",      file: MENU_FILE,      valid: (v) => v && typeof v === "object" && !Array.isArray(v) && v.categories } ,
-    // Validate element shape too — not just "is an array" — so a corrupt/tampered
-    // remote blob is rejected rather than restored verbatim as runtime truth.
-    { key: "orders",    file: ORDERS_FILE,    valid: (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string" && Array.isArray(o.items)) },
-    { key: "customers", file: CUSTOMERS_FILE, valid: (v) => Array.isArray(v) && v.every((c) => c && typeof c === "object" && typeof c.email === "string") },
-    { key: "groups",    file: GROUPS_FILE,    valid: (v) => Array.isArray(v) && v.every((g) => g && typeof g === "object" && typeof g.code === "string") },
-  ];
-  for (const t of targets) {
-    try {
-      const exists = fs.existsSync(t.file);
-      const empty  = exists && !fs.readFileSync(t.file, "utf8").trim();
-      if (exists && !empty) continue; // local already has data — trust it
-      const remote = await pullFromSupabase(t.key);
-      if (remote == null) continue; // remote also empty — nothing to restore
-      if (!t.valid(remote)) {        // guard against a malformed/corrupt blob
-        console.warn(`[storage] restore ${t.key} skipped — remote blob has unexpected shape`);
-        continue;
+  // 1) The tenant registry itself.
+  try {
+    const localExists = fs.existsSync(TENANTS_FILE) && fs.readFileSync(TENANTS_FILE, "utf8").trim();
+    if (!localExists) {
+      const remote = await pullFromSupabase("tenants");
+      if (remote && typeof remote === "object" && !Array.isArray(remote)) {
+        writeJson(TENANTS_FILE, remote);
+        console.log("[storage] restored tenants registry from Supabase");
       }
-      atomicWriteSync(t.file, JSON.stringify(remote, null, 2));
-      console.log(`[storage] restored ${t.key} from Supabase`);
-    } catch (e) {
-      console.warn(`[storage] restore ${t.key} failed:`, e.message);
+    }
+  } catch (e) { console.warn("[storage] restore tenants failed:", e.message); }
+  loadTenantsIntoCache();
+
+  // 2) Each tenant's data blobs (tenant:<slug>:<name>).
+  for (const t of TENANTS.values()) {
+    const dir = path.join(DATA_DIR, t.slug);
+    const targets = [
+      { name: "menu",      file: path.join(dir, "menu.json"),      valid: (v) => v && typeof v === "object" && !Array.isArray(v) && v.categories },
+      { name: "orders",    file: path.join(dir, "orders.json"),    valid: (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string" && Array.isArray(o.items)) },
+      { name: "customers", file: path.join(dir, "customers.json"), valid: (v) => Array.isArray(v) && v.every((c) => c && typeof c === "object" && typeof c.email === "string") },
+      { name: "groups",    file: path.join(dir, "groups.json"),    valid: (v) => Array.isArray(v) && v.every((g) => g && typeof g === "object" && typeof g.code === "string") },
+    ];
+    for (const tg of targets) {
+      try {
+        const exists = fs.existsSync(tg.file);
+        const empty = exists && !fs.readFileSync(tg.file, "utf8").trim();
+        if (exists && !empty) continue; // local already has data — trust it
+        let remote = await pullFromSupabase(tKey(t.slug, tg.name));
+        // Back-compat: the single-tenant era stored data under un-prefixed keys
+        // ("orders","menu",…). On the first multi-tenant boot the default
+        // tenant's namespaced key is still empty, so fall back to the legacy key
+        // — the original café's live menu/orders carry over with NO migration
+        // step (the legacy rows are left untouched as a backup).
+        if (remote == null && t.slug === DEFAULT_TENANT) {
+          remote = await pullFromSupabase(tg.name);
+          if (remote != null) console.log(`[storage] ${t.slug}/${tg.name}: using legacy key "${tg.name}"`);
+        }
+        if (remote == null) continue;
+        if (!tg.valid(remote)) {
+          console.warn(`[storage] restore ${t.slug}/${tg.name} skipped — unexpected shape`);
+          continue;
+        }
+        writeJson(tg.file, remote);
+        console.log(`[storage] restored ${t.slug}/${tg.name} from Supabase`);
+      } catch (e) {
+        console.warn(`[storage] restore ${t.slug}/${tg.name} failed:`, e.message);
+      }
     }
   }
 }
 
 let server;
 async function boot() {
-  await restoreFromSupabase();
+  loadTenantsIntoCache();      // file-mode: load whatever is on disk
+  await restoreFromSupabase(); // supabase-mode: pull registry + per-tenant blobs, reload cache
+  ensureDefaultTenant();       // fresh install fallback: materialize the default café
   server = app.listen(PORT, () => {
-  const orders = loadOrders();
-  const menu = loadMenu();
-  const itemCount = (menu.categoryOrder || []).reduce(
-    (n, slug) => n + ((menu.categories[slug] && menu.categories[slug].items) || []).length, 0);
-  console.log(`\n🍳 Crispy Eatery backend running on http://localhost:${PORT}`);
-  console.log(`   Mode    : Local storage (orders + menu)`);
-  console.log(`   Orders  : ${orders.length} saved`);
-  console.log(`   Menu    : v${menu.version || "?"} · ${(menu.categoryOrder || []).length} categories · ${itemCount} items`);
-  console.log(`   Auth    : ${STAFF_TOKEN ? "STAFF_TOKEN set" : "STAFF_TOKEN NOT SET (staff routes 503)"}`);
+  console.log(`\n🍽  Multi-tenant ordering backend running on http://localhost:${PORT}`);
+  console.log(`   Mode    : Per-tenant storage (data/<slug>/) ${supabase ? "+ Supabase mirror" : "(file-only)"}`);
+  console.log(`   Tenants : ${TENANTS.size} (${allTenants().map((t) => t.slug).join(", ") || "none"})`);
+  console.log(`   Default : ${DEFAULT_TENANT} (used when a request has no ?r= and no staff token)`);
+  console.log(`   Admin   : ${process.env.PLATFORM_ADMIN_TOKEN ? "PLATFORM_ADMIN_TOKEN set" : "PLATFORM_ADMIN_TOKEN NOT SET (/admin/* → 503)"}`);
   console.log(`   CORS    : ${allowedOrigins.length ? allowedOrigins.join(", ") : "same-origin only (set FRONTEND_ORIGIN to allow browsers)"}`);
   console.log(`\n   Endpoints:`);
+  console.log(`     POST   /admin/tenants                 (platform) provision a new restaurant`);
+  console.log(`     GET    /admin/tenants                 (platform) list restaurants`);
+  console.log(`     GET    /tenant/:slug                  (public)  branding config for the SPA`);
   console.log(`     POST   /order                         (public)  receive order from QR menu`);
   console.log(`     POST   /orders/:id/add-items          (public)  add items to open tab`);
   console.log(`     GET    /orders/:id                    (public)  bill lookup`);

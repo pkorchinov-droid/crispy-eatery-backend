@@ -5,6 +5,12 @@
 -- existing in-memory data shape and atomic-write semantics from the file-based
 -- mode unchanged; Supabase is just a write-through backup that survives
 -- Render's ephemeral disk wipes.
+--
+-- MULTI-TENANT: no schema change needed. The same `state` table now holds one
+-- registry row under the key "tenants" plus per-restaurant blobs under keys
+-- "tenant:<slug>:orders", "tenant:<slug>:menu", "tenant:<slug>:groups",
+-- "tenant:<slug>:customers". Run migrate-to-tenants.js once to namespace any
+-- pre-existing "orders"/"menu"/… rows into the default tenant.
 
 create table if not exists state (
   key text primary key,
