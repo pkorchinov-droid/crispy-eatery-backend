@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Get your café online · Crispy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14110e; --panel:#1d1812; --line:#3a3026; --gold:#e8c477; --ink:#f3ead9; --muted:#a99a82; --green:#5fb87a; --red:#d9774e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:22px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header h1 { font-family:Georgia,serif; font-size:22px; margin:0; color:var(--gold); font-weight:normal; }
+  header .sub { color:var(--muted); font-size:13px; }
+  .wrap { max-width:980px; margin:0 auto; padding:24px 20px 80px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:22px; }
+  .panel h2 { font-family:Georgia,serif; font-weight:normal; color:var(--gold); margin:0 0 14px; font-size:17px; }
+  h3 { margin:0; font-size:18px; font-weight:500; color:var(--ink); }
+  .muted-sub { color:var(--muted); font-size:14px; margin:4px 0 18px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:0 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+  input, textarea, select { width:100%; background:#0f0c09; border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:9px 11px; font-size:14px; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { outline:none; border-color:var(--gold); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+  @media (max-width:520px){ .grid, .grid3 { grid-template-columns:1fr; } }
+  .field { margin-bottom:14px; }
+  .hint { font-size:11px; color:var(--muted); margin-top:3px; }
+  code { background:#0f0c09; border:1px solid var(--line); border-radius:6px; padding:2px 6px; font-size:12px; }
+  button { background:var(--gold); color:#1a1208; border:none; border-radius:8px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:7px; }
+  button:hover { filter:brightness(1.07); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--gold); border:1px solid var(--line); font-weight:500; }
+  a.btnlink { background:var(--gold); color:#1a1208; border:none; border-radius:8px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:7px; text-decoration:none; }
+  a.btnlink:hover { filter:brightness(1.07); }
+  a.btnlink.ghost { background:transparent; color:var(--gold); border:1px solid var(--line); font-weight:500; }
+  .msg { padding:10px 12px; border-radius:8px; font-size:13px; margin-top:12px; display:none; }
+  .msg.err { background:rgba(217,119,78,.15); color:#f0a988; border:1px solid rgba(217,119,78,.4); }
+  .msg.ok { background:rgba(95,184,122,.13); color:#9fd9b1; border:1px solid rgba(95,184,122,.4); }
+  .msg.info { background:rgba(232,196,119,.08); color:var(--ink); border:1px solid var(--line); }
+  .result { border:1px dashed var(--gold); border-radius:10px; padding:16px; background:rgba(232,196,119,.06); }
+  .swatch { width:22px; height:22px; border-radius:5px; border:1px solid var(--line); display:inline-block; vertical-align:middle; }
+
+  /* ── Hero (signed-out) ── */
+  .hero { text-align:center; padding:46px 20px 30px; }
+  .hero .eyebrow { font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--gold); margin-bottom:14px; }
+  .hero h1.big { font-family:'Fraunces',Georgia,serif; font-weight:400; font-size:46px; line-height:1.02; margin:0 auto 14px; max-width:680px; }
+  .hero h1.big em { font-style:italic; color:var(--gold); }
+  .hero p.lede { color:var(--muted); font-size:17px; max-width:520px; margin:0 auto 26px; line-height:1.5; }
+  .hero .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .hero .cta button { font-size:15px; padding:13px 26px; }
+  .feats { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; max-width:760px; margin:34px auto 0; }
+  @media (max-width:640px){ .feats { grid-template-columns:1fr; } .hero h1.big { font-size:34px; } }
+  .feat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; text-align:left; }
+  .feat .ic { font-size:20px; margin-bottom:8px; }
+  .feat .ft { font-weight:600; font-size:14px; margin-bottom:4px; }
+  .feat .fd { color:var(--muted); font-size:13px; line-height:1.45; }
+  .signin-box { max-width:440px; margin:6px auto 0; }
+  .signin-box .row { display:flex; gap:10px; align-items:flex-end; }
+  .signin-box .row .field { flex:1; margin:0; }
+
+  /* ── Wizard ── */
+  .wizard-grid { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:26px; align-items:start; }
+  @media (max-width:720px){ .wizard-grid { grid-template-columns:1fr; } }
+  .stepper { position:relative; display:grid; grid-template-columns:repeat(4,1fr); margin-bottom:26px; }
+  .stepper .line { position:absolute; top:16px; left:12.5%; right:12.5%; height:2px; background:var(--line); }
+  .stepper .st { position:relative; text-align:center; }
+  .stepper .dot { width:34px; height:34px; border-radius:50%; margin:0 auto; display:flex; align-items:center; justify-content:center; font-size:14px; background:var(--panel); border:1.5px solid var(--line); color:var(--muted); }
+  .stepper .st.active .dot, .stepper .st.done .dot { background:var(--gold); border-color:var(--gold); color:#1a1208; font-weight:600; }
+  .stepper .lbl { font-size:12px; margin-top:6px; color:var(--muted); }
+  .stepper .st.active .lbl { color:var(--ink); }
+  .swatches { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .swatch-c { width:30px; height:30px; border-radius:50%; cursor:pointer; border:none; }
+  .swatch-c.sel { outline:2px solid var(--gold); outline-offset:2px; }
+  .sec { border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; }
+  .sec-head { display:flex; gap:8px; margin-bottom:10px; align-items:center; }
+  .sec-title { flex:1; font-weight:500; }
+  .dish { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  .dish .d-name { flex:1; min-width:120px; }
+  .dish .d-price { width:84px; flex-shrink:0; }
+  .dish .d-desc { flex-basis:100%; }
+  .rm { background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:18px; padding:0 6px; line-height:1; }
+  .rm:hover { color:var(--red); filter:none; }
+  .add-dish, .add-sec, .dashbtn { background:transparent; border:1px dashed var(--line); color:var(--gold); font-size:13px; padding:7px 12px; cursor:pointer; border-radius:8px; font-weight:500; }
+  .wiz-nav { display:flex; gap:10px; align-items:center; margin-top:24px; }
+  .pv-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:8px; }
+  /* Live preview = faithful mini of the real customer menu (cream + Fraunces). */
+  .phone { background:#f4ede0; border:1px solid var(--line); border-radius:24px; overflow:hidden; color:#2b1f17; font-family:'Inter Tight',-apple-system,sans-serif; }
+  .pv-eyebrow { font-size:10px; letter-spacing:.15em; text-transform:uppercase; font-weight:600; }
+  .pv-table { font-size:10px; color:#8a7c69; margin-top:2px; }
+  .pv-pills { display:flex; gap:6px; padding:12px 0 12px 15px; overflow:hidden; }
+  .pv-pill { font-size:8.5px; letter-spacing:.08em; text-transform:uppercase; font-weight:600; padding:5px 10px; border-radius:20px; white-space:nowrap; }
+  .pv-title { font-family:'Fraunces',Georgia,serif; font-style:italic; font-weight:400; font-size:31px; line-height:.9; padding:2px 15px 0; }
+  .pv-sub { font-size:9px; letter-spacing:.15em; text-transform:uppercase; color:#9a8c76; padding:9px 15px 4px; }
+  .pv-row { display:flex; align-items:stretch; }
+  .pv-rtext { flex:1; min-width:0; padding:12px 0 12px 15px; border-bottom:1.2px dotted #d2c4ab; }
+  .pv-iname { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:15px; line-height:1.06; }
+  .pv-idesc { font-size:9px; color:#8a7c69; margin-top:2px; line-height:1.2; }
+  .pv-iprice { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:14px; white-space:nowrap; }
+  .pv-rimg { width:84px; flex-shrink:0; align-self:stretch; background:#ece1cd; display:flex; align-items:center; justify-content:center; min-height:64px; }
+  .pv-bar { padding:12px 15px; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#f4ede0; }
+  .pv-empty { color:#a99a82; font-size:12px; text-align:center; padding:26px 14px; }
+  .done-check { width:54px; height:54px; border-radius:50%; background:rgba(95,184,122,.15); color:var(--green); display:flex; align-items:center; justify-content:center; margin:0 auto 10px; font-size:28px; }
+
+  /* ── Import / spinner ── */
+  .import-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .import-btn { background:var(--gold); color:#1a1208; font-size:14px; font-weight:600; padding:11px 18px; border:none; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+  .import-btn:hover { filter:brightness(1.07); }
+  .spinner { width:16px; height:16px; border:2px solid rgba(26,18,8,.3); border-top-color:#1a1208; border-radius:50%; animation:spin .7s linear infinite; display:inline-block; }
+  .spinner.gold { border-color:rgba(232,196,119,.25); border-top-color:var(--gold); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .tmpl-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px; font-size:13px; color:var(--muted); }
+  .tmpl-row .add-sec { font-weight:500; }
+  .review { font-size:14px; }
+  .review .rk { color:var(--muted); display:inline-block; min-width:130px; }
+  .review .rsec { margin:10px 0 2px; font-weight:600; color:var(--gold); }
+  .review .ritem { font-size:13px; color:var(--ink); padding:1px 0 1px 12px; }
+  .actions { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+  .footer { text-align:center; color:var(--muted); font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crispy</h1>
+  <span class="sub">Your café, online — QR menu, kitchen dashboard, pay at the counter</span>
+</header>
+<div class="wrap">
+
+  <!-- ════════════ A) SIGNED-OUT LANDING ════════════ -->
+  <div id="view-out" style="display:none">
+    <div class="hero">
+      <div class="eyebrow">No apps · No commissions</div>
+      <h1 class="big">Get your café <em>online</em> in minutes</h1>
+      <p class="lede">QR menu, kitchen dashboard, pay at the counter. Customers scan, order, and pay — you keep every cent.</p>
+      <div class="cta">
+        <button id="getStarted">Get started — it's free to set up</button>
+      </div>
+    </div>
+
+    <div class="feats">
+      <div class="feat"><div class="ic">📱</div><div class="ft">Scan-to-order menu</div><div class="fd">A beautiful QR menu on every table. Updates instantly when you change a price.</div></div>
+      <div class="feat"><div class="ic">🍳</div><div class="ft">Live kitchen dashboard</div><div class="fd">Orders land in the kitchen the moment a guest taps order. No middleman.</div></div>
+      <div class="feat"><div class="ic">💳</div><div class="ft">Pay at the counter</div><div class="fd">Cash or card, your terms. No per-order commission, ever.</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:34px;">
+      <h2>Already have a café?</h2>
+      <div class="signin-box">
+        <p class="muted-sub" style="margin-top:0;">Enter your email and we'll send a one-tap sign-in link — no password to remember.</p>
+        <div class="row">
+          <div class="field">
+            <label>Email</label>
+            <input type="email" id="si_email" placeholder="you@yourcafe.com" autocomplete="email" />
+          </div>
+          <button id="si_send">Send link</button>
+        </div>
+        <div class="msg" id="si_msg"></div>
+      </div>
+    </div>
+
+    <div class="footer">Powered by IT Logistics</div>
+  </div>
+
+  <!-- ════════════ B) WIZARD ════════════ -->
+  <div id="view-wiz" style="display:none">
+    <div class="panel">
+      <h2>Set up your café</h2>
+      <div class="wizard-grid">
+        <div>
+          <div class="stepper" id="stepper">
+            <div class="line"></div>
+            <div class="st active"><div class="dot">1</div><div class="lbl">Basics</div></div>
+            <div class="st"><div class="dot">2</div><div class="lbl">Style</div></div>
+            <div class="st"><div class="dot">3</div><div class="lbl">Menu</div></div>
+            <div class="st"><div class="dot">4</div><div class="lbl">Go live</div></div>
+          </div>
+
+          <div id="step-1">
+            <h3>Let's set up your café</h3>
+            <p class="muted-sub">Takes about 2 minutes — you can change anything later.</p>
+            <div class="field">
+              <label>What's it called?</label>
+              <input id="w_name" placeholder="e.g. The Corner Café" autocomplete="off" />
+              <div class="hint" id="slugHint">Its web address will be <code>…/?r=</code></div>
+            </div>
+            <div class="field">
+              <label>Your email</label>
+              <input type="email" id="w_email" placeholder="you@yourcafe.com" autocomplete="email" />
+              <div class="hint">We'll email your sign-in link here so you can log back in.</div>
+            </div>
+          </div>
+
+          <div id="step-2" style="display:none">
+            <h3>Pick your look</h3>
+            <p class="muted-sub">Your brand colour shows in the menu header and accents.</p>
+            <div class="field">
+              <label>Brand colour</label>
+              <div class="swatches" id="swatches"></div>
+              <input type="color" id="w_color_custom" value="#c25a3a" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
+            </div>
+            <div class="grid3">
+              <div class="field"><label>Currency symbol</label><input id="w_currency" value="$" /></div>
+              <div class="field"><label>Currency code</label><input id="w_currencyCode" value="NZD" /></div>
+              <div class="field"><label>GST / tax %</label><input id="w_gst" value="0.15" /><div class="hint">0.15 = 15% incl.</div></div>
+            </div>
+            <div class="grid">
+              <div class="field"><label>Timezone</label><input id="w_tz" value="Pacific/Auckland" /></div>
+              <div class="field"><label>Locale</label><input id="w_locale" value="en-NZ" /></div>
+            </div>
+            <div class="field">
+              <label>Established tagline (optional)</label>
+              <input id="w_established" placeholder="Est. 2014" />
+              <div class="hint">Add your logo later in the menu editor.</div>
+            </div>
+          </div>
+
+          <div id="step-3" style="display:none">
+            <h3>Add your menu</h3>
+            <p class="muted-sub">Import from a photo, start from a template, or type it in. You can edit everything later.</p>
+            <div class="import-row">
+              <button class="import-btn" id="importBtn">📷 Import from a photo</button>
+              <input type="file" id="importFile" accept="image/*,application/pdf" style="display:none" />
+              <span id="importStatus" style="font-size:13px; color:var(--muted);"></span>
+            </div>
+            <div class="msg" id="importMsg"></div>
+            <div class="tmpl-row">
+              <span>Start from a template:</span>
+              <button class="add-sec" data-tmpl="cafe">Café</button>
+              <button class="add-sec" data-tmpl="restaurant">Restaurant</button>
+              <button class="add-sec" data-tmpl="bar">Bar</button>
+            </div>
+            <div id="menuEditor"></div>
+          </div>
+
+          <div id="step-4" style="display:none">
+            <div id="reviewBox"></div>
+            <div id="doneBox"></div>
+          </div>
+
+          <div class="msg err" id="wizMsg"></div>
+          <div class="wiz-nav" id="wizNav">
+            <button class="ghost" id="backBtn">Back</button>
+            <button class="ghost" id="cancelBtn">Cancel</button>
+            <button id="nextBtn" style="margin-left:auto;">Continue</button>
+          </div>
+        </div>
+
+        <div id="previewWrap">
+          <div class="pv-label">Live preview</div>
+          <div class="phone" id="preview"></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer">Powered by IT Logistics</div>
+  </div>
+
+  <!-- ════════════ C) SIGNED-IN CONSOLE ════════════ -->
+  <div id="view-in" style="display:none">
+    <div class="panel" id="mePanel">
+      <div style="color:var(--muted); font-size:14px;">Loading your café…</div>
+    </div>
+    <div class="footer">Powered by IT Logistics</div>
+  </div>
+
+  <!-- boot fallback -->
+  <div id="view-boot" class="panel" style="color:var(--muted);">Loading…</div>
+
+</div>
+
+<script>
+(function(){
+  var SESSION = null;
+  try { SESSION = localStorage.getItem("ownerSession"); } catch(e){}
+  var $ = function(id){ return document.getElementById(id); };
+  function show(el, msg, kind){ el.innerHTML = msg; el.className = "msg " + (kind||"info"); el.style.display = "block"; }
+  function showText(el, msg, kind){ el.textContent = msg; el.className = "msg " + (kind||"info"); el.style.display = "block"; }
+  function hide(el){ if(el) el.style.display = "none"; }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+  function slugify(s){ return String(s||"").toLowerCase().trim().replace(/[\s_]+/g,"-").replace(/[^a-z0-9-]/g,"").replace(/-+/g,"-").replace(/^-+|-+$/g,"").slice(0,40); }
+  function validEmail(s){ return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s||"").trim()); }
+  function authHeaders(){ return { "Authorization":"Bearer "+SESSION }; }
+
+  // ── View routing ──
+  function showView(name){
+    ["out","wiz","in","boot"].forEach(function(v){ var el=$("view-"+v); if(el) el.style.display = (v===name)?"block":"none"; });
+    try { window.scrollTo(0,0); } catch(e){}
+  }
+
+  // ════════════ A) SIGNED-OUT ════════════
+  function renderSignedOut(showLinkExpired){
+    showView("out");
+    hide($("si_msg"));
+    if(showLinkExpired){
+      showText($("si_msg"), "That sign-in link expired or was already used — request a new one.", "err");
+    }
+  }
+  $("getStarted").onclick = function(){ startWizard(); };
+  $("si_send").onclick = function(){ requestLink($("si_email").value); };
+  $("si_email").addEventListener("keydown", function(e){ if(e.key==="Enter") requestLink(this.value); });
+
+  function requestLink(emailRaw){
+    var email = String(emailRaw||"").trim();
+    if(!validEmail(email)){ showText($("si_msg"), "Enter a valid email address.", "err"); return; }
+    $("si_send").disabled = true;
+    showText($("si_msg"), "Sending…", "info");
+    fetch("/auth/request-link", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ email:email }) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }); })
+      .then(function(j){
+        $("si_send").disabled = false;
+        var html = "Check your email for your sign-in link.";
+        if(j && j.devLink){
+          html += '<br><a href="'+esc(j.devLink)+'" style="color:var(--gold);">Dev sign-in link</a>';
+        }
+        show($("si_msg"), html, "ok");
+      })
+      .catch(function(){
+        $("si_send").disabled = false;
+        showText($("si_msg"), "Couldn't reach the server — please try again.", "err");
+      });
+  }
+
+  // ════════════ B) WIZARD ════════════
+  var STEP = 1;
+  var PRESETS = ["#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c","#854f0b"];
+  var TEMPLATES = {
+    cafe:       ["Coffee", "Breakfast", "Brunch", "Sweets"],
+    restaurant: ["Starters", "Mains", "Sides", "Desserts"],
+    bar:        ["Cocktails", "Beer & Cider", "Wine", "Bar Snacks"]
+  };
+  var state = {};
+  function freshState(){
+    return { name:"", slug:"", email:"", themeColor:"#c25a3a", established:"",
+             currency:"$", currencyCode:"NZD", gstRate:"0.15",
+             timezone:"Pacific/Auckland", locale:"en-NZ",
+             sections:[{ title:"", items:[{ name:"", price:"", desc:"" }] }] };
+  }
+
+  function startWizard(){
+    state = freshState();
+    showView("wiz");
+    // step-1
+    $("w_name").value = "";
+    $("w_name").oninput = function(){
+      state.name = this.value; state.slug = slugify(this.value);
+      $("slugHint").innerHTML = 'Its web address will be <code>…/?r=' + esc(state.slug) + '</code>';
+      renderPreview();
+    };
+    $("w_email").value = "";
+    $("w_email").oninput = function(){ state.email = this.value; };
+    // step-2
+    bindField("w_currency","currency"); bindField("w_currencyCode","currencyCode");
+    bindField("w_gst","gstRate"); bindField("w_tz","timezone"); bindField("w_locale","locale");
+    bindField("w_established","established");
+    $("w_color_custom").value = state.themeColor;
+    $("w_color_custom").oninput = function(){ state.themeColor = this.value; renderSwatches(); renderPreview(); };
+    renderSwatches(); renderMenuEditor(); renderPreview(); goStep(1);
+  }
+  function bindField(id, key){ var el=$(id); el.value = state[key]; el.oninput = function(){ state[key]=this.value; renderPreview(); }; }
+
+  function renderSwatches(){
+    var h = $("swatches");
+    h.innerHTML = PRESETS.map(function(c){
+      var sel = c.toLowerCase()===String(state.themeColor).toLowerCase() ? " sel" : "";
+      return '<span class="swatch-c'+sel+'" data-c="'+c+'" style="background:'+c+'"></span>';
+    }).join("");
+    h.querySelectorAll(".swatch-c").forEach(function(el){
+      el.onclick = function(){ state.themeColor = el.getAttribute("data-c"); $("w_color_custom").value = state.themeColor; renderSwatches(); renderPreview(); };
+    });
+  }
+
+  // ── Menu editor (re-rendered only on structural change to preserve focus) ──
+  function renderMenuEditor(){
+    var host = $("menuEditor");
+    host.innerHTML = state.sections.map(function(sec, si){
+      return '<div class="sec">'
+        + '<div class="sec-head">'
+        +   '<input class="sec-title" data-si="'+si+'" value="'+esc(sec.title)+'" placeholder="Section name (e.g. Breakfast)" />'
+        +   '<button class="rm rm-sec" data-si="'+si+'" title="Remove section">&times;</button>'
+        + '</div>'
+        + sec.items.map(function(it, ii){
+            return '<div class="dish">'
+              + '<input class="d-name" data-si="'+si+'" data-ii="'+ii+'" value="'+esc(it.name)+'" placeholder="Dish name" />'
+              + '<input class="d-price" data-si="'+si+'" data-ii="'+ii+'" value="'+esc(it.price)+'" placeholder="0.00" inputmode="decimal" />'
+              + '<button class="rm rm-dish" data-si="'+si+'" data-ii="'+ii+'" title="Remove dish">&times;</button>'
+              + '<input class="d-desc" data-si="'+si+'" data-ii="'+ii+'" value="'+esc(it.desc||"")+'" placeholder="Short description (optional)" />'
+            + '</div>';
+          }).join("")
+        + '<button class="add-dish" data-si="'+si+'">+ Add dish</button>'
+      + '</div>';
+    }).join("") + '<button class="add-sec" id="addSec">+ Add section</button>';
+
+    host.querySelectorAll(".sec-title").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].title = el.value; renderPreview(); }; });
+    host.querySelectorAll(".d-name").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].items[+el.dataset.ii].name = el.value; renderPreview(); }; });
+    host.querySelectorAll(".d-price").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].items[+el.dataset.ii].price = el.value; renderPreview(); }; });
+    host.querySelectorAll(".d-desc").forEach(function(el){ el.oninput = function(){ state.sections[+el.dataset.si].items[+el.dataset.ii].desc = el.value; renderPreview(); }; });
+    host.querySelectorAll(".rm-sec").forEach(function(el){ el.onclick = function(){ state.sections.splice(+el.dataset.si,1); if(!state.sections.length) state.sections.push({title:"",items:[{name:"",price:"",desc:""}]}); renderMenuEditor(); renderPreview(); }; });
+    host.querySelectorAll(".rm-dish").forEach(function(el){ el.onclick = function(){ state.sections[+el.dataset.si].items.splice(+el.dataset.ii,1); if(!state.sections[+el.dataset.si].items.length) state.sections[+el.dataset.si].items.push({name:"",price:"",desc:""}); renderMenuEditor(); renderPreview(); }; });
+    host.querySelectorAll(".add-dish").forEach(function(el){ el.onclick = function(){ state.sections[+el.dataset.si].items.push({name:"",price:"",desc:""}); renderMenuEditor(); renderPreview(); }; });
+    $("addSec").onclick = function(){ state.sections.push({title:"",items:[{name:"",price:"",desc:""}]}); renderMenuEditor(); renderPreview(); };
+  }
+
+  // ── Templates ──
+  document.querySelectorAll(".tmpl-row [data-tmpl]").forEach(function(b){
+    b.onclick = function(){
+      var names = TEMPLATES[b.getAttribute("data-tmpl")] || [];
+      // Only prefill if the menu is still essentially empty.
+      var hasContent = state.sections.some(function(s){ return (s.title||"").trim() || s.items.some(function(i){ return (i.name||"").trim(); }); });
+      if(hasContent){ if(!confirm("Replace the current menu with this template's empty sections?")) return; }
+      state.sections = names.map(function(n){ return { title:n, items:[{ name:"", price:"", desc:"" }] }; });
+      renderMenuEditor(); renderPreview();
+    };
+  });
+
+  // ── Photo / PDF import ──
+  $("importBtn").onclick = function(){ $("importFile").click(); };
+  $("importFile").onchange = function(){
+    var f = this.files && this.files[0];
+    this.value = ""; // allow re-picking the same file later
+    if(!f) return;
+    hide($("importMsg"));
+    var btn = $("importBtn"), st = $("importStatus");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Reading your menu…';
+    st.textContent = "";
+    var fd = new FormData(); fd.append("file", f);
+    fetch("/menu/extract", { method:"POST", body:fd })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, status:r.status, j:j }; }); })
+      .then(function(res){
+        btn.disabled = false;
+        btn.innerHTML = "📷 Import from a photo";
+        if(!res.ok || !res.j || !res.j.success){
+          var code = res.j && res.j.code;
+          if(code === "no_ai"){
+            show($("importMsg"), "Photo import isn't available right now — add items below.", "info");
+          } else {
+            show($("importMsg"), "Couldn't read that menu — add items below, or try a clearer photo.", "info");
+          }
+          return;
+        }
+        var cats = Array.isArray(res.j.categories) ? res.j.categories : [];
+        if(!cats.length){ show($("importMsg"), "No items found in that image — add them below.", "info"); return; }
+        // Prefill editor from extracted categories.
+        state.sections = cats.map(function(c){
+          var items = Array.isArray(c.items) ? c.items : [];
+          var rows = items.map(function(it){
+            return { name:String(it.name||""), price: (it.price==null?"":String(it.price)), desc:String(it.desc||"") };
+          });
+          if(!rows.length) rows = [{ name:"", price:"", desc:"" }];
+          return { title:String(c.title||""), items:rows };
+        });
+        if(!state.sections.length) state.sections = [{ title:"", items:[{ name:"", price:"", desc:"" }] }];
+        renderMenuEditor(); renderPreview();
+        var n = cats.reduce(function(a,c){ return a + (Array.isArray(c.items)?c.items.length:0); }, 0);
+        st.textContent = "Imported " + n + " item" + (n===1?"":"s") + " — review and tweak below.";
+      })
+      .catch(function(){
+        btn.disabled = false;
+        btn.innerHTML = "📷 Import from a photo";
+        show($("importMsg"), "Photo import isn't available right now — add items below.", "info");
+      });
+  };
+
+  // ── Live preview — faithful mini of the real customer menu ──
+  var PLATE_SVG = '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#c4b399" stroke-width="1.1"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/></svg>';
+  function renderPreview(){
+    var color = state.themeColor || "#c25a3a";
+    var cur = state.currency || "$";
+    var name = ((state.name||"").trim() || "Your café");
+    var secs = state.sections.filter(function(s){ return (s.title||"").trim() || s.items.some(function(i){ return (i.name||"").trim(); }); });
+    var pills = (secs.length ? secs : [{title:"Menu"}]).map(function(s, i){
+      var t = (s.title||"").trim() || "Section";
+      var style = i===0 ? "background:#2b1f17;color:#f4ede0;" : "background:transparent;color:#8a7c69;border:1px solid #d2c4ab;";
+      return '<span class="pv-pill" style="'+style+'">'+esc(t)+'</span>';
+    }).join("");
+    var first = secs[0];
+    var title = first ? ((first.title||"").trim() || "Menu") : "Menu";
+    var items = first ? first.items.filter(function(i){ return (i.name||"").trim(); }) : [];
+    var rows = items.map(function(it, idx){
+      var pn = parseFloat(it.price);
+      var price = (it.price!=="" && !isNaN(pn)) ? cur + pn.toFixed(2) : "";
+      var last = idx === items.length - 1 ? "border-bottom:none;" : "";
+      var desc = (it.desc||"").trim() ? '<div class="pv-idesc">'+esc(it.desc.trim())+'</div>' : '';
+      return '<div class="pv-row">'
+        + '<div class="pv-rtext" style="'+last+'"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;"><span class="pv-iname">'+esc(it.name)+'</span><span class="pv-iprice">'+price+'</span></div>'+desc+'</div>'
+        + '<div class="pv-rimg">'+PLATE_SVG+'</div>'
+      + '</div>';
+    }).join("");
+    var estLine = (state.established||"").trim() ? '<div class="pv-table">'+esc(state.established.trim())+'</div>' : '<div class="pv-table">Table 10 · ordering</div>';
+    $("preview").innerHTML =
+      '<div style="padding:15px 15px 0;"><div class="pv-eyebrow" style="color:'+color+';">'+esc(name)+'</div>'+estLine+'</div>'
+      + '<div class="pv-pills">'+pills+'</div>'
+      + '<div class="pv-title">'+esc(title)+'</div>'
+      + '<div class="pv-sub">Served from open till close</div>'
+      + (rows || '<div class="pv-empty">Your dishes appear here as you add them — each with its own photo.</div>')
+      + '<div class="pv-bar" style="background:'+color+';"><span style="opacity:.9;">Your table</span><span style="font-family:\'Fraunces\',Georgia,serif;font-size:14px;">View order</span></div>';
+  }
+
+  // ── Steps ──
+  function goStep(n){ STEP=n; renderStep(); }
+  function renderStep(){
+    for(var i=1;i<=4;i++){ var el=$("step-"+i); if(el) el.style.display = (i===STEP)?"block":"none"; }
+    document.querySelectorAll("#view-wiz .stepper .st").forEach(function(s, idx){
+      var n=idx+1; s.className = "st" + (n===STEP?" active":(n<STEP?" done":""));
+      s.querySelector(".dot").innerHTML = (n<STEP) ? "&#10003;" : String(n);
+    });
+    var done = $("doneBox").innerHTML.trim().length > 0; // after success, hide nav
+    $("backBtn").style.visibility = (STEP>1 && STEP<4) ? "visible" : "hidden";
+    $("cancelBtn").style.display = (STEP<4) ? "inline-flex" : "none";
+    $("nextBtn").style.display = (STEP<4) ? "inline-flex" : "none";
+    $("nextBtn").textContent = (STEP===3) ? "Review" : "Continue";
+    $("previewWrap").style.display = (STEP<4) ? "block" : "none";
+    $("wizNav").style.display = (STEP<4 || !done) ? "flex" : "none";
+    if(STEP===4){ $("reviewBox").style.display = done ? "none" : "block"; }
+    hide($("wizMsg"));
+    if(STEP===4 && !done) renderReview();
+  }
+  $("nextBtn").onclick = function(){
+    if(STEP===1){
+      if(!(state.name||"").trim()){ showText($("wizMsg"),"Give your café a name to continue.","err"); return; }
+      if(!validEmail(state.email)){ showText($("wizMsg"),"Enter a valid email so we can send your sign-in link.","err"); return; }
+      goStep(2);
+    } else if(STEP===2){ goStep(3); }
+    else if(STEP===3){ goStep(4); }
+  };
+  $("backBtn").onclick = function(){ if(STEP>1 && STEP<4) goStep(STEP-1); };
+  $("cancelBtn").onclick = function(){ if(SESSION){ renderSignedIn(); } else { renderSignedOut(false); } };
+
+  // ── buildMenuPayload — full nested object (mirrors admin-console) ──
+  function buildMenuPayload(){
+    var menu = { version:1, categoryOrder:[], categories:{} }, usedId = {};
+    state.sections.forEach(function(sec){
+      var title=(sec.title||"").trim();
+      var items=sec.items.filter(function(i){ return (i.name||"").trim(); });
+      if(!title && !items.length) return;
+      var base=slugify(title||"section")||"section", slug=base, n=1;
+      while(menu.categories[slug]){ n++; slug=base+"-"+n; }
+      menu.categoryOrder.push(slug);
+      menu.categories[slug] = { title: title||"Menu", items: items.map(function(it){
+        var ib=slugify(it.name)||"item", id=ib, k=1;
+        while(usedId[id]){ k++; id=ib+"-"+k; } usedId[id]=1;
+        var item={ id:id, name:(it.name||"").trim() };
+        var pn=parseFloat(it.price); if(!isNaN(pn) && pn>=0) item.price=Math.round(pn*100)/100;
+        var d=(it.desc||"").trim(); if(d) item.desc=d;
+        return item;
+      })};
+    });
+    return menu;
+  }
+
+  // ── Review (step 4 before submit) ──
+  function renderReview(){
+    var menu = buildMenuPayload();
+    var nCats = menu.categoryOrder.length;
+    var nItems = menu.categoryOrder.reduce(function(a,k){ return a + menu.categories[k].items.length; }, 0);
+    var menuHtml = menu.categoryOrder.length
+      ? menu.categoryOrder.map(function(k){
+          var c = menu.categories[k];
+          return '<div class="rsec">'+esc(c.title)+'</div>'
+            + c.items.map(function(it){
+                var p = (typeof it.price==="number") ? (' — '+esc((state.currency||"$"))+it.price.toFixed(2)) : '';
+                return '<div class="ritem">'+esc(it.name)+p+'</div>';
+              }).join("");
+        }).join("")
+      : '<div class="muted-sub">No menu items yet — you can add them later in the menu editor.</div>';
+    $("reviewBox").innerHTML =
+      '<h3>Ready to go live?</h3>'
+      + '<p class="muted-sub">Quick check, then we\'ll create your café.</p>'
+      + '<div class="review">'
+      +   '<div><span class="rk">Café name</span><strong>'+esc(state.name.trim())+'</strong></div>'
+      +   '<div><span class="rk">Web address</span><code>…/?r='+esc(state.slug||slugify(state.name))+'</code></div>'
+      +   '<div><span class="rk">Email</span>'+esc(state.email.trim())+'</div>'
+      +   '<div><span class="rk">Brand colour</span><span class="swatch" style="background:'+esc(state.themeColor)+';"></span> '+esc(state.themeColor)+'</div>'
+      +   '<div><span class="rk">Currency</span>'+esc(state.currency)+' '+esc(state.currencyCode)+'</div>'
+      +   '<div><span class="rk">Menu</span>'+nCats+' section'+(nCats===1?"":"s")+' · '+nItems+' item'+(nItems===1?"":"s")+'</div>'
+      +   (state.established.trim() ? '<div><span class="rk">Tagline</span>'+esc(state.established.trim())+'</div>' : '')
+      +   '<div style="margin-top:12px;">'+menuHtml+'</div>'
+      + '</div>'
+      + '<div class="actions">'
+      +   '<button class="ghost" id="reviewBack">Back to menu</button>'
+      +   '<button id="goLiveBtn">Create my café &amp; go live</button>'
+      + '</div>';
+    $("reviewBack").onclick = function(){ goStep(3); };
+    $("goLiveBtn").onclick = createCafe;
+  }
+
+  function createCafe(){
+    hide($("wizMsg"));
+    var payload = {
+      email: state.email.trim(),
+      name: state.name.trim(),
+      slug: state.slug || slugify(state.name) || undefined,
+      themeColor: state.themeColor,
+      established: (state.established||"").trim() || undefined,
+      currency: (state.currency||"$").trim() || "$",
+      currencyCode: (state.currencyCode||"NZD").trim() || "NZD",
+      gstRate: parseFloat(state.gstRate) || 0,
+      locale: (state.locale||"en-NZ").trim() || "en-NZ",
+      timezone: (state.timezone||"Pacific/Auckland").trim() || "Pacific/Auckland",
+      menu: buildMenuPayload()
+    };
+    var btn = $("goLiveBtn");
+    if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating…'; }
+    fetch("/signup", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(payload) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, status:r.status, j:j }; }); })
+      .then(function(res){
+        if(btn){ btn.disabled = false; btn.innerHTML = "Create my café &amp; go live"; }
+        if(res.ok && res.j && res.j.success){
+          SESSION = res.j.session;
+          try { localStorage.setItem("ownerSession", SESSION); } catch(e){}
+          renderLive(res.j);
+          return;
+        }
+        if(res.status === 409 || (res.j && res.j.code === "exists")){
+          showText($("wizMsg"), "You already have a café — sign in instead.", "err");
+          renderSignedOut(false);
+          var em = $("si_email"); if(em){ em.value = state.email.trim(); em.focus(); }
+          return;
+        }
+        showText($("wizMsg"), (res.j && res.j.error) || "Couldn't create your café — please try again.", "err");
+      })
+      .catch(function(){
+        if(btn){ btn.disabled = false; btn.innerHTML = "Create my café &amp; go live"; }
+        showText($("wizMsg"), "Couldn't reach the server — please try again.", "err");
+      });
+  }
+
+  // ── "You're live" panel ──
+  function renderLive(d){
+    var email = (d.email || state.email || "").trim();
+    $("reviewBox").style.display = "none";
+    $("doneBox").innerHTML =
+      '<div style="text-align:center; margin-bottom:14px;">'
+      +   '<div class="done-check">&#10003;</div>'
+      +   '<h3>You\'re live 🎉</h3>'
+      +   '<p class="muted-sub" style="margin-top:4px;">&ldquo;'+esc(d.name||state.name)+'&rdquo; is ready for guests.</p>'
+      + '</div>'
+      + '<div class="result">'
+      +   '<div class="actions" style="margin-top:0;">'
+      +     (d.dashboardUrl ? '<a class="btnlink" href="'+esc(d.dashboardUrl)+'" target="_blank" rel="noopener">🍳 Open kitchen dashboard</a>' : '')
+      +     (d.menuAdminUrl ? '<a class="btnlink ghost" href="'+esc(d.menuAdminUrl)+'" target="_blank" rel="noopener">✏️ Edit menu &amp; add photos</a>' : '')
+      +     (d.qrPackUrl ? '<a class="btnlink ghost" href="'+esc(d.qrPackUrl)+'" target="_blank" rel="noopener">🖨 Print QR codes</a>' : '')
+      +     (d.customerUrl ? '<a class="btnlink ghost" href="'+esc(d.customerUrl)+'" target="_blank" rel="noopener">📱 View customer menu</a>' : '')
+      +   '</div>'
+      + '</div>'
+      + (email ? '<p class="muted-sub" style="margin-top:16px;">We emailed your sign-in link to <strong>'+esc(email)+'</strong> — save it to log back in.</p>' : '')
+      + '<div class="actions">'
+      +   '<button id="goConsole">Go to my café console</button>'
+      + '</div>';
+    $("goConsole").onclick = function(){ renderSignedIn(); };
+    goStep(4);
+    // hide nav since we're done
+    $("wizNav").style.display = "none";
+    $("previewWrap").style.display = "none";
+  }
+
+  // ════════════ C) SIGNED-IN CONSOLE ════════════
+  function renderSignedIn(){
+    showView("in");
+    $("mePanel").innerHTML = '<div style="color:var(--muted); font-size:14px;"><span class="spinner gold"></span> Loading your café…</div>';
+    fetch("/me", { headers: authHeaders() })
+      .then(function(r){
+        if(r.status === 401){ throw { code:401 }; }
+        return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, j:j }; });
+      })
+      .then(function(res){
+        if(!res.ok || !res.j || !res.j.cafe){ throw { code:"bad" }; }
+        renderMe(res.j);
+      })
+      .catch(function(e){
+        if(e && e.code === 401){
+          SESSION = null; try { localStorage.removeItem("ownerSession"); } catch(x){}
+          renderSignedOut(false);
+          return;
+        }
+        $("mePanel").innerHTML =
+          '<h2>My café</h2>'
+          + '<div class="msg err" style="display:block;">Couldn\'t load your café — check your connection and try again.</div>'
+          + '<div class="actions"><button id="retryMe">Retry</button><button class="ghost" id="signOut2">Sign out</button></div>';
+        $("retryMe").onclick = renderSignedIn;
+        $("signOut2").onclick = signOut;
+      });
+  }
+
+  function renderMe(me){
+    var cafe = me.cafe || {};
+    var cfg = cafe.config || {};
+    var dash = "/dashboard?token=" + encodeURIComponent(SESSION);
+    var menuAdmin = "/dashboard/menu-admin.html?token=" + encodeURIComponent(SESSION);
+    var qr = "/qr-pack?token=" + encodeURIComponent(SESSION);
+    var cust = cafe.customerUrl || "";
+    var swatch = cfg.themeColor ? '<span class="swatch" style="background:'+esc(cfg.themeColor)+';margin-right:8px;"></span>' : '';
+    $("mePanel").innerHTML =
+      '<h2>My café — '+swatch+esc(cfg.name || cafe.name || "Untitled")+'</h2>'
+      + '<p class="muted-sub" style="margin-top:-6px;">Signed in as '+esc(me.email||"")+''
+      +   (cafe.slug ? ' · <code>'+esc(cafe.slug)+'</code>' : '')
+      +   (cfg.established ? ' · '+esc(cfg.established) : '')
+      + '</p>'
+      + '<div class="actions">'
+      +   '<a class="btnlink" href="'+esc(dash)+'" target="_blank" rel="noopener">🍳 Open kitchen dashboard</a>'
+      +   '<a class="btnlink ghost" href="'+esc(menuAdmin)+'" target="_blank" rel="noopener">✏️ Edit menu</a>'
+      +   '<a class="btnlink ghost" href="'+esc(qr)+'" target="_blank" rel="noopener">🖨 Print QR codes</a>'
+      +   (cust ? '<a class="btnlink ghost" href="'+esc(cust)+'" target="_blank" rel="noopener">📱 View customer menu</a>' : '')
+      + '</div>'
+      + '<div style="margin-top:22px; border-top:1px solid var(--line); padding-top:16px;">'
+      +   '<button class="ghost" id="signOut">Sign out</button>'
+      + '</div>';
+    $("signOut").onclick = signOut;
+  }
+
+  function signOut(){
+    var btn = $("signOut") || $("signOut2");
+    if(btn) btn.disabled = true;
+    fetch("/auth/logout", { method:"POST", headers: authHeaders() })
+      .catch(function(){})
+      .then(function(){
+        SESSION = null; try { localStorage.removeItem("ownerSession"); } catch(e){}
+        renderSignedOut(false);
+      });
+  }
+
+  // ════════════ BOOT / ROUTING ════════════
+  function boot(){
+    var errLink = false;
+    // magic-link landing: /owner#s=<session>
+    var hash = window.location.hash || "";
+    if(hash.indexOf("#s=") === 0){
+      var tok = decodeURIComponent(hash.slice(3));
+      if(tok){
+        SESSION = tok;
+        try { localStorage.setItem("ownerSession", SESSION); } catch(e){}
+      }
+      try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch(e){
+        window.location.hash = "";
+      }
+    }
+    // expired/used link: /owner?err=link
+    try {
+      var qp = new URLSearchParams(window.location.search);
+      if(qp.get("err") === "link"){
+        errLink = true;
+        qp.delete("err");
+        var qs = qp.toString();
+        history.replaceState(null, "", window.location.pathname + (qs ? "?"+qs : ""));
+      }
+    } catch(e){}
+
+    if(SESSION){
+      renderSignedIn();
+    } else {
+      renderSignedOut(errLink);
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
