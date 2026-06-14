@@ -432,6 +432,25 @@
     saveSpecials("");
   };
 
+  function createCategory() {
+    var title = (prompt("New section name (e.g. Coffee, Brunch, Drinks):") || "").trim();
+    if (!title) return;
+    setStatus("saving", "Adding section…");
+    fetch(BACKEND + "/menu/categories", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ title: title.slice(0, 40) })
+    })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j }; }); })
+      .then(function(res) {
+        if (!res.ok) { setStatus("error", "Add failed"); alert((res.j && res.j.error) || "Couldn't add section"); return; }
+        activeSlug = res.j.slug;            // jump to the freshly-created section
+        setStatus("saved", "Section added");
+        fetchMenu();
+      })
+      .catch(function() { setStatus("error", "Add failed"); });
+  }
+
   function renderTabs() {
     var tabs = document.getElementById("tabs");
     tabs.innerHTML = "";
@@ -444,12 +463,30 @@
       btn.onclick = function() { activeSlug = slug; renderTabs(); renderCategory(); };
       tabs.appendChild(btn);
     });
+    // Always-available "add a section" control — so a brand-new café with no
+    // sections can build its menu from scratch (the editor used to assume sections
+    // already existed and showed nothing actionable when empty).
+    var addCat = document.createElement("button");
+    addCat.className = "tab";
+    addCat.style.borderStyle = "dashed"; addCat.style.opacity = "0.85";
+    addCat.textContent = "+ Section";
+    addCat.title = "Add a new menu section";
+    addCat.onclick = createCategory;
+    tabs.appendChild(addCat);
   }
 
   function renderCategory() {
     var c = menu.categories[activeSlug];
     var head = document.getElementById("categoryHead");
     head.innerHTML = "";
+    if (!c) {
+      // No section selected / none exist yet — guide instead of crashing on c.title.
+      var items0 = document.getElementById("items"); items0.innerHTML = "";
+      var e0 = document.createElement("div"); e0.className = "empty";
+      e0.innerHTML = '<h3>No sections yet</h3><div>Click <strong>+ Section</strong> above to create your first menu section, then add items to it.</div>';
+      items0.appendChild(e0);
+      return;
+    }
     var titleDiv = document.createElement("div");
     var h = document.createElement("h2"); h.className = "category-title"; h.textContent = c.title || activeSlug;
     titleDiv.appendChild(h);
