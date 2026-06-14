@@ -936,7 +936,8 @@
      surface for non-default (self-serve) tenants. Crispy (default) keeps everything. */
   body.no-printing #printerSetupLink,
   body.no-printing #receiptSetupLink,
-  body.no-printing .btn-print { display: none !important; }
+  body.no-printing .btn-print,
+  body.no-printing .printed-chip { display: none !important; }
   #toast {
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
     background: #2a2318; color: #f5f0e8; border: 1px solid #b5753a;
