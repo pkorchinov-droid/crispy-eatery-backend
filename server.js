@@ -189,7 +189,11 @@ app.use(
 // (HMAC signature verification needs them).  Each provider's webhook handler
 // will JSON.parse the raw body itself after verifying the signature.
 app.use("/webhooks", express.raw({ type: "*/*", limit: "1mb" }));
-app.use(express.json({ limit: "64kb" }));
+// /signup can carry a full photo-imported menu (up to ~30×60 items) inline, which can
+// exceed 64kb; give just that route a larger cap. Everything else stays tight at 64kb.
+const jsonStd = express.json({ limit: "64kb" });
+const jsonSignup = express.json({ limit: "512kb" });
+app.use((req, res, next) => (req.path === "/signup" ? jsonSignup : jsonStd)(req, res, next));
 
 // ── Security headers (lightweight, dependency-free) ────────
 // Render and most hosts terminate TLS upstream; trust the first proxy hop so
@@ -244,8 +248,12 @@ function rateRule(req) {
 app.use((req, res, next) => {
   const rule = rateRule(req);
   if (!rule) return next();
-  if (isStaffReq(req)) return next(); // trusted staff are exempt
   const [name, max] = rule;
+  // /menu/extract drives real per-call Claude vision spend; the trusted-staff/owner
+  // exemption must NOT cover it — otherwise a single free signup's 30-day session would
+  // bypass the cap and run up the platform's Anthropic bill. Every other rule keeps the
+  // staff exemption. (Also set an Anthropic-side spend cap as a backstop.)
+  if (name !== "extract" && isStaffReq(req)) return next();
   const key = name + "|" + (req.ip || "?");
   const now = Date.now();
   let b = rlBuckets.get(key);
@@ -337,6 +345,11 @@ const TENANTS_FILE = path.join(DATA_DIR, "tenants.json");
 // Requests with no ?r= and no staff token fall back to this tenant, so the QR
 // codes already printed for the original café keep working unchanged.
 const DEFAULT_TENANT = normalizeSlug(process.env.DEFAULT_TENANT || "crispy");
+// The single-tenant-era Supabase rows (un-prefixed "orders"/"menu"/…) belong to the
+// ORIGINAL café. Pin the legacy-restore fallback to THAT slug — not to whatever
+// DEFAULT_TENANT currently is — so renaming the default tenant can never restore the
+// founding café's data (incl. customer PII) into a different tenant's namespace.
+const LEGACY_TENANT_SLUG = normalizeSlug(process.env.LEGACY_TENANT_SLUG || "crispy");
 
 function ensureDir(d) { try { fs.mkdirSync(d, { recursive: true }); } catch {} }
 function readJson(file, fallback) {
@@ -560,6 +573,7 @@ function b64url(buf) {
 // Sign a short-lived (15 min) single-use magic token: payload.signature, both
 // base64url, signature = HMAC-SHA256(payload, authSecret()).
 function signMagicToken(email) {
+  if (!authSecret()) return null; // no secret → refuse to mint (empty-key HMAC is forgeable)
   const payload = { e: email, exp: Date.now() + 900000, j: crypto.randomBytes(9).toString("hex") };
   const p = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   const sig = b64url(crypto.createHmac("sha256", authSecret()).update(p).digest());
@@ -567,6 +581,7 @@ function signMagicToken(email) {
 }
 function verifyMagicToken(tok) {
   try {
+    if (!authSecret()) return null; // no secret → reject all (empty-key HMAC is forgeable)
     const parts = String(tok || "").split(".");
     if (parts.length !== 2) return null;
     const [p, sig] = parts;
@@ -806,10 +821,14 @@ function saveCustomerEmail(store, email, orderId, tableNumber, total) {
   const customers = store.loadCustomers();
   const existing = customers.find((c) => c.email === email);
   if (existing) {
-    existing.visits += 1;
-    existing.totalSpent += total;
+    // Idempotent per order: re-emailing the same bill (customer taps "email me the
+    // bill" twice, or replays the link) must not double-count visits/spend in the CRM.
+    if (!existing.orders.includes(orderId)) {
+      existing.visits += 1;
+      existing.totalSpent += total;
+      existing.orders.push(orderId);
+    }
     existing.lastVisit = new Date().toISOString();
-    existing.orders.push(orderId);
   } else {
     customers.push({
       email,
@@ -1087,11 +1106,45 @@ function configOverridesFromBody(b) {
 // features stay platform-admin-only; the signup route sets ownerEmail +
 // features.poweredBy itself, server-side.
 function publicConfigOverridesFromBody(b) {
+  // Untrusted (public /signup) input: sanitise + validate every field at the trust
+  // boundary so XSS-capable / malformed values can never be stored, rather than
+  // relying on every downstream renderer to escape perfectly.
   const o = {};
-  for (const k of ["name", "established", "themeColor", "currency", "currencyCode", "gstRate", "locale", "timezone"]) {
-    if (b[k] !== undefined) o[k] = b[k];
-  }
+  if (b.name !== undefined) o.name = sanitizeString(b.name, 80);
+  if (b.established !== undefined) o.established = sanitizeString(b.established, 60);
+  if (b.themeColor !== undefined) o.themeColor = /^#[0-9a-fA-F]{6}$/.test(String(b.themeColor)) ? String(b.themeColor) : "#c25a3a";
+  if (b.currency !== undefined) o.currency = sanitizeString(b.currency, 4);
+  if (b.currencyCode !== undefined) o.currencyCode = sanitizeString(b.currencyCode, 8);
+  if (b.gstRate !== undefined) { const g = Number(b.gstRate); o.gstRate = Number.isFinite(g) && g >= 0 && g <= 1 ? g : 0.15; }
+  if (b.locale !== undefined) o.locale = sanitizeString(b.locale, 20);
+  if (b.timezone !== undefined) o.timezone = sanitizeString(b.timezone, 40);
   return o;
+}
+
+// Sanitise a client-supplied menu before persisting it via public /signup (the
+// authoritative /menu routes already clamp/cap/sanitise; this path did not). Caps
+// counts, slugifies category keys, sanitises all strings, clamps prices, DROPS any
+// img/imgUrl (owners add photos later in the editor), and strips proto-pollution keys.
+function sanitizeSignupMenu(menu) {
+  if (!menu || typeof menu !== "object" || !menu.categories || typeof menu.categories !== "object") return null;
+  const out = emptyMenu();
+  const order = Array.isArray(menu.categoryOrder) && menu.categoryOrder.length ? menu.categoryOrder : Object.keys(menu.categories);
+  for (const rawKey of order.slice(0, 40)) {
+    if (rawKey === "__proto__" || rawKey === "constructor" || rawKey === "prototype") continue;
+    const cat = menu.categories[rawKey];
+    if (!cat || typeof cat !== "object") continue;
+    let slug = slugify(cat.slug || rawKey || cat.title || "menu");
+    let n = 1; while (out.categories[slug]) { n += 1; slug = slugify(rawKey || cat.title || "menu") + "-" + n; }
+    const items = (Array.isArray(cat.items) ? cat.items : []).slice(0, 200).map((it, i) => ({
+      id: sanitizeString((it && it.id) || "", 60) || (slug + "-" + (i + 1)),
+      name: sanitizeString(it && it.name, 120),
+      price: clampMoney(toFiniteNumber(it && it.price, 0)),
+      desc: sanitizeString(it && it.desc, 300),
+    })).filter((it) => it.name);
+    out.categoryOrder.push(slug);
+    out.categories[slug] = { title: sanitizeString(cat.title, 40) || "Menu", subtitle: sanitizeString(cat.subtitle, 80), items };
+  }
+  return out.categoryOrder.length ? out : null;
 }
 
 app.get("/admin/tenants", requirePlatformAdmin, (_req, res) => {
@@ -1146,6 +1199,10 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
 // footer defaults on.
 app.post("/signup", (req, res) => {
   try {
+    // No auth secret → magic-link login can't work (request-link 503s, verify rejects
+    // all), so an account created now could never sign back in. Refuse rather than
+    // mint un-loginable accounts. (Prod has PLATFORM_ADMIN_TOKEN → secret derived.)
+    if (authSecret() === "") return res.status(503).json({ error: "Sign-up is temporarily unavailable." });
     const body = req.body || {};
     const email = String(body.email || "").trim().toLowerCase();
     if (!EMAIL_RE.test(email) || email.length > 254) {
@@ -1169,7 +1226,7 @@ app.post("/signup", (req, res) => {
       features: { poweredBy: true },
       name,
       slug: body.slug,
-      menu: body.menu,
+      menu: sanitizeSignupMenu(body.menu),
       categories: body.categories,
       onConflict: "suffix",
     });
@@ -1203,16 +1260,18 @@ app.post("/signup", (req, res) => {
 });
 
 // POST /auth/request-link — public, rate-limited. ALWAYS responds { ok:true } so
-// it never reveals whether an email is registered. In non-prod (or when Resend
-// isn't configured) it also returns a devLink for local testing — but only when
-// a real account exists, so the existence check still can't leak via devLink.
+// it never reveals whether an email is registered. ONLY in non-prod does it also
+// return a devLink (for local testing without email), and only when a real account
+// exists. In production the link is delivered SOLELY via Resend; if Resend is
+// unconfigured the route still must NOT hand a sign-in token to the caller — doing
+// so is anonymous account takeover — so the operator must fix email delivery.
 app.post("/auth/request-link", (req, res) => {
   if (authSecret() === "") return res.status(503).json({ error: "Auth not configured" });
   const email = String((req.body && req.body.email) || "").trim().toLowerCase();
   const out = { ok: true };
   if (EMAIL_RE.test(email) && email.length <= 254 && AUTH.owners[email]) {
     if (resend) sendMagicEmail(email, "login");
-    if (!IS_PROD || !resend) out.devLink = buildMagicLink(email);
+    if (!IS_PROD) out.devLink = buildMagicLink(email); // dev-only — NEVER gated on Resend
   }
   res.json(out);
 });
@@ -3476,7 +3535,7 @@ async function restoreFromSupabase() {
         // tenant's namespaced key is still empty, so fall back to the legacy key
         // — the original café's live menu/orders carry over with NO migration
         // step (the legacy rows are left untouched as a backup).
-        if (remote == null && t.slug === DEFAULT_TENANT) {
+        if (remote == null && t.slug === LEGACY_TENANT_SLUG) {
           remote = await pullFromSupabase(tg.name);
           if (remote != null) console.log(`[storage] ${t.slug}/${tg.name}: using legacy key "${tg.name}"`);
         }
