@@ -932,6 +932,11 @@
   }
   .btn-print:hover { border-color: #b5753a; color: #e8c477; background: #352c20; }
   .btn-print:active { transform: scale(0.94); }
+  /* Printing + receipt-info is Crispy's bespoke LAN/cert setup — hide every printing
+     surface for non-default (self-serve) tenants. Crispy (default) keeps everything. */
+  body.no-printing #printerSetupLink,
+  body.no-printing #receiptSetupLink,
+  body.no-printing .btn-print { display: none !important; }
   #toast {
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
     background: #2a2318; color: #f5f0e8; border: 1px solid #b5753a;
@@ -1169,6 +1174,7 @@
   // food. Add a slug here if a new drink category is created.
   var DRINK_CATEGORIES = { coffee: 1, tea: 1, signature: 1 };
   var ITEM_CATEGORY = {}; // menuItemId -> categorySlug
+  var PRINTING_ENABLED = true; // set false for non-default (self-serve) tenants — see /menu isDefaultTenant
   function loadMenuCategories() {
     try {
       fetch(BACKEND + '/menu', { headers: authHeaders() }).then(function (r) { return r.json(); }).then(function (m) {
@@ -1184,6 +1190,12 @@
         document.title = name + ' — Kitchen';
         var lm = document.getElementById('liveMenuLink');
         if (lm && m && m.slug) lm.href = 'https://sparkling-lokum-4e28b8.netlify.app/?r=' + encodeURIComponent(m.slug);
+        // Printing + receipt-info is Crispy-only (bespoke LAN printers); hide all those
+        // surfaces for every other café so a new café isn't shown Crispy's printer/receipt UI.
+        // Hide printing ONLY when the tenant is EXPLICITLY non-default — so if this
+        // page ever loads against an older /menu without the flag, Crispy keeps printing.
+        PRINTING_ENABLED = !(m && m.isDefaultTenant === false);
+        if (!PRINTING_ENABLED) document.body.classList.add('no-printing');
       }).catch(function () {});
     } catch (e) {}
   }
@@ -1718,6 +1730,7 @@
   }
 
   window.printTicket = function (orderId) {
+    if (!PRINTING_ENABLED) return;
     var order = orderData[orderId];
     if (!order) { toast('Order not found', 'err'); return; }
     var items = order.items || [];
@@ -1794,6 +1807,7 @@
     return v;                              // '' = clear
   }
   window.printerSetup = function () {
+    if (!PRINTING_ENABLED) return;
     var k = askIP('KITCHEN printer IP (food tickets):', getKitchenPrinterIP());
     if (k === false) return;
     if (k !== null) { try { localStorage.setItem('kitchenPrinterIP', k); } catch (e) {} }
@@ -1954,6 +1968,7 @@
   }
 
   window.printReceipt = function (orderId) {
+    if (!PRINTING_ENABLED) return;
     var order = orderData[orderId];
     if (!order) { toast('Order not found', 'err'); return; }
     toast('Printing receipt for ' + order.id + '…');
@@ -2080,6 +2095,7 @@
   };
 
   window.receiptSetup = function () {
+    if (!PRINTING_ENABLED) return;
     var info = getReceiptInfo();
     var fields = [['name', 'Business / trading name'], ['legal', 'Legal entity name'], ['addr', 'Address'], ['gst', 'GST number'], ['web', 'Website']];
     for (var i = 0; i < fields.length; i++) {
