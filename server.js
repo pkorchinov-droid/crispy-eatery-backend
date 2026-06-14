@@ -1738,6 +1738,7 @@ app.get("/menu", resolveTenant, (req, res) => {
   // Brand fields so the customer SPA can render the right name/tagline on first
   // paint (the menu is fetched before the app renders).
   const c = req.tenant.config || {};
+  out.slug = req.tenant.slug;                  // lets the backoffice pages build a tenant-correct "Live menu" link
   out.restaurantName = c.name || req.tenant.name;
   out.established = c.established || "";
   out.themeColor = c.themeColor || "#c25a3a";
