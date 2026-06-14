@@ -1739,6 +1739,7 @@ app.get("/menu", resolveTenant, (req, res) => {
   // paint (the menu is fetched before the app renders).
   const c = req.tenant.config || {};
   out.slug = req.tenant.slug;                  // lets the backoffice pages build a tenant-correct "Live menu" link
+  out.isDefaultTenant = req.tenant.slug === DEFAULT_TENANT; // printing/receipt-info UI is the flagship (Crispy) only
   out.restaurantName = c.name || req.tenant.name;
   out.established = c.established || "";
   out.themeColor = c.themeColor || "#c25a3a";
