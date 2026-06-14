@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Get your café online · Crispy</title>
+<title>Get your café online · IT Logistics</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
@@ -122,7 +122,7 @@
 </head>
 <body>
 <header>
-  <h1>Crispy</h1>
+  <h1><a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">IT Logistics</a></h1>
   <span class="sub">Your café, online — QR menu, kitchen dashboard, pay at the counter</span>
 </header>
 <div class="wrap">
@@ -145,9 +145,9 @@
     </div>
 
     <div class="panel" style="margin-top:34px;">
-      <h2>Already have a café?</h2>
+      <h2>Already signed up? Sign in</h2>
       <div class="signin-box">
-        <p class="muted-sub" style="margin-top:0;">Enter your email and we'll send a one-tap sign-in link — no password to remember.</p>
+        <p class="muted-sub" style="margin-top:0;">Enter your email and we'll send a one-tap link to get back into your dashboard — no password to remember.</p>
         <div class="row">
           <div class="field">
             <label>Email</label>
@@ -159,7 +159,7 @@
       </div>
     </div>
 
-    <div class="footer">Powered by IT Logistics</div>
+    <div class="footer">Powered by <a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit;">IT Logistics</a></div>
   </div>
 
   <!-- ════════════ B) WIZARD ════════════ -->
@@ -252,7 +252,7 @@
         </div>
       </div>
     </div>
-    <div class="footer">Powered by IT Logistics</div>
+    <div class="footer">Powered by <a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit;">IT Logistics</a></div>
   </div>
 
   <!-- ════════════ C) SIGNED-IN CONSOLE ════════════ -->
@@ -260,7 +260,7 @@
     <div class="panel" id="mePanel">
       <div style="color:var(--muted); font-size:14px;">Loading your café…</div>
     </div>
-    <div class="footer">Powered by IT Logistics</div>
+    <div class="footer">Powered by <a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit;">IT Logistics</a></div>
   </div>
 
   <!-- boot fallback -->
@@ -612,7 +612,7 @@
           return;
         }
         if(res.status === 409 || (res.j && res.j.code === "exists")){
-          showText($("wizMsg"), "You already have a café — sign in instead.", "err");
+          showText($("wizMsg"), "This email already has a café — sign in instead.", "err");
           renderSignedOut(false);
           var em = $("si_email"); if(em){ em.value = state.email.trim(); em.focus(); }
           return;
@@ -687,7 +687,6 @@
     var cfg = cafe.config || {};
     var dash = "/dashboard?token=" + encodeURIComponent(SESSION);
     var menuAdmin = "/dashboard/menu-admin.html?token=" + encodeURIComponent(SESSION);
-    var qr = "/qr-pack?token=" + encodeURIComponent(SESSION);
     var cust = cafe.customerUrl || "";
     var swatch = cfg.themeColor ? '<span class="swatch" style="background:'+esc(cfg.themeColor)+';margin-right:8px;"></span>' : '';
     $("mePanel").innerHTML =
@@ -699,12 +698,21 @@
       + '<div class="actions">'
       +   '<a class="btnlink" href="'+esc(dash)+'" target="_blank" rel="noopener">🍳 Open kitchen dashboard</a>'
       +   '<a class="btnlink ghost" href="'+esc(menuAdmin)+'" target="_blank" rel="noopener">✏️ Edit menu</a>'
-      +   '<a class="btnlink ghost" href="'+esc(qr)+'" target="_blank" rel="noopener">🖨 Print QR codes</a>'
       +   (cust ? '<a class="btnlink ghost" href="'+esc(cust)+'" target="_blank" rel="noopener">📱 View customer menu</a>' : '')
+      + '</div>'
+      + '<div class="qr-row" style="margin-top:16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+      +   '<span style="font-size:14px; color:var(--muted);">🖨 Print QR codes for</span>'
+      +   '<input id="qrTables" type="number" min="1" max="300" value="12" style="width:74px; padding:8px 10px; border-radius:8px;" />'
+      +   '<span style="font-size:14px; color:var(--muted);">tables</span>'
+      +   '<button class="ghost" id="qrBtn" style="width:auto; padding:9px 18px;">Print</button>'
       + '</div>'
       + '<div style="margin-top:22px; border-top:1px solid var(--line); padding-top:16px;">'
       +   '<button class="ghost" id="signOut">Sign out</button>'
       + '</div>';
+    $("qrBtn").onclick = function(){
+      var n = parseInt(($("qrTables")||{}).value, 10); if(!(n >= 1)) n = 12; if(n > 300) n = 300;
+      window.open("/qr-pack?token=" + encodeURIComponent(SESSION) + "&tables=" + n, "_blank", "noopener");
+    };
     $("signOut").onclick = signOut;
   }
 

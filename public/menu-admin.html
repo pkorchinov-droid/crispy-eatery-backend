@@ -162,6 +162,20 @@
   .btn-icon:hover { border-color: #c49a5c; color: #e8c477; }
   .btn-icon.danger:hover { border-color: #ef5350; color: #ef5350; }
 
+  /* Touch-friendly reorder buttons (alternative to drag-and-drop) */
+  .move-btns {
+    display: flex; flex-direction: column; gap: 2px;
+    justify-content: center; flex-shrink: 0;
+  }
+  .btn-move {
+    background: transparent; border: 1px solid #3d3428; color: #8a7a68;
+    width: 28px; height: 22px; border-radius: 5px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; line-height: 1; padding: 0; transition: all 0.2s;
+  }
+  .btn-move:hover:not(:disabled) { border-color: #c49a5c; color: #e8c477; }
+  .btn-move:disabled { opacity: 0.3; cursor: default; }
+
   /* ── Inline editor ───────────────────────────── */
   .editor { width: 100%; padding-top: 10px; border-top: 1px dashed #4a3d2e; margin-top: 10px; }
   .field { margin-bottom: 10px; }
@@ -279,7 +293,7 @@
   <div class="logo">Crispy Eatery <span>Menu Admin</span></div>
   <div class="header-actions">
     <a href="reports.html" id="reportsLink">Reports ↗</a>
-    <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
+    <a href="https://sparkling-lokum-4e28b8.netlify.app/" id="liveMenuLink" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="../dashboard" id="kitchenLink">Kitchen ↗</a>
     <div class="save-status saved" id="saveStatus">
       <span class="dot"></span><span id="saveLabel">Loaded</span>
@@ -371,6 +385,13 @@
         if (!activeSlug || !menu.categories[activeSlug]) activeSlug = menu.categoryOrder[0];
         renderSpecials(); renderTabs(); renderCategory();
         setStatus("saved", "Loaded · v" + (menu.version || "?"));
+        // Tenant-aware branding (original Crispy single-tenant page).
+        var name = m.restaurantName || 'Crispy Eatery';
+        var logo = document.querySelector('.logo');
+        if (logo && logo.firstChild && logo.firstChild.nodeType === 3) logo.firstChild.nodeValue = name + ' ';
+        document.title = name + ' — Menu Admin';
+        var lm = document.getElementById('liveMenuLink');
+        if (lm && m.slug) lm.href = 'https://sparkling-lokum-4e28b8.netlify.app/?r=' + encodeURIComponent(m.slug);
       })
       .catch(function(e) { setStatus("error", "Load failed"); console.error(e); });
   }
@@ -494,6 +515,22 @@
     return "—";
   }
 
+  // Optimistic local reorder + sync to backend (shared by drag-and-drop and ▲/▼ buttons)
+  function applyReorder(cat, ids) {
+    var byId = {}; cat.items.forEach(function(x) { byId[x.id] = x; });
+    cat.items = ids.map(function(id) { return byId[id]; });
+    renderCategory();
+    setStatus("saving", "Reordering…");
+    fetch(BACKEND + "/menu/reorder", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ categorySlug: activeSlug, itemIds: ids }),
+    })
+      .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function() { setStatus("saved", "Saved · " + new Date().toLocaleTimeString().slice(0, 5)); })
+      .catch(function(e) { setStatus("error", "Reorder failed"); fetchMenu(); });
+  }
+
   // ── Render one item row ───────────────────────
   function renderItem(it, idx, cat) {
     var row = document.createElement("div");
@@ -523,24 +560,35 @@
       var from = ids.indexOf(srcId), to = ids.indexOf(it.id);
       if (from < 0 || to < 0) return;
       ids.splice(to, 0, ids.splice(from, 1)[0]);
-      // Optimistic local reorder
-      var byId = {}; cat.items.forEach(function(x) { byId[x.id] = x; });
-      cat.items = ids.map(function(id) { return byId[id]; });
-      renderCategory();
-      // Sync
-      setStatus("saving", "Reordering…");
-      fetch(BACKEND + "/menu/reorder", {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ categorySlug: activeSlug, itemIds: ids }),
-      })
-        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-        .then(function() { setStatus("saved", "Saved · " + new Date().toLocaleTimeString().slice(0, 5)); })
-        .catch(function(e) { setStatus("error", "Reorder failed"); fetchMenu(); });
+      applyReorder(cat, ids);
     });
 
     var handle = document.createElement("div"); handle.className = "drag-handle"; handle.textContent = "⋮⋮"; handle.title = "Drag to reorder";
+    handle.setAttribute("aria-label", "Drag to reorder");
+    handle.setAttribute("aria-hidden", "true");
     row.appendChild(handle);
+
+    // Touch-friendly reorder (drag-and-drop does not fire on touchscreens)
+    function moveBy(delta) {
+      var ids = cat.items.map(function(x) { return x.id; });
+      var from = ids.indexOf(it.id), to = from + delta;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      applyReorder(cat, ids);
+    }
+    var moveBtns = document.createElement("div"); moveBtns.className = "move-btns";
+    var upBtn = document.createElement("button"); upBtn.className = "btn-move"; upBtn.type = "button";
+    upBtn.innerHTML = '<span aria-hidden="true">▲</span>';
+    upBtn.setAttribute("aria-label", "Move up");
+    upBtn.disabled = (idx === 0);
+    upBtn.onclick = function() { moveBy(-1); };
+    var downBtn = document.createElement("button"); downBtn.className = "btn-move"; downBtn.type = "button";
+    downBtn.innerHTML = '<span aria-hidden="true">▼</span>';
+    downBtn.setAttribute("aria-label", "Move down");
+    downBtn.disabled = (idx === cat.items.length - 1);
+    downBtn.onclick = function() { moveBy(1); };
+    moveBtns.appendChild(upBtn); moveBtns.appendChild(downBtn);
+    row.appendChild(moveBtns);
 
     // Thumbnail (imgUrl wins, then bundled image lookup, then placeholder)
     var thumbWrap;
@@ -597,7 +645,8 @@
     // Upload button (icon + hidden file input overlay)
     var uploadBtn = document.createElement("label");
     uploadBtn.className = "btn-upload"; uploadBtn.title = "Upload image";
-    uploadBtn.innerHTML = "📷";
+    uploadBtn.setAttribute("aria-label", "Upload image");
+    uploadBtn.innerHTML = '<span aria-hidden="true">📷</span>';
     var fileInput = document.createElement("input");
     fileInput.type = "file"; fileInput.accept = "image/*";
     fileInput.onchange = function() {
@@ -608,7 +657,8 @@
     uploadBtn.appendChild(fileInput);
     actions.appendChild(uploadBtn);
 
-    var editBtn = document.createElement("button"); editBtn.className = "btn-icon"; editBtn.title = "Edit"; editBtn.textContent = "✎";
+    var editBtn = document.createElement("button"); editBtn.className = "btn-icon"; editBtn.title = "Edit"; editBtn.innerHTML = '<span aria-hidden="true">✎</span>';
+    editBtn.setAttribute("aria-label", "Edit item");
     editBtn.onclick = function() {
       var existing = row.querySelector(".editor");
       if (existing) { existing.remove(); row.classList.remove("editing"); return; }
@@ -617,7 +667,8 @@
     };
     actions.appendChild(editBtn);
 
-    var delBtn = document.createElement("button"); delBtn.className = "btn-icon danger"; delBtn.title = "Delete"; delBtn.textContent = "🗑";
+    var delBtn = document.createElement("button"); delBtn.className = "btn-icon danger"; delBtn.title = "Delete"; delBtn.innerHTML = '<span aria-hidden="true">🗑</span>';
+    delBtn.setAttribute("aria-label", "Delete item");
     delBtn.onclick = function() {
       if (!confirm('Delete "' + it.name + '"? This removes it from the customer menu.')) return;
       setStatus("saving", "Deleting…");

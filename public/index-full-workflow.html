@@ -1015,7 +1015,7 @@
   </div>
   <div class="header-actions">
     <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
-    <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
+    <a href="https://sparkling-lokum-4e28b8.netlify.app/" id="liveMenuLink" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print" aria-label="Printer setup"><span aria-hidden="true">🖨</span> Printer</a>
     <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts" aria-label="Receipt info"><span aria-hidden="true">🧾</span> Receipt info</a>
     <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders" aria-label="Groups"><span aria-hidden="true">👥</span> Groups</a>
@@ -1171,11 +1171,19 @@
   var ITEM_CATEGORY = {}; // menuItemId -> categorySlug
   function loadMenuCategories() {
     try {
-      fetch(BACKEND + '/menu').then(function (r) { return r.json(); }).then(function (m) {
+      fetch(BACKEND + '/menu', { headers: authHeaders() }).then(function (r) { return r.json(); }).then(function (m) {
         var cats = (m && m.categories) || {};
         Object.keys(cats).forEach(function (slug) {
           (cats[slug].items || []).forEach(function (it) { if (it && it.id) ITEM_CATEGORY[it.id] = slug; });
         });
+        // Tenant-aware branding: this is the original Crispy single-tenant dashboard;
+        // show the logged-in café's real name + point "Live menu" at THAT café (?r=slug).
+        var name = (m && m.restaurantName) || 'Crispy Eatery';
+        var logo = document.querySelector('.logo');
+        if (logo && logo.firstChild && logo.firstChild.nodeType === 3) logo.firstChild.nodeValue = name + ' ';
+        document.title = name + ' — Kitchen';
+        var lm = document.getElementById('liveMenuLink');
+        if (lm && m && m.slug) lm.href = 'https://sparkling-lokum-4e28b8.netlify.app/?r=' + encodeURIComponent(m.slug);
       }).catch(function () {});
     } catch (e) {}
   }
