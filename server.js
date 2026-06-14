@@ -35,6 +35,31 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
+// ── Self-serve onboarding (Phase 1) ────────────────────────
+// Public signup + magic-link sign-in + photo-to-menu import. ANTHROPIC_API_KEY
+// powers the menu-photo extractor (absent → manual fallback). AUTH_EMAIL_FROM
+// uses the already-verified eatery.crispycatering.com domain. PUBLIC_BASE_URL is
+// this backend's external origin (used to build magic links that point back at
+// /auth/verify). OWNER_CUSTOMER_ORIGIN is where the customer SPA lives (used to
+// build the public ?r=<slug> menu URL). MENU_IMPORT_MODEL picks the model used
+// to read a menu photo/PDF.
+const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "IT Logistics <login@eatery.crispycatering.com>";
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://crispy-eatery-backend-1.onrender.com";
+const OWNER_CUSTOMER_ORIGIN = process.env.OWNER_CUSTOMER_ORIGIN || "https://sparkling-lokum-4e28b8.netlify.app";
+const MENU_IMPORT_MODEL = process.env.MENU_IMPORT_MODEL || "claude-sonnet-4-6";
+
+// Secret for signing magic-link tokens. Prefer an explicit AUTH_SECRET; else
+// derive a stable one from PLATFORM_ADMIN_TOKEN (so a deployment with an admin
+// token gets working auth without a second secret); else "" → auth features
+// return 503 rather than minting unsigned links.
+function authSecret() {
+  if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
+  if (process.env.PLATFORM_ADMIN_TOKEN) {
+    return crypto.createHash("sha256").update("crispy-auth|" + process.env.PLATFORM_ADMIN_TOKEN).digest("hex");
+  }
+  return "";
+}
+
 // ── Supabase mirror (optional persistence layer) ─────────
 // The runtime source of truth is still the local JSON file, so all handlers
 // stay synchronous.  Supabase is a write-through backup that survives Render's
@@ -211,6 +236,9 @@ function rateRule(req) {
   if (m === "POST" && /^\/groups\/[^/]+\/join$/.test(p)) return ["gjoin", 30];
   if (m === "GET" && /^\/groups\/[^/]+$/.test(p)) return ["gget", 40];
   if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
+  if (m === "POST" && p === "/signup") return ["signup", 5];
+  if (m === "POST" && p === "/auth/request-link") return ["authlink", 5];
+  if (m === "POST" && p === "/menu/extract") return ["extract", 5];
   return null;
 }
 app.use((req, res, next) => {
@@ -239,7 +267,7 @@ setInterval(() => {
 // Staff routes: the bearer/query token identifies BOTH the user and the tenant.
 // We look up which restaurant owns that token and attach its store.
 function requireStaff(req, res, next) {
-  const t = findTenantByToken(getReqToken(req));
+  const t = tenantFromToken(getReqToken(req));
   if (!t) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -253,7 +281,7 @@ function requireStaff(req, res, next) {
 // from the ?r=<slug> query param / X-Tenant header, else the default tenant.
 function resolveTenant(req, res, next) {
   if (req.tenant) return next();
-  const byToken = findTenantByToken(getReqToken(req));
+  const byToken = tenantFromToken(getReqToken(req));
   if (byToken) {
     req.tenant = byToken;
     req.store = tenantStore(byToken.slug);
@@ -490,6 +518,172 @@ function ensureDefaultTenant() {
   console.log("[tenant] auto-created default tenant '" + DEFAULT_TENANT + "'" + (STAFF_TOKEN ? "" : " (no STAFF_TOKEN → its dashboard is locked until a token is set)"));
 }
 
+// ══════════════════════════════════════════════════════════
+// ── OWNER ACCOUNTS + MAGIC-LINK AUTH (self-serve) ──────────
+// ══════════════════════════════════════════════════════════
+// Mirrors the TENANTS pattern so all lookups stay SYNCHRONOUS: the runtime
+// source of truth is an in-memory object, persisted to data/auth.json and
+// mirrored to Supabase under the key "auth". An owner SESSION token works
+// anywhere a tenant STAFF token works, scoped to that owner's own café.
+//   owners[email]   = { email, name, tenants:[slug], createdAt, lastLoginAt }
+//   sessions[hash]  = { email, slug, exp }   (hash = sha256 of the session token)
+//   usedMagic[jti]  = exp                     (single-use magic-link guard)
+const AUTH = { owners: {}, sessions: {}, usedMagic: {} };
+const AUTH_FILE = path.join(DATA_DIR, "auth.json");
+function pruneAuth() {
+  const now = Date.now();
+  for (const k of Object.keys(AUTH.sessions)) {
+    const rec = AUTH.sessions[k];
+    if (!rec || rec.exp <= now) delete AUTH.sessions[k];
+  }
+  for (const j of Object.keys(AUTH.usedMagic)) {
+    if (!(AUTH.usedMagic[j] > now)) delete AUTH.usedMagic[j];
+  }
+}
+function loadAuthIntoCache() {
+  const obj = readJson(AUTH_FILE, {}) || {};
+  AUTH.owners = obj.owners || {};
+  AUTH.sessions = obj.sessions || {};
+  AUTH.usedMagic = obj.usedMagic || {};
+  pruneAuth();
+}
+function persistAuth() {
+  pruneAuth();
+  writeJson(AUTH_FILE, AUTH);
+  return mirrorToSupabase("auth", AUTH);
+}
+
+// base64url encode a Buffer (no padding, URL-safe).
+function b64url(buf) {
+  return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+// Sign a short-lived (15 min) single-use magic token: payload.signature, both
+// base64url, signature = HMAC-SHA256(payload, authSecret()).
+function signMagicToken(email) {
+  const payload = { e: email, exp: Date.now() + 900000, j: crypto.randomBytes(9).toString("hex") };
+  const p = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  const sig = b64url(crypto.createHmac("sha256", authSecret()).update(p).digest());
+  return p + "." + sig;
+}
+function verifyMagicToken(tok) {
+  try {
+    const parts = String(tok || "").split(".");
+    if (parts.length !== 2) return null;
+    const [p, sig] = parts;
+    const want = b64url(crypto.createHmac("sha256", authSecret()).update(p).digest());
+    if (!safeEqual(sig, want)) return null;
+    const payload = JSON.parse(Buffer.from(p.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    if (!payload || typeof payload.exp !== "number" || payload.exp <= Date.now()) return null;
+    if (AUTH.usedMagic[payload.j]) return null; // single-use
+    return { email: payload.e, jti: payload.j, exp: payload.exp };
+  } catch {
+    return null;
+  }
+}
+function buildMagicLink(email) {
+  return PUBLIC_BASE_URL + "/auth/verify?token=" + encodeURIComponent(signMagicToken(email));
+}
+// Create a 30-day session bound to one owner + one café. Only the sha256 of the
+// token is stored; the raw token is returned to the caller and never logged.
+function createSession(email, slug) {
+  const token = crypto.randomBytes(32).toString("hex");
+  AUTH.sessions[hashToken(token)] = { email, slug, exp: Date.now() + 2592000000 };
+  persistAuth();
+  return token;
+}
+function sessionFromToken(tok) {
+  if (!tok) return null;
+  const rec = AUTH.sessions[hashToken(tok)];
+  return (rec && rec.exp > Date.now()) ? rec : null;
+}
+function deleteSession(tok) {
+  delete AUTH.sessions[hashToken(tok)];
+  persistAuth();
+}
+// Resolve a token to a tenant: a tenant STAFF token first (existing behaviour),
+// else an owner SESSION token scoped to that owner's café. This is what lets an
+// owner session act as staff for ONLY its own tenant.
+function tenantFromToken(token) {
+  const t = findTenantByToken(token);
+  if (t) return t;
+  const s = sessionFromToken(token);
+  return (s && s.slug) ? getTenant(s.slug) : null;
+}
+// Owner-only middleware (the owner console's authenticated calls).
+function requireOwner(req, res, next) {
+  const s = sessionFromToken(getReqToken(req));
+  if (!s) return res.status(401).json({ error: "Unauthorized" });
+  req.ownerEmail = s.email;
+  req.ownerSlug = s.slug;
+  next();
+}
+// Email a magic link. No-op when Resend isn't configured (callers also surface a
+// devLink for local testing). Never logs the raw token; masks the address.
+async function sendMagicEmail(email, kind) {
+  if (!resend) return;
+  const link = buildMagicLink(email);
+  const subject = kind === "welcome"
+    ? "Welcome to IT Logistics — your café is live"
+    : "Your IT Logistics sign-in link";
+  const text = [
+    kind === "welcome"
+      ? "Your café is set up and ready. Sign in to your dashboard with the link below:"
+      : "Use the link below to sign in to your IT Logistics dashboard:",
+    "",
+    link,
+    "",
+    "This link works once and expires in 15 minutes.",
+    "If you didn't request this, you can safely ignore this email.",
+  ].join("\n");
+  try {
+    await resend.emails.send({ from: AUTH_EMAIL_FROM, to: [email], subject, text });
+    console.log(`[auth] magic link (${kind}) sent → ${maskPII(email)}`);
+  } catch (e) {
+    console.error(`[auth] magic link send failed for ${maskPII(email)}:`, e && e.message);
+  }
+}
+
+// ── Shared provisioning helper ─────────────────────────────
+// Used by BOTH POST /admin/tenants and POST /signup so the slug-derivation,
+// token minting, tenant save and menu seeding live in one place. onConflict:
+//   "error"  → throw a 409-carrying error when the slug is taken
+//   "suffix" → append -2, -3, … until a free slug is found
+// Returns { slug, name, staffToken } (the staffToken is shown once).
+// Callers spread the config overrides at the TOP level of the argument object
+// (e.g. { ...configOverridesFromBody(b), name, slug, … }); the rest pattern
+// gathers them back into configOverrides, alongside an explicit configOverrides
+// key if one is passed directly.
+function createTenant({ name, slug, menu, categories, onConflict, configOverrides, ...rest }) {
+  configOverrides = Object.assign({}, rest, configOverrides || {});
+  let s = normalizeSlug(slug || name);
+  if (!s) { const e = new Error("A slug or name is required"); e.status = 400; throw e; }
+  if (getTenant(s)) {
+    if (onConflict === "suffix") {
+      let n = 2;
+      let cand = normalizeSlug(s + "-" + n);
+      while (getTenant(cand)) { n += 1; cand = normalizeSlug(s + "-" + n); }
+      s = cand;
+    } else {
+      const e = new Error("A restaurant with that slug already exists: " + s);
+      e.status = 409;
+      throw e;
+    }
+  }
+  const cfg = mergeConfig(Object.assign({}, configOverrides || {}, { name }));
+  const staffToken = crypto.randomBytes(24).toString("hex");
+  withWriteLock(() => {
+    saveTenant({ slug: s, name, config: cfg, staffTokenHash: hashToken(staffToken), createdAt: new Date().toISOString() });
+    // Seed the menu exactly as POST /admin/tenants does: a full supplied menu,
+    // else a skeleton from a category list, else empty.
+    const seedMenu = (menu && typeof menu === "object" && menu.categories)
+      ? menu
+      : (Array.isArray(categories) && categories.length ? menuFromCategoryList(categories) : emptyMenu());
+    tenantStore(s).persistMenu(seedMenu);
+    console.log(`[tenant] provisioned '${s}' (${name})`);
+  });
+  return { slug: s, name, staffToken };
+}
+
 function nextOrderId(orders) {
   // IDs must be unique across the WHOLE order log, never reset per day.
   // orders.json survives across midnight, so a per-day counter regenerated
@@ -546,7 +740,7 @@ function getReqToken(req) {
 // "Is this request from staff of ANY tenant?" — used by the rate limiter (runs
 // before tenant resolution) to exempt trusted staff.
 function isStaffReq(req) {
-  return !!findTenantByToken(getReqToken(req));
+  return !!tenantFromToken(getReqToken(req));
 }
 function validGroupDate(v) {
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -866,6 +1060,13 @@ app.get("/tenant/:slug", (req, res) => {
 // for the platform token and uses it for the API calls below).
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin-console.html")));
 
+// The public self-serve owner console — the signup + sign-in + post-login home
+// screen. Served by the backend itself (same-origin) so the owner-session calls
+// to /me, /dashboard, /qr-pack, /menu/extract need no extra CORS entries. /start
+// is the marketing-friendly alias; /owner is where /auth/verify lands.
+app.get("/start", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
+app.get("/owner", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
+
 // Admin view of a tenant (never leaks the token, only whether one is set).
 function tenantAdminView(t) {
   return { slug: t.slug, name: t.name, createdAt: t.createdAt, hasToken: !!t.staffTokenHash, config: t.config };
@@ -873,7 +1074,21 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "themeColor", "logoUrl", "currency", "currencyCode", "gstRate", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "features"]) {
+  for (const k of ["name", "established", "themeColor", "logoUrl", "currency", "currencyCode", "gstRate", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "features"]) {
+    if (b[k] !== undefined) o[k] = b[k];
+  }
+  return o;
+}
+// Public self-serve signup is UNTRUSTED, so it only gets a safe branding subset.
+// Deliberately excluded vs the admin allow-list above: emailFrom (flows into the
+// Resend From header → header-injection / sender spoofing), logoUrl (arbitrary
+// off-site <img> on the customer menu), surcharge/surchargeDefault, and features
+// (e.g. setting poweredBy:false would white-label for free). emailFrom/logoUrl/
+// features stay platform-admin-only; the signup route sets ownerEmail +
+// features.poweredBy itself, server-side.
+function publicConfigOverridesFromBody(b) {
+  const o = {};
+  for (const k of ["name", "established", "themeColor", "currency", "currencyCode", "gstRate", "locale", "timezone"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -888,31 +1103,164 @@ app.get("/admin/tenants", requirePlatformAdmin, (_req, res) => {
 // start editing in the existing /dashboard/menu-admin.html screen.
 app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
   const b = req.body || {};
-  const slug = normalizeSlug(b.slug || b.name || "");
-  if (!slug) return res.status(400).json({ error: "A slug or name is required" });
-  if (getTenant(slug)) return res.status(409).json({ error: "A restaurant with that slug already exists: " + slug });
-  const name = sanitizeString(b.name, 80) || slug;
-  const cfg = mergeConfig(Object.assign(configOverridesFromBody(b), { name }));
-  const staffToken = crypto.randomBytes(24).toString("hex");
-  withWriteLock(() => {
-    saveTenant({ slug, name, config: cfg, staffTokenHash: hashToken(staffToken), createdAt: new Date().toISOString() });
-    // Seed the menu: a full supplied menu, else a skeleton from a category list,
-    // else empty. Gives the owner something to edit in menu-admin right away.
-    const seedMenu = (b.menu && typeof b.menu === "object" && b.menu.categories)
-      ? b.menu
-      : (Array.isArray(b.categories) && b.categories.length ? menuFromCategoryList(b.categories) : emptyMenu());
-    tenantStore(slug).persistMenu(seedMenu);
-    console.log(`[tenant] provisioned '${slug}' (${name})`);
-  });
+  // Preserve the legacy "name defaults to slug" behaviour: derive the slug the
+  // same way createTenant will, then fall back to it for a missing name.
+  const preSlug = normalizeSlug(b.slug || b.name || "");
+  if (!preSlug) return res.status(400).json({ error: "A slug or name is required" });
+  const name = sanitizeString(b.name, 80) || preSlug;
+  try {
+    const { slug, staffToken } = createTenant({
+      ...configOverridesFromBody(b),
+      name,
+      slug: b.slug,
+      menu: b.menu,
+      categories: b.categories,
+      onConflict: "error",
+    });
+    res.json({
+      success: true,
+      slug,
+      name,
+      staffToken,                                  // SHOW ONCE — not recoverable
+      dashboardUrl: `/dashboard?token=${staffToken}`,
+      menuAdminUrl: `/dashboard/menu-admin.html?token=${staffToken}`,
+      customerQuery: `?r=${slug}`,
+      note: "Save the staffToken now — only its hash is stored.",
+    });
+  } catch (e) {
+    if (e && e.status === 409) return res.status(409).json({ error: e.message });
+    if (e && e.status === 400) return res.status(400).json({ error: e.message });
+    console.error("[tenant] provision error:", e && e.message);
+    res.status(500).json({ error: "Failed to provision restaurant" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+// ── SELF-SERVE SIGNUP + MAGIC-LINK AUTH ───────────────────
+// ══════════════════════════════════════════════════════════
+
+// POST /signup — public, rate-limited. One link, owner self-onboards: creates
+// the café (via the shared createTenant), opens an owner account, returns a
+// 30-day session (so the owner is signed in immediately) and emails a welcome
+// magic link. The owner's email is recorded on the tenant and the "powered by"
+// footer defaults on.
+app.post("/signup", (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || email.length > 254) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+    const name = sanitizeString(body.name, 80);
+    if (!name) return res.status(400).json({ error: "Your café's name is required." });
+    if (AUTH.owners[email]) {
+      return res.status(409).json({ error: "You already have a café — sign in instead.", code: "exists" });
+    }
+    const cfgOv = publicConfigOverridesFromBody(body);
+    // ownerEmail + poweredBy are stamped via createTenant's config so they're
+    // saved atomically with the tenant. (createTenant's save runs under the
+    // write lock, which defers to a microtask, so a getTenant() right after the
+    // call would race and return null.) features.poweredBy defaults on; the
+    // public override subset can't set it, so self-serve cafés are never
+    // white-labelled for free.
+    const { slug } = createTenant({
+      ...cfgOv,
+      ownerEmail: email,
+      features: { poweredBy: true },
+      name,
+      slug: body.slug,
+      menu: body.menu,
+      categories: body.categories,
+      onConflict: "suffix",
+    });
+    // Open the owner account.
+    AUTH.owners[email] = {
+      email,
+      name,
+      tenants: [slug],
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    };
+    persistAuth();
+    const session = createSession(email, slug);
+    try { sendMagicEmail(email, "welcome"); } catch {}
+    console.log(`[signup] new café '${slug}' for ${maskPII(email)}`);
+    res.json({
+      success: true,
+      session,
+      slug,
+      name,
+      dashboardUrl: "/dashboard?token=" + session,
+      menuAdminUrl: "/dashboard/menu-admin.html?token=" + session,
+      qrPackUrl: "/qr-pack?token=" + session,
+      customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + slug,
+    });
+  } catch (e) {
+    if (e && e.status === 400) return res.status(400).json({ error: e.message });
+    console.error("[signup] error:", e && e.message);
+    res.status(500).json({ error: "Couldn't create your café — please try again." });
+  }
+});
+
+// POST /auth/request-link — public, rate-limited. ALWAYS responds { ok:true } so
+// it never reveals whether an email is registered. In non-prod (or when Resend
+// isn't configured) it also returns a devLink for local testing — but only when
+// a real account exists, so the existence check still can't leak via devLink.
+app.post("/auth/request-link", (req, res) => {
+  if (authSecret() === "") return res.status(503).json({ error: "Auth not configured" });
+  const email = String((req.body && req.body.email) || "").trim().toLowerCase();
+  const out = { ok: true };
+  if (EMAIL_RE.test(email) && email.length <= 254 && AUTH.owners[email]) {
+    if (resend) sendMagicEmail(email, "login");
+    if (!IS_PROD || !resend) out.devLink = buildMagicLink(email);
+  }
+  res.json(out);
+});
+
+// GET /auth/verify — public. Validates the signed single-use magic token; on
+// success 302-redirects to /owner#s=<session> (session in the URL FRAGMENT, so
+// it never lands in a Referer/server log), else /owner?err=link.
+app.get("/auth/verify", (req, res) => {
+  const v = verifyMagicToken(req.query.token);
+  if (!v) return res.redirect("/owner?err=link");
+  const owner = AUTH.owners[v.email];
+  if (!owner) return res.redirect("/owner?err=link");
+  AUTH.usedMagic[v.jti] = v.exp;       // burn the token (single-use)
+  owner.lastLoginAt = new Date().toISOString();
+  const session = createSession(v.email, owner.tenants[0]);
+  persistAuth();
+  return res.redirect("/owner#s=" + session);
+});
+
+// POST /auth/logout — owner session. Invalidates the current session.
+app.post("/auth/logout", requireOwner, (req, res) => {
+  deleteSession(getReqToken(req));
+  res.json({ ok: true });
+});
+
+// GET /me — owner session. The owner console's "who am I + my café" call.
+app.get("/me", requireOwner, (req, res) => {
+  const owner = AUTH.owners[req.ownerEmail];
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const c = t.config || {};
   res.json({
-    success: true,
-    slug,
-    name,
-    staffToken,                                  // SHOW ONCE — not recoverable
-    dashboardUrl: `/dashboard?token=${staffToken}`,
-    menuAdminUrl: `/dashboard/menu-admin.html?token=${staffToken}`,
-    customerQuery: `?r=${slug}`,
-    note: "Save the staffToken now — only its hash is stored.",
+    email: req.ownerEmail,
+    cafe: {
+      slug: t.slug,
+      name: t.name,
+      config: {
+        name: c.name || t.name,
+        established: c.established || "",
+        themeColor: c.themeColor || "#c25a3a",
+        logoUrl: c.logoUrl || null,
+        currency: c.currency || "$",
+        currencyCode: c.currencyCode || "NZD",
+        gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
+        features: c.features || {},
+      },
+      customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
+    },
   });
 });
 
@@ -1024,6 +1372,35 @@ app.get("/admin/qr-pack", requirePlatformAdmin, async (req, res) => {
     res.send(qrPackHtml(cfg.name || t.name, slug, cfg.themeColor, cards));
   } catch (e) {
     console.error("[qr] pack error:", e.message);
+    res.status(500).send("Failed to build QR pack.");
+  }
+});
+
+// ── Owner/staff QR pack (scoped to your OWN café) ──────────
+// Same printable page as /admin/qr-pack, but the slug is fixed to the caller's
+// tenant (resolved from the staff OR owner-session token) — any ?slug param is
+// ignored, so an owner can only ever print QR codes for their own restaurant.
+app.get("/qr-pack", requireStaff, async (req, res) => {
+  try {
+    const t = req.tenant;
+    const slug = t.slug;
+    const base = String(req.query.base || OWNER_CUSTOMER_ORIGIN).trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(base)) {
+      return res.status(400).send("Add a valid customer site URL, e.g. ?base=https://yourapp.netlify.app");
+    }
+    const tables = parseTableList(req.query.tables || "12");
+    if (!tables.length) return res.status(400).send("No tables — pass a count (?tables=20) or a range (?tables=1-22).");
+    const cards = [];
+    for (const tn of tables) {
+      const url = `${base}/?r=${encodeURIComponent(slug)}&table=${encodeURIComponent(tn)}`;
+      const dataUri = await QRCode.toDataURL(url, { margin: 1, width: 512, errorCorrectionLevel: "M" });
+      cards.push({ tn, url, dataUri });
+    }
+    const cfg = t.config || {};
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(qrPackHtml(cfg.name || t.name, slug, cfg.themeColor, cards));
+  } catch (e) {
+    console.error("[qr] owner pack error:", e.message);
     res.status(500).send("Failed to build QR pack.");
   }
 });
@@ -1444,6 +1821,134 @@ const imageUpload = multer({
     }
     cb(null, true);
   },
+});
+
+// Menu-photo import accepts a photo OR a PDF, so it can't reuse imageUpload's
+// image-only fileFilter. Same memoryStorage + 10 MB cap; the handler does the
+// fine-grained type check (and returns a friendly 415).
+const menuImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+// POST /menu/extract — public, rate-limited. Reads a menu photo/PDF with Claude
+// and returns a flat { categories:[{title,items:[{name,price,desc}]}] } the
+// signup/admin wizard can drop straight into the menu builder. Never invents
+// items; prices are plain numbers (no symbol). Falls back to manual entry when
+// ANTHROPIC_API_KEY is unset (503 code:"no_ai").
+const EXTRACT_PROMPT = [
+  "You are digitizing a restaurant's menu from the attached image or PDF.",
+  "Extract every printed section and dish into the required JSON structure.",
+  "Rules:",
+  "- Output ONLY items that are actually printed on the menu. Never invent, guess, or pad with example dishes.",
+  "- price: a plain number in the menu's own currency with NO symbol or currency code (e.g. 12.5, not \"$12.50\"). If a dish has no printed price, use 0. If it lists several sizes/prices, use the lowest.",
+  "- name: the dish name as printed, kept short (drop long marketing taglines).",
+  "- desc: the menu's printed description for that dish, or an empty string if none is printed. Do not write your own description.",
+  "- Group dishes under their printed section titles (e.g. \"Breakfast\", \"Coffee\"). If the menu has no sections, put everything under a single category titled \"Menu\".",
+  "Return the structured JSON only.",
+].join("\n");
+const MENU_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    categories: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                price: { type: "number" },
+                desc: { type: "string" },
+              },
+              required: ["name", "price", "desc"],
+            },
+          },
+        },
+        required: ["title", "items"],
+      },
+    },
+  },
+  required: ["categories"],
+};
+app.post("/menu/extract", menuImportUpload.single("file"), async (req, res) => {
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(503).json({ error: "Photo import isn't set up yet — add items manually.", code: "no_ai" });
+    }
+    if (!req.file) return res.status(400).json({ error: "No file uploaded (field 'file')." });
+    const mt = req.file.mimetype;
+    const okImg = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mt);
+    const isPdf = mt === "application/pdf";
+    if (!okImg && !isPdf) {
+      return res.status(415).json({ error: "Upload a photo (JPG/PNG) or a PDF of your menu." });
+    }
+    const b64 = req.file.buffer.toString("base64");
+    const srcBlock = isPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
+      : { type: "image", source: { type: "base64", media_type: mt, data: b64 } };
+
+    // Node 18+ has global fetch — no new npm dependency. Time out after ~60s so
+    // a slow/hung model call can't pin the request open.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 60000);
+    let r;
+    try {
+      r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        signal: ac.signal,
+        headers: {
+          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: MENU_IMPORT_MODEL,
+          max_tokens: 4000,
+          messages: [{ role: "user", content: [srcBlock, { type: "text", text: EXTRACT_PROMPT }] }],
+          output_config: { effort: "low", format: { type: "json_schema", schema: MENU_SCHEMA } },
+        }),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!r.ok) {
+      let detail = "";
+      try { detail = (await r.text()).slice(0, 300); } catch {}
+      console.error(`[menu] extract upstream ${r.status}: ${detail}`);
+      return res.status(502).json({ error: "Couldn't read that menu — try a clearer photo or add items manually." });
+    }
+    const data = await r.json();
+    let text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+    // Strip a leading/trailing markdown code fence if the model wrapped the JSON.
+    text = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    let obj;
+    try {
+      obj = JSON.parse(text);
+    } catch (e) {
+      console.error("[menu] extract JSON parse failed:", e.message);
+      return res.status(502).json({ error: "Couldn't read that menu — try a clearer photo or add items manually." });
+    }
+    const categories = (Array.isArray(obj.categories) ? obj.categories : []).slice(0, 30).map((c) => ({
+      title: sanitizeString(c && c.title, 40) || "Menu",
+      items: (Array.isArray(c && c.items) ? c.items : []).slice(0, 60).map((i) => ({
+        name: sanitizeString(i && i.name, 120),
+        price: clampMoney(toFiniteNumber(i && i.price, 0)),
+        desc: sanitizeString(i && i.desc, 200),
+      })).filter((i) => i.name),
+    })).filter((c) => c.title);
+    res.json({ success: true, categories });
+  } catch (err) {
+    console.error("[menu] extract error:", err && err.message);
+    res.status(500).json({ error: "Couldn't read that menu — please try again or add items manually." });
+  }
 });
 
 app.post("/menu/items/:id/image", requireStaff, imageUpload.single("image"), async (req, res) => {
@@ -2938,6 +3443,19 @@ async function restoreFromSupabase() {
   } catch (e) { console.warn("[storage] restore tenants failed:", e.message); }
   loadTenantsIntoCache();
 
+  // 1b) The owner-accounts / sessions store (data/auth.json ↔ Supabase "auth").
+  try {
+    const localExists = fs.existsSync(AUTH_FILE) && fs.readFileSync(AUTH_FILE, "utf8").trim();
+    if (!localExists) {
+      const remote = await pullFromSupabase("auth");
+      if (remote && typeof remote === "object" && !Array.isArray(remote)) {
+        writeJson(AUTH_FILE, remote);
+        console.log("[storage] restored owner-accounts (auth) from Supabase");
+      }
+    }
+  } catch (e) { console.warn("[storage] restore auth failed:", e.message); }
+  loadAuthIntoCache();
+
   // 2) Each tenant's data blobs (tenant:<slug>:<name>).
   for (const t of TENANTS.values()) {
     const dir = path.join(DATA_DIR, t.slug);
@@ -2979,6 +3497,7 @@ async function restoreFromSupabase() {
 let server;
 async function boot() {
   loadTenantsIntoCache();      // file-mode: load whatever is on disk
+  loadAuthIntoCache();         // owner accounts + sessions
   await restoreFromSupabase(); // supabase-mode: pull registry + per-tenant blobs, reload cache
   ensureDefaultTenant();       // fresh install fallback: materialize the default café
   server = app.listen(PORT, () => {
@@ -2991,6 +3510,14 @@ async function boot() {
   console.log(`\n   Endpoints:`);
   console.log(`     POST   /admin/tenants                 (platform) provision a new restaurant`);
   console.log(`     GET    /admin/tenants                 (platform) list restaurants`);
+  console.log(`     GET    /start  /owner                 (public)  self-serve owner console`);
+  console.log(`     POST   /signup                        (public)  self-serve café signup`);
+  console.log(`     POST   /auth/request-link             (public)  email a sign-in magic link`);
+  console.log(`     GET    /auth/verify                   (public)  consume magic link → session`);
+  console.log(`     POST   /auth/logout                   (owner)   end the session`);
+  console.log(`     GET    /me                            (owner)   account + café summary`);
+  console.log(`     GET    /qr-pack                       (owner/staff) printable QR pack for your café`);
+  console.log(`     POST   /menu/extract                  (public)  photo/PDF → menu items (AI)`);
   console.log(`     GET    /tenant/:slug                  (public)  branding config for the SPA`);
   console.log(`     POST   /order                         (public)  receive order from QR menu`);
   console.log(`     POST   /orders/:id/add-items          (public)  add items to open tab`);
