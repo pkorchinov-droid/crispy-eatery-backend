@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Crispy Eatery — Sales Reports</title>
+<title>Crispy Eatery — Orders & Reports</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -15,186 +15,141 @@
     padding: 16px 24px; background: #2a2318; border-bottom: 2px solid #b5753a;
     position: sticky; top: 0; z-index: 100;
   }
-  .logo {
-    font-family: Georgia, 'Times New Roman', serif;
-    font-size: 22px; font-weight: 700; color: #e8c477; letter-spacing: 1px;
-  }
+  .logo { font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #e8c477; letter-spacing: 1px; }
   .logo span { font-weight: 400; color: #c49a5c; font-size: 14px; margin-left: 10px; text-transform: uppercase; letter-spacing: 3px; }
-  .header-actions { display: flex; gap: 14px; align-items: center; }
+  .header-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   .header-actions a {
-    color: #c49a5c; text-decoration: none; font-size: 12px;
-    text-transform: uppercase; letter-spacing: 1.5px;
-    padding: 7px 14px; border: 1px solid #4a3d2e; border-radius: 6px;
-    transition: all 0.2s;
+    color: #c49a5c; text-decoration: none; font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    padding: 7px 14px; border: 1px solid #4a3d2e; border-radius: 6px; transition: all 0.2s;
   }
   .header-actions a:hover { border-color: #b5753a; color: #e8c477; }
 
   /* Tabs */
-  .tabs {
-    display: flex; gap: 4px; padding: 12px 24px; background: #1a1510;
-    border-bottom: 1px solid #2a2318;
-    position: sticky; top: 70px; z-index: 90;
-  }
-  .tab {
-    padding: 8px 18px; background: transparent; color: #a09080;
-    border: 1px solid #3d3428; border-radius: 8px;
-    font-size: 13px; cursor: pointer;
-    text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s;
-  }
+  .tabs { display: flex; gap: 4px; padding: 12px 24px; background: #1a1510; border-bottom: 1px solid #2a2318; position: sticky; top: 70px; z-index: 90; }
+  .tab { padding: 8px 18px; background: transparent; color: #a09080; border: 1px solid #3d3428; border-radius: 8px; font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
   .tab.active { background: #b5753a; border-color: #b5753a; color: #fff; font-weight: 600; }
 
   /* Stat cards */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; padding: 20px 24px; }
-  .stat {
-    background: #2a2318; border: 1px solid #3d3428; border-radius: 10px;
-    padding: 16px 18px;
-  }
-  .stat .label {
-    font-size: 10px; color: #8a7a68; text-transform: uppercase; letter-spacing: 2px; font-weight: 600;
-  }
-  .stat .value {
-    font-family: Georgia, serif; font-size: 32px; color: #e8c477;
-    font-weight: 400; margin-top: 6px; line-height: 1;
-  }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; padding: 20px 24px; }
+  .stat { background: #2a2318; border: 1px solid #3d3428; border-radius: 10px; padding: 16px 18px; }
+  .stat .label { font-size: 10px; color: #8a7a68; text-transform: uppercase; letter-spacing: 2px; font-weight: 600; }
+  .stat .value { font-family: Georgia, serif; font-size: 30px; color: #e8c477; font-weight: 400; margin-top: 6px; line-height: 1; }
   .stat .sub { font-size: 11px; color: #8a7a68; margin-top: 4px; }
 
-  /* Section heads */
   .section-head { padding: 18px 24px 8px; }
-  .section-head h2 {
-    font-family: Georgia, serif; font-size: 22px; color: #e8c477; font-weight: 400; font-style: italic;
-  }
+  .section-head h2 { font-family: Georgia, serif; font-size: 22px; color: #e8c477; font-weight: 400; font-style: italic; }
   .section-head .sub { font-size: 11px; color: #8a7a68; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
-
-  /* Hourly heatmap (bar chart) */
-  .hourly {
-    margin: 0 24px; padding: 14px; background: #2a2318; border: 1px solid #3d3428; border-radius: 10px;
-    display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; align-items: end; height: 180px;
-  }
-  .bar {
-    position: relative; background: #3d3428; border-radius: 3px 3px 0 0;
-    transition: background 0.2s; cursor: default;
-  }
-  .bar:hover { background: #b5753a; }
-  .bar .tt {
-    position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-    background: #1a1510; color: #f5f0e8; padding: 5px 9px; border-radius: 4px;
-    border: 1px solid #4a3d2e; white-space: nowrap; font-size: 11px;
-    opacity: 0; pointer-events: none; transition: opacity 0.2s;
-    margin-bottom: 6px; z-index: 5;
-  }
-  .bar:hover .tt { opacity: 1; }
-  .hour-labels {
-    display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px;
-    margin: 4px 24px 0; padding: 0 14px;
-    font-size: 9px; color: #5a4a38; text-align: center;
-  }
 
   /* Items table */
   .table-scroll { margin: 0 24px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .table-scroll .items-table { margin: 0; min-width: 520px; }
-  .items-table {
-    margin: 0 24px; background: #2a2318; border: 1px solid #3d3428; border-radius: 10px; overflow: hidden;
-  }
-  .bill-link { color: inherit; text-decoration: none; display: block; }
-  .bill-link:hover, .bill-link:focus { color: #e8c477; text-decoration: underline; }
+  .items-table { background: #2a2318; border: 1px solid #3d3428; border-radius: 10px; overflow: hidden; min-width: 360px; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 11px 16px; text-align: left; font-size: 13px; }
-  th {
-    background: #1a1510; color: #c49a5c; font-size: 10px; text-transform: uppercase;
-    letter-spacing: 1.5px; font-weight: 700; border-bottom: 1px solid #3d3428;
-  }
+  th, td { padding: 10px 16px; text-align: left; font-size: 13px; }
+  th { background: #1a1510; color: #c49a5c; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; border-bottom: 1px solid #3d3428; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr { border-bottom: 1px solid #2a2318; }
-  tr:last-child { border-bottom: none; }
-  tr:hover { background: #322a1f; }
-  td.qty { color: #e8c477; font-weight: 600; }
-  td.rev { color: #4caf50; font-weight: 600; }
+  tr { border-bottom: 1px solid #2a2318; } tr:last-child { border-bottom: none; }
+  td.qty { color: #e8c477; font-weight: 600; } td.rev { color: #4caf50; font-weight: 600; }
 
-  /* Week bars */
-  .week-bars {
-    margin: 0 24px; padding: 18px; background: #2a2318; border: 1px solid #3d3428; border-radius: 10px;
-    display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; align-items: end; height: 200px;
+  /* ── Day-by-day order browser ── */
+  .browser { margin: 8px 24px 0; }
+  .day-group { margin-bottom: 10px; border: 1px solid #3d3428; border-radius: 10px; overflow: hidden; background: #221c13; }
+  .day-head {
+    width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+    background: #2a2318; border: none; cursor: pointer; color: #f5f0e8; text-align: left;
   }
-  .day {
-    display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end;
-  }
-  .day-val { font-size: 11px; color: #e8c477; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
-  .day-bar {
-    width: 100%; background: linear-gradient(180deg, #b5753a 0%, #6b3f1e 100%);
-    border-radius: 4px 4px 0 0; min-height: 4px; transition: background 0.2s;
-  }
-  .day:hover .day-bar { background: linear-gradient(180deg, #e8c477 0%, #b5753a 100%); }
-  .day-label {
-    font-size: 10px; color: #8a7a68; margin-top: 6px;
-    text-transform: uppercase; letter-spacing: 1px; text-align: center;
-  }
+  .day-head:hover { background: #322a1f; }
+  .day-caret { color: #b5753a; font-size: 13px; width: 14px; flex: 0 0 auto; }
+  .day-date { font-family: Georgia, serif; font-size: 17px; color: #e8c477; flex: 1 1 auto; }
+  .day-meta { font-size: 12px; color: #a89a84; font-variant-numeric: tabular-nums; text-align: right; }
+  .day-meta b { color: #4caf50; font-weight: 600; }
+  .day-orders { padding: 4px 10px 10px; }
 
-  .empty {
-    padding: 40px; text-align: center; color: #5a4a38;
-    font-family: Georgia, serif; font-style: italic; font-size: 16px;
-  }
+  .ord { border: 1px solid #322a1f; border-radius: 8px; margin-top: 8px; overflow: hidden; background: #1f1810; }
+  .ord-head { width: 100%; display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: center; padding: 11px 14px; background: transparent; border: none; cursor: pointer; color: #f5f0e8; text-align: left; }
+  .ord-head:hover { background: #2a2218; }
+  .ord-time { font-size: 12px; color: #c9b89a; font-variant-numeric: tabular-nums; }
+  .ord-who { font-size: 14px; color: #f5f0e8; font-weight: 600; }
+  .ord-sub { font-size: 11px; color: #8a7a68; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; }
+  .ord-right { display: flex; align-items: center; gap: 10px; }
+  .ord-total { font-family: Georgia, serif; font-size: 16px; color: #e8c477; font-variant-numeric: tabular-nums; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; letter-spacing: .5px; border: 1px solid; white-space: nowrap; }
+  .pill.paid { color: #6ee7a8; border-color: #2f6b45; background: #16301f; }
+  .pill.unpaid { color: #e8b96e; border-color: #6b542f; background: #2e2412; }
+  .pill.pending { color: #7ab8e8; border-color: #2f4f6b; background: #14222e; }
+  .pill.refunded { color: #c9a0e8; border-color: #503060; background: #221430; }
+
+  .ord-detail { padding: 4px 14px 14px; border-top: 1px solid #322a1f; }
+  .det-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 18px; margin: 12px 0; }
+  .det-grid .k { font-size: 10px; color: #8a7a68; text-transform: uppercase; letter-spacing: 1px; }
+  .det-grid .v { font-size: 13px; color: #f5f0e8; margin-top: 2px; }
+  .det-grid .v a { color: #e8c477; text-decoration: none; } .det-grid .v a:hover { text-decoration: underline; }
+  .det-items { margin-top: 8px; }
+  .det-items .li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dotted #322a1f; font-size: 13px; }
+  .det-items .li:last-child { border-bottom: none; }
+  .det-items .li .nm { color: #e8dcc4; } .det-items .li .nm small { color: #8a7a68; }
+  .det-items .li .note { display: block; color: #b5753a; font-size: 11px; margin-top: 2px; }
+  .det-items .li .lp { color: #c9b89a; font-variant-numeric: tabular-nums; }
+  .det-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .btn { padding: 8px 14px; border-radius: 7px; font-size: 12px; font-weight: 600; letter-spacing: .5px; cursor: pointer; border: 1px solid; text-decoration: none; display: inline-block; }
+  .btn-bill { color: #e8c477; border-color: #4a3d2e; background: #2a2318; }
+  .btn-bill:hover { border-color: #b5753a; }
+  .btn-del { color: #e89090; border-color: #5e2f2f; background: #2e1616; }
+  .btn-del:hover { background: #3e1c1c; border-color: #a04040; }
+
+  .empty { padding: 40px; text-align: center; color: #5a4a38; font-family: Georgia, serif; font-style: italic; font-size: 16px; }
   .loading { padding: 40px; text-align: center; color: #8a7a68; font-size: 13px; }
+  .browser-hint { padding: 4px 24px 0; font-size: 11px; color: #6a5a48; text-transform: uppercase; letter-spacing: 1px; }
 
   @media (max-width: 768px) {
     header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
-    .stats, .hourly, .items-table, .table-scroll, .week-bars, .hour-labels { margin-left: 12px; margin-right: 12px; }
+    .stats, .table-scroll, .browser, .browser-hint { margin-left: 12px; margin-right: 12px; }
+    .ord-sub { max-width: 40vw; }
   }
 
-  /* PAID/UNPAID pills + bills rows */
-  .pill { display:inline-block; padding:1px 7px; border-radius:5px; font-size:11px; font-weight:700; letter-spacing:.5px; border:1px solid; }
-  .pill.paid { color:#6ee7a8; border-color:#2f6b45; }
-  .pill.unpaid { color:#e8b96e; border-color:#6b542f; }
-  .bill-row { cursor:pointer; }
-  .bill-row:hover td { background:#332a1d; }
-  .bill-items { max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bbab98; font-size:12px; }
-  .print-only { display:none; }
-  .print-title { text-align:center; font-family:Georgia,serif; font-size:22px; font-weight:700; color:#000; margin:14px 0 4px; }
-  .print-title .pt-sub { font-size:13px; font-weight:400; color:#444; margin-top:4px; }
-
-  /* Printable end-of-day report */
+  /* Print: expand everything, drop chrome */
   @media print {
-    body { background:#fff !important; color:#000 !important; padding:0; }
-    header, .tabs, .header-actions, #printBtn, .hourly, .week-bars, .hour-labels, .section-head .sub { display:none !important; }
-    .print-only { display:block !important; }
-    .stats { grid-template-columns:repeat(4,1fr) !important; padding:8px 16px; gap:8px; }
-    .stat { background:#fff !important; border:1px solid #999 !important; padding:8px 10px; }
-    .stat .value { color:#000 !important; font-size:22px; }
-    .stat .label, .stat .sub { color:#333 !important; }
-    .section-head { padding:12px 16px 4px; }
-    .section-head h2 { color:#000 !important; }
-    .items-table { margin:0 16px; }
-    .table-scroll { margin:0 16px; overflow:visible !important; }
-    .table-scroll .items-table { margin:0 !important; min-width:0 !important; }
-    .items-table table, .items-table th, .items-table td { color:#000 !important; background:#fff !important; border-color:#bbb !important; }
-    .bill-link { color:#000 !important; }
-    .bill-items { max-width:none; white-space:normal; color:#000 !important; }
-    .pill.paid { color:#1b7a3d !important; } .pill.unpaid { color:#b00 !important; }
-    tr { page-break-inside:avoid; }
-    a { color:#000 !important; text-decoration:none; }
+    body { background: #fff !important; color: #000 !important; padding: 0; }
+    header, .tabs, .browser-hint { display: none !important; }
+    .day-orders { display: block !important; }
+    .ord-detail { display: block !important; }
+    .btn-del, .day-caret { display: none !important; }
+    .stats { grid-template-columns: repeat(5,1fr) !important; padding: 8px 16px; gap: 8px; }
+    .stat { background: #fff !important; border: 1px solid #999 !important; padding: 8px 10px; }
+    .stat .value { color: #000 !important; font-size: 20px; } .stat .label, .stat .sub { color: #333 !important; }
+    .section-head { padding: 12px 16px 4px; } .section-head h2 { color: #000 !important; }
+    .browser { margin: 0 16px; }
+    .day-group, .ord { border-color: #bbb !important; background: #fff !important; }
+    .day-head { background: #eee !important; color: #000 !important; } .day-date, .ord-total { color: #000 !important; }
+    .day-meta, .ord-time, .ord-who, .det-grid .v, .det-items .li .nm { color: #000 !important; }
+    .items-table, .items-table th, .items-table td { color: #000 !important; background: #fff !important; border-color: #bbb !important; }
+    a { color: #000 !important; text-decoration: none; }
+    tr { page-break-inside: avoid; } .ord, .day-group { page-break-inside: avoid; }
   }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">Crispy Eatery <span>Reports</span></div>
+  <div class="logo">Crispy Eatery <span>Orders &amp; Reports</span></div>
   <div class="header-actions">
     <a href="menu-admin.html" id="menuLink">Menu admin ↗</a>
     <a href="index-full-workflow.html" id="kitchenLink">Kitchen ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" target="_blank" rel="noopener">Live menu ↗</a>
-    <a href="#" id="printBtn" onclick="window.print();return false;" title="Print today's end-of-day report">🖨 Print day</a>
+    <a href="#" id="printBtn" onclick="window.print();return false;" title="Print the current view">🖨 Print</a>
   </div>
 </header>
 
 <div class="tabs" role="tablist">
-  <button class="tab active" id="tabToday" role="tab" aria-selected="true" onclick="switchView('today')">Today</button>
-  <button class="tab" id="tabWeek" role="tab" aria-selected="false" onclick="switchView('week')">Last 7 days</button>
+  <button class="tab active" id="tab-today" role="tab" onclick="switchView('today')">Today</button>
+  <button class="tab" id="tab-week" role="tab" onclick="switchView('week')">Last 7 days</button>
+  <button class="tab" id="tab-all" role="tab" onclick="switchView('all')">All time</button>
 </div>
 
-<div id="content"><div class="loading">Loading…</div></div>
+<div id="content"><div class="loading">Loading orders…</div></div>
 
 <script>
-(function() {
+(function () {
   var BACKEND = window.location.origin;
   var token = null;
   try {
@@ -213,211 +168,270 @@
     document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#e8c477;font-family:Georgia,serif;font-size:18px;font-style:italic;">No staff token. Open via the link from the kitchen dashboard.</div>';
     return;
   }
-  // Preserve token in cross-page links
-  ["menuLink", "kitchenLink"].forEach(function(id) {
+  ["menuLink", "kitchenLink"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el && el.getAttribute("href")) el.href = el.getAttribute("href") + "?token=" + encodeURIComponent(token);
   });
 
-  function fmt(n) { return "$" + Number(n).toFixed(2); }
-  function fmtInt(n) { return Number(n).toLocaleString(); }
-  function pad(h) { return String(h).padStart(2, "0"); }
+  // ── State ──
+  var view = "today";                 // today | week | all
+  var ALL = [];                       // every order (newest first), from GET /orders
+  var loadError = null;
+  var lastSig = "";
+  var expandedDays = {};              // dayKey -> true
+  var expandedOrders = {};            // orderId -> true
+  var bootstrapped = false;
+
+  // ── Helpers ──
+  function fmt(n) { return "$" + (Number(n) || 0).toFixed(2); }
+  function fmtInt(n) { return (Number(n) || 0).toLocaleString(); }
+  function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function safeId(s) { return String(s).replace(/[^a-zA-Z0-9]/g, "_"); }
   function timeOf(iso) { try { return new Date(iso).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", hour12: true }); } catch (e) { return ""; } }
+  function dayKeyOf(iso) { var d = new Date(iso); if (isNaN(d)) return "unknown"; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function dayLabelOf(iso) { try { return new Date(iso).toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); } catch (e) { return iso; } }
+  function isPickup(o) { return o.orderType === "pickup-drinks" || String(o.tableNumber || "").toUpperCase() === "PICKUP"; }
+  function whoOf(o) { return isPickup(o) ? (o.customerName ? "Pickup · " + o.customerName : "Pickup") : "Table " + (o.tableNumber || "?"); }
+  function itemsLine(o) { return (o.items || []).map(function (i) { return (i.qty || 1) + "× " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", "); }
 
-  var view = "today";
-  var data = { today: null, week: null };
-  var errors = { today: null, week: null };
-  window.switchView = function(which) {
-    view = which;
-    document.getElementById("tabToday").setAttribute("aria-selected", which === "today");
-    document.getElementById("tabWeek").setAttribute("aria-selected", which === "week");
-    document.getElementById("tabToday").classList.toggle("active", which === "today");
-    document.getElementById("tabWeek").classList.toggle("active", which === "week");
-    render();
-  };
-  window.fetchReports = null; // assigned below; exposed for Retry buttons
-
-  // Fetch one endpoint, updating data[key]/errors[key] independently.
-  // Keeps the last good data on transient failure instead of wiping it.
-  function fetchOne(key, path) {
-    return fetch(BACKEND + path, { headers: { Authorization: "Bearer " + token } })
-      .then(function(r) {
-        if (!r.ok) {
-          if (r.status === 401) {
-            errors[key] = { kind: "auth", msg: "Session expired — reopen the dashboard from its ?token= link." };
-          } else {
-            errors[key] = { kind: "http", msg: "Couldn't load — retry." };
-          }
-          return; // keep existing data[key] if any
-        }
-        return r.json().then(function(json) {
-          data[key] = json;
-          errors[key] = null;
-        });
-      })
-      .catch(function() {
-        errors[key] = { kind: "network", msg: "Couldn't load — retry." };
-        // keep existing data[key]
-      });
-  }
-
-  function fetchReports() {
-    // Independent fetches: one can render while the other shows its own error.
-    return Promise.all([
-      fetchOne("today", "/reports/today"),
-      fetchOne("week", "/reports/week"),
-    ]).then(function() { render(); });
-  }
-  window.fetchReports = fetchReports;
-
-  function errorBlock(key) {
-    var err = errors[key];
-    if (!err) return "";
-    if (err.kind === "auth") {
-      return '<div class="empty">' + escapeHtml(err.msg) + '</div>';
+  function payInfo(o) {
+    var st = o.paymentStatus || "unpaid";
+    if (st === "paid") {
+      var via = (o.payment && o.payment.provider === "stripe") ? "online"
+        : (o.payment && o.payment.method) ? o.payment.method
+        : (o.paymentMethod) ? o.paymentMethod : "";
+      return { cls: "paid", text: "PAID" + (via ? " · " + String(via).toUpperCase() : "") };
     }
-    return '<div class="empty">' + escapeHtml(err.msg) +
-      '<div style="margin-top:14px;"><button class="tab" onclick="fetchReports()">Retry</button></div></div>';
+    if (st === "pending") return { cls: "pending", text: "PENDING" };
+    if (st === "refunded") return { cls: "refunded", text: "REFUNDED" };
+    if (st === "failed") return { cls: "unpaid", text: "FAILED" };
+    return { cls: "unpaid", text: "UNPAID" };
+  }
+
+  // ── Scope filter ──
+  function scopeOrders() {
+    if (view === "all") return ALL;
+    if (view === "today") { var tk = dayKeyOf(new Date().toISOString()); return ALL.filter(function (o) { return dayKeyOf(o.createdAt) === tk; }); }
+    // week: midnight 6 days ago → now (last 7 calendar days incl. today)
+    var ws = new Date(); ws.setHours(0, 0, 0, 0); ws.setDate(ws.getDate() - 6);
+    return ALL.filter(function (o) { var t = new Date(o.createdAt).getTime(); return !isNaN(t) && t >= ws.getTime(); });
+  }
+
+  function computeStats(orders) {
+    var revenue = 0, paid = 0, online = 0;
+    orders.forEach(function (o) {
+      revenue += Number(o.total) || 0;
+      online += Number(o.onlineSurcharge) || 0;
+      if ((o.paymentStatus || "") === "paid") paid++;
+    });
+    return { count: orders.length, revenue: revenue, avg: orders.length ? revenue / orders.length : 0, paid: paid, online: online };
+  }
+
+  function itemsSold(orders) {
+    var map = {};
+    orders.forEach(function (o) {
+      (o.items || []).forEach(function (i) {
+        var q = Number(i.qty) || 1, p = Number(i.price) || 0;
+        var k = i.name + (i.size ? " (" + i.size + ")" : "");
+        if (!map[k]) map[k] = { name: k, qty: 0, revenue: 0 };
+        map[k].qty += q; map[k].revenue += p * q;
+      });
+    });
+    return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return b.revenue - a.revenue; });
+  }
+
+  function groupByDay(orders) {
+    var order = [], byKey = {};
+    orders.forEach(function (o) {
+      var k = dayKeyOf(o.createdAt);
+      if (!byKey[k]) { byKey[k] = { key: k, label: dayLabelOf(o.createdAt), orders: [], revenue: 0, paid: 0 }; order.push(k); }
+      byKey[k].orders.push(o);
+      byKey[k].revenue += Number(o.total) || 0;
+      if ((o.paymentStatus || "") === "paid") byKey[k].paid++;
+    });
+    return order.map(function (k) { return byKey[k]; }); // newest first (ALL is newest first)
+  }
+
+  // ── Render ──
+  function statCard(label, value, sub) {
+    return '<div class="stat"><div class="label">' + label + '</div><div class="value">' + value + '</div>' + (sub ? '<div class="sub">' + esc(sub) + '</div>' : "") + '</div>';
+  }
+
+  function renderOrderDetail(o) {
+    var pi = payInfo(o);
+    var phone = o.phoneNumber ? '<a href="tel:' + esc(String(o.phoneNumber).replace(/[^+\d]/g, "")) + '">' + esc(o.phoneNumber) + '</a>' : '<span style="color:#5a4a38">—</span>';
+    var pay = o.payment || {};
+    var payLine = pi.text + (pay.scheme || pay.last4 ? " (" + esc([pay.scheme, pay.last4 ? "•" + pay.last4 : ""].filter(Boolean).join(" ")) + ")" : "");
+    var grid = '<div class="det-grid">' +
+      '<div><div class="k">Phone</div><div class="v">' + phone + '</div></div>' +
+      '<div><div class="k">Payment</div><div class="v">' + esc(payLine) + '</div></div>' +
+      (isPickup(o) ? '<div><div class="k">Pickup name</div><div class="v">' + esc(o.customerName || "—") + '</div></div><div><div class="k">Ready by</div><div class="v">' + esc(o.pickupTime || "ASAP") + '</div></div>' : '<div><div class="k">Table</div><div class="v">' + esc(o.tableNumber) + '</div></div><div><div class="k">Guests</div><div class="v">' + esc(o.guestCount || 1) + '</div></div>') +
+      '<div><div class="k">Online fee</div><div class="v">' + fmt(o.onlineSurcharge || 0) + '</div></div>' +
+      '<div><div class="k">Placed</div><div class="v">' + esc(new Date(o.createdAt).toLocaleString("en-NZ")) + '</div></div>' +
+      '</div>';
+    var items = '<div class="det-items">' + (o.items || []).map(function (i) {
+      return '<div class="li"><span class="nm">' + (Number(i.qty) || 1) + '× ' + esc(i.name) + (i.size ? ' <small>(' + esc(i.size) + ')</small>' : '') + (i.notes ? '<span class="note">↳ ' + esc(i.notes) + '</span>' : '') + '</span><span class="lp">' + fmt((Number(i.price) || 0) * (Number(i.qty) || 1)) + '</span></div>';
+    }).join("") + '</div>';
+    var adj = (Array.isArray(o.adjustments) && o.adjustments.length) ? '<div class="det-items">' + o.adjustments.map(function (a) {
+      var amt = Number(a.amount) || 0;
+      return '<div class="li"><span class="nm" style="color:#b5753a">' + esc(a.label) + '</span><span class="lp">' + (amt < 0 ? "-" : "+") + fmt(Math.abs(amt)) + '</span></div>';
+    }).join("") + '</div>' : "";
+    var totalRow = '<div class="li" style="border-top:1px solid #4a3d2e;margin-top:4px;padding-top:8px"><span class="nm" style="color:#e8c477;font-weight:600">TOTAL</span><span class="lp" style="color:#e8c477;font-weight:700">' + fmt(o.total) + '</span></div>';
+    var billUrl = "/bill/?order=" + encodeURIComponent(o.id) + (o.billToken ? "&t=" + encodeURIComponent(o.billToken) : "");
+    var actions = '<div class="det-actions">' +
+      '<a class="btn btn-bill" href="' + esc(billUrl) + '" target="_blank" rel="noopener">View / reprint bill ↗</a>' +
+      '<button class="btn btn-del" onclick="delOrder(\'' + esc(o.id).replace(/'/g, "\\'") + '\')">🗑 Delete order</button>' +
+      '</div>';
+    return grid + items + adj + totalRow + actions;
+  }
+
+  function renderOrderRow(o) {
+    var pi = payInfo(o);
+    var sid = safeId(o.id);
+    var open = !!expandedOrders[o.id];
+    return '<div class="ord">' +
+      '<button class="ord-head" onclick="toggleOrder(\'' + esc(o.id).replace(/'/g, "\\'") + '\')">' +
+        '<span class="ord-time">' + esc(timeOf(o.createdAt)) + '</span>' +
+        '<span><span class="ord-who">' + esc(whoOf(o)) + '</span><span class="ord-sub">' + esc(o.id) + ' · ' + esc(itemsLine(o) || "no items") + '</span></span>' +
+        '<span class="ord-right"><span class="pill ' + pi.cls + '">' + esc(pi.text) + '</span><span class="ord-total">' + fmt(o.total) + '</span></span>' +
+      '</button>' +
+      '<div class="ord-detail" id="det-' + sid + '" style="display:' + (open ? "block" : "none") + '">' + (open ? renderOrderDetail(o) : "") + '</div>' +
+    '</div>';
+  }
+
+  function renderDay(day) {
+    var open = !!expandedDays[day.key];
+    var rows = open ? day.orders.map(renderOrderRow).join("") : "";
+    return '<div class="day-group">' +
+      '<button class="day-head" onclick="toggleDay(\'' + day.key + '\')">' +
+        '<span class="day-caret" id="caret-' + day.key + '">' + (open ? "▾" : "▸") + '</span>' +
+        '<span class="day-date">' + esc(day.label) + '</span>' +
+        '<span class="day-meta">' + day.orders.length + ' order' + (day.orders.length === 1 ? "" : "s") + ' · <b>' + fmt(day.revenue) + '</b> · ' + day.paid + ' paid</span>' +
+      '</button>' +
+      '<div class="day-orders" id="day-' + day.key + '" style="display:' + (open ? "block" : "none") + '">' + rows + '</div>' +
+    '</div>';
   }
 
   function render() {
-    var d = data[view];
-    // No good data yet: show this view's error (if any) or the loading state.
-    if (!d) {
-      if (errors[view]) { document.getElementById("content").innerHTML = errorBlock(view); return; }
-      document.getElementById("content").innerHTML = '<div class="loading">Loading…</div>'; return;
+    var el = document.getElementById("content");
+    if (loadError && !ALL.length) {
+      el.innerHTML = '<div class="empty">' + esc(loadError) + '<div style="margin-top:14px"><button class="tab" onclick="reload()">Retry</button></div></div>';
+      return;
     }
-    try {
+    var orders = scopeOrders();
+    var s = computeStats(orders);
+    var scopeName = view === "today" ? "today" : view === "week" ? "the last 7 days" : "all time";
+
     var html = "";
-    // Have stale-but-good data and a fresh error: keep data, surface an inline banner.
-    if (errors[view]) html += errorBlock(view);
-    if (view === "today") html += '<div class="print-only print-title">CRISPY EATERY &mdash; End of Day Report<div class="pt-sub">' + escapeHtml(d.date || "") + '</div></div>';
-    // Stats row
-    if (view === "today") {
-      html += '<div class="stats">' +
-        statCard("Orders today", fmtInt(d.totalOrders), d.date) +
-        statCard("Revenue", fmt(d.totalRevenue), d.totalOrders ? "since 00:00" : "no orders yet") +
-        statCard("Avg order", fmt(d.avgOrder), "per ticket") +
-        statCard("Tables served", fmtInt(d.tableCount), "unique") +
-        statCard("Online income", fmt(d.onlineIncome || 0), "your online fee today") +
-        '</div>';
-    } else {
-      html += '<div class="stats">' +
-        statCard("Orders (7 days)", fmtInt(d.totalOrders), d.from + " → " + d.to) +
-        statCard("Revenue", fmt(d.totalRevenue), "") +
-        statCard("Avg order", fmt(d.avgOrder), "per ticket") +
-        statCard("Daily avg revenue", fmt(d.totalRevenue / 7), "") +
-        statCard("Online income", fmt(d.onlineIncome || 0), "your online fee, 7 days") +
-        '</div>';
-    }
+    if (loadError) html += '<div class="browser-hint" style="color:#e8b96e">' + esc(loadError) + ' — showing last loaded data.</div>';
 
-    // Hourly heatmap (today) or weekly bars
-    if (view === "today") {
-      var hourly = Array.isArray(d.hourly) ? d.hourly : [];
-      var max = Math.max.apply(null, hourly.map(function(h) { return (h && h.revenue) || 0; }).concat([1]));
-      html += '<div class="section-head"><h2>Hourly breakdown</h2><div class="sub">Bars scale to today\'s busiest hour</div></div>';
-      html += '<div class="hourly">';
-      for (var i = 0; i < 24; i++) {
-        var h = hourly[i] || { hour: i, orders: 0, revenue: 0 };
-        var pct = max ? Math.max(2, Math.round((h.revenue / max) * 100)) : 2;
-        html += '<div class="bar" style="height:' + pct + '%">' +
-          '<div class="tt">' + pad(h.hour) + ':00 · ' + h.orders + ' orders · ' + fmt(h.revenue) + '</div>' +
-          '</div>';
-      }
-      html += '</div>';
-      html += '<div class="hour-labels">';
-      for (var j = 0; j < 24; j++) {
-        // Show every 3rd hour label to avoid clutter
-        html += '<span>' + (j % 3 === 0 ? pad(j) : "") + '</span>';
-      }
-      html += '</div>';
-    } else {
-      var days = Array.isArray(d.days) ? d.days : [];
-      var maxRev = Math.max.apply(null, days.map(function(x) { return (x && x.revenue) || 0; }).concat([1]));
-      html += '<div class="section-head"><h2>Last 7 days</h2><div class="sub">Daily revenue</div></div>';
-      html += '<div class="week-bars">';
-      days.forEach(function(day) {
-        var pct = Math.max(2, Math.round((day.revenue / maxRev) * 100));
-        html += '<div class="day">' +
-          '<div class="day-val">' + (day.revenue > 0 ? fmt(day.revenue) : "—") + '</div>' +
-          '<div class="day-bar" style="height:' + pct + '%" title="' + day.orders + ' orders"></div>' +
-          '<div class="day-label">' + day.label + '<br>' + day.orders + ' ord</div>' +
-          '</div>';
-      });
-      html += '</div>';
-    }
+    html += '<div class="stats">' +
+      statCard("Orders", fmtInt(s.count), scopeName) +
+      statCard("Revenue", fmt(s.revenue), s.count ? "" : "no orders") +
+      statCard("Avg order", fmt(s.avg), "per ticket") +
+      statCard("Paid", fmtInt(s.paid), s.count ? Math.round((s.paid / s.count) * 100) + "% of orders" : "") +
+      statCard("Online income", fmt(s.online), "your online fee") +
+      '</div>';
 
-    // Items table
-    var itemsSold = Array.isArray(d.itemsSold) ? d.itemsSold : [];
-    html += '<div class="section-head"><h2>Items sold</h2><div class="sub">Sorted by revenue</div></div>';
-    if (!itemsSold.length) {
-      html += '<div class="empty">No items sold ' + (view === "today" ? "today yet" : "this week") + '.</div>';
+    // Items sold
+    var sold = itemsSold(orders);
+    html += '<div class="section-head"><h2>Items sold</h2><div class="sub">' + scopeName + ' · sorted by revenue</div></div>';
+    if (!sold.length) {
+      html += '<div class="empty">No items sold ' + esc(scopeName) + '.</div>';
     } else {
-      html += '<div class="table-scroll"><div class="items-table"><table>' +
-        '<thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead><tbody>';
-      itemsSold.forEach(function(it) {
-        html += '<tr>' +
-          '<td>' + escapeHtml(it.name) + '</td>' +
-          '<td class="num qty">' + it.qty + '</td>' +
-          '<td class="num rev">' + fmt(it.revenue) + '</td>' +
-          '</tr>';
-      });
+      html += '<div class="table-scroll"><div class="items-table"><table><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead><tbody>';
+      sold.forEach(function (it) { html += '<tr><td>' + esc(it.name) + '</td><td class="num qty">' + it.qty + '</td><td class="num rev">' + fmt(it.revenue) + '</td></tr>'; });
       html += '</tbody></table></div></div>';
     }
 
-    // Today's bills list (today view only)
-    if (view === "today") {
-      var bills = d.bills || [];
-      html += '<div class="section-head"><h2>Today\'s bills</h2><div class="sub">' + bills.length + ' orders, newest first — tap a row to view / reprint</div></div>';
-      if (!bills.length) {
-        html += '<div class="empty">No bills today yet.</div>';
-      } else {
-        html += '<div class="table-scroll"><div class="items-table"><table><thead><tr>' +
-          '<th>Bill</th><th>Time</th><th>Table</th><th>Items</th><th class="num">Total</th><th>Status</th><th class="num">Fee</th>' +
-          '</tr></thead><tbody>';
-        bills.forEach(function(b) {
-          var itemsStr = (b.items || []).map(function(i){ return (i.qty || 1) + "x " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", ");
-          var paid = b.paymentStatus === "paid";
-          var url = "/bill/?order=" + encodeURIComponent(b.id) + (b.billToken ? "&t=" + encodeURIComponent(b.billToken) : "");
-          html += '<tr class="bill-row">' +
-            '<td><a class="bill-link" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(b.id) + '</a></td>' +
-            '<td>' + escapeHtml(timeOf(b.createdAt)) + '</td>' +
-            '<td>' + (b.orderType === 'pickup-drinks' || String(b.tableNumber).toUpperCase() === 'PICKUP'
-              ? escapeHtml(b.customerName ? 'Pickup · ' + b.customerName : 'Pickup')
-              : 'T' + escapeHtml(b.tableNumber)) + '</td>' +
-            '<td class="bill-items">' + escapeHtml(itemsStr) + '</td>' +
-            '<td class="num">' + fmt(b.total) + '</td>' +
-            '<td>' + (paid ? '<span class="pill paid">PAID</span>' : '<span class="pill unpaid">UNPAID</span>') + '</td>' +
-            '<td class="num rev">' + fmt(b.onlineSurcharge || 0) + '</td>' +
-            '</tr>';
+    // Day-by-day order browser
+    var days = groupByDay(orders);
+    html += '<div class="section-head"><h2>Orders by day</h2><div class="sub">' + days.length + ' day' + (days.length === 1 ? "" : "s") + ' · tap a day, then an order, for full detail + phone</div></div>';
+    if (!days.length) {
+      html += '<div class="empty">No orders ' + esc(scopeName) + '.</div>';
+    } else {
+      html += '<div class="browser">' + days.map(renderDay).join("") + '</div>';
+    }
+
+    el.innerHTML = html;
+  }
+
+  // ── Expand / collapse (targeted, no full re-render) ──
+  window.toggleDay = function (key) {
+    var box = document.getElementById("day-" + key);
+    var caret = document.getElementById("caret-" + key);
+    if (!box) return;
+    var willOpen = box.style.display === "none";
+    if (willOpen && !box.innerHTML) {
+      var day = groupByDay(scopeOrders()).filter(function (d) { return d.key === key; })[0];
+      if (day) box.innerHTML = day.orders.map(renderOrderRow).join("");
+    }
+    box.style.display = willOpen ? "block" : "none";
+    if (caret) caret.textContent = willOpen ? "▾" : "▸";
+    if (willOpen) expandedDays[key] = true; else delete expandedDays[key];
+  };
+
+  window.toggleOrder = function (id) {
+    var det = document.getElementById("det-" + safeId(id));
+    if (!det) return;
+    var willOpen = det.style.display === "none";
+    if (willOpen && !det.innerHTML) {
+      var o = ALL.filter(function (x) { return x.id === id; })[0];
+      if (o) det.innerHTML = renderOrderDetail(o);
+    }
+    det.style.display = willOpen ? "block" : "none";
+    if (willOpen) expandedOrders[id] = true; else delete expandedOrders[id];
+  };
+
+  window.delOrder = function (id) {
+    if (!confirm("Delete order " + id + "?\n\nThis permanently removes it from the dashboard and the reports. Use it to clear test or mistaken orders.")) return;
+    fetch(BACKEND + "/orders/" + encodeURIComponent(id), { method: "DELETE", headers: { Authorization: "Bearer " + token } })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { alert((res.d && res.d.error) || "Delete failed"); return; }
+        ALL = ALL.filter(function (o) { return o.id !== id; });
+        delete expandedOrders[id];
+        lastSig = sigOf(ALL);
+        render();
+      })
+      .catch(function () { alert("Network error — try again."); });
+  };
+
+  window.switchView = function (which) {
+    view = which;
+    ["today", "week", "all"].forEach(function (v) {
+      var t = document.getElementById("tab-" + v);
+      if (t) { t.classList.toggle("active", v === which); t.setAttribute("aria-selected", v === which); }
+    });
+    render();
+  };
+
+  window.reload = function () { fetchOrders(); };
+
+  function sigOf(arr) { return arr.length + ":" + (arr[0] ? arr[0].id : "") + ":" + (arr[0] ? (arr[0].paymentStatus || "") + arr[0].status : ""); }
+
+  function fetchOrders() {
+    return fetch(BACKEND + "/orders", { headers: { Authorization: "Bearer " + token } })
+      .then(function (r) {
+        if (!r.ok) {
+          loadError = r.status === 401 ? "Session expired — reopen from the dashboard ?token= link." : "Couldn't load orders.";
+          render(); return;
+        }
+        return r.json().then(function (json) {
+          loadError = null;
+          var orders = (json && json.orders) || [];
+          var sig = sigOf(orders);
+          ALL = orders;
+          // First load: auto-expand today's day so the owner sees today's orders immediately.
+          if (!bootstrapped) { expandedDays[dayKeyOf(new Date().toISOString())] = true; bootstrapped = true; }
+          if (sig !== lastSig) { lastSig = sig; render(); }
         });
-        html += '</tbody></table></div></div>';
-      }
-    }
-    document.getElementById("content").innerHTML = html;
-    } catch (e) {
-      // A malformed report shouldn't blank the page.
-      document.getElementById("content").innerHTML =
-        '<div class="empty">Couldn\'t display this report.' +
-        '<div style="margin-top:14px;"><button class="tab" onclick="fetchReports()">Retry</button></div></div>';
-    }
+      })
+      .catch(function () { loadError = "Couldn't reach the server."; render(); });
   }
 
-  function statCard(label, value, sub) {
-    return '<div class="stat">' +
-      '<div class="label">' + label + '</div>' +
-      '<div class="value">' + value + '</div>' +
-      (sub ? '<div class="sub">' + escapeHtml(sub) + '</div>' : '') +
-      '</div>';
-  }
-  function escapeHtml(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-
-  fetchReports();
-  // Auto-refresh every 60s while the tab is visible
-  setInterval(function() { if (document.visibilityState === "visible") fetchReports(); }, 60000);
+  fetchOrders();
+  setInterval(function () { if (document.visibilityState === "visible") fetchOrders(); }, 60000);
 })();
 </script>
 
