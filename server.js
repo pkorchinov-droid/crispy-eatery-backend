@@ -3545,6 +3545,29 @@ app.delete("/orders", requireStaff, (req, res) => {
   });
 });
 
+// ── DELETE /orders/:id — staff: remove ONE order ───────────
+// A routine correction (test order, mistaken/duplicate ticket), so unlike the
+// bulk wipe above it isn't behind ALLOW_DESTRUCTIVE — it's staff-only and
+// targets a single explicit id. Removing it also drops it from the sales
+// reports (which read the same store), so a test order stops inflating totals.
+app.delete("/orders/:id", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders } = req.store;
+  withWriteLock(() => {
+    try {
+      const orders = loadOrders();
+      const idx = orders.findIndex((o) => o.id === req.params.id);
+      if (idx === -1) { res.status(404).json({ error: "Order not found" }); return; }
+      const removed = orders.splice(idx, 1)[0];
+      persistOrders(orders);
+      console.log(`[orders] deleted ${removed.id} (table ${removed.tableNumber}) for ${req.store.slug}`);
+      res.json({ success: true, id: removed.id });
+    } catch (err) {
+      console.error("[orders] delete error:", err.message);
+      res.status(500).json({ error: "Failed to delete order" });
+    }
+  });
+});
+
 // ── Terminal error handler ─────────────────────────────────
 // Maps middleware-layer errors (multer uploads, body-parser size/parse) to
 // clean JSON instead of Express's default HTML 500. Must be registered after
