@@ -1696,11 +1696,13 @@ app.post("/order", resolveTenant, (req, res) => {
         res.status(400).json({ error: "Please tell us your name for the pickup" });
         return;
       }
-      // "ASAP" or "h:mm am/pm" only — anything else is free text headed for a
-      // staff ticket, so fall back to ASAP.
+      // "ASAP", a clock time ("8:30 am"), or a next-day pickup ("Tomorrow 8:30 am")
+      // for 1-day-advance orders. Anything else is free text headed for a staff
+      // ticket, so fall back to ASAP. (Within-hours is enforced client-side by the
+      // slot list; this just whitelists the shape.)
       const pickupWhen = isPickup ? (() => {
-        const v = sanitizeString(pickupTime, 20).trim();
-        return /^(asap|\d{1,2}:\d{2}\s?(am|pm))$/i.test(v) ? v : "ASAP";
+        const v = sanitizeString(pickupTime, 24).trim();
+        return /^(asap|(tomorrow\s+)?\d{1,2}:\d{2}\s?(am|pm))$/i.test(v) ? v : "ASAP";
       })() : undefined;
 
       // Reject forged/underpriced items against the authoritative menu.
