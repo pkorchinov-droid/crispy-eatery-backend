@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Crispy Eatery — Menu Admin</title>
+<title>Menu Editor</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -290,7 +290,7 @@
 <body>
 
 <header>
-  <div class="logo">Crispy Eatery <span>Menu Admin</span></div>
+  <div class="logo">Menu Editor <span>Menu Admin</span></div>
   <div class="header-actions">
     <a href="reports.html" id="reportsLink">Reports ↗</a>
     <a href="https://sparkling-lokum-4e28b8.netlify.app/" id="liveMenuLink" target="_blank" rel="noopener">Live menu ↗</a>
@@ -304,8 +304,8 @@
 <div class="tabs" id="tabs"></div>
 
 <div class="notice">
-  ⚠️ Heads-up: menu edits live on the backend's runtime disk. They survive day-to-day,
-  but a backend redeploy resets the menu to its seed file. Tell Pavel before redeploying.
+  ⚠️ Heads-up: menu edits save to the live backend and take effect immediately on your
+  customer menu. Changes here update what guests see — there's no separate "publish" step.
 </div>
 
 <div class="specials" id="specialsCard">
@@ -314,7 +314,7 @@
     <div class="specials-meta" id="specialsMeta"></div>
   </div>
   <textarea id="specialsText"
-    placeholder="Leave blank to hide the banner. E.g. 'Today: Iced Auckland Green Matcha — limited batch.'"
+    placeholder="Leave blank to hide the banner. E.g. 'Today's special — limited batch, while it lasts.'"
     maxlength="240"></textarea>
   <div class="specials-actions">
     <button class="btn-clear" id="specialsClear">Clear</button>
@@ -385,8 +385,9 @@
         if (!activeSlug || !menu.categories[activeSlug]) activeSlug = menu.categoryOrder[0];
         renderSpecials(); renderTabs(); renderCategory();
         setStatus("saved", "Loaded · v" + (menu.version || "?"));
-        // Tenant-aware branding (original Crispy single-tenant page).
-        var name = m.restaurantName || 'Crispy Eatery';
+        // Tenant-aware branding: the venue name comes from the API; a brand-new tenant
+        // without a name falls back to the neutral "Menu Editor" (never a specific venue).
+        var name = m.restaurantName || 'Menu Editor';
         var logo = document.querySelector('.logo');
         if (logo && logo.firstChild && logo.firstChild.nodeType === 3) logo.firstChild.nodeValue = name + ' ';
         document.title = name + ' — Menu Admin';
@@ -463,7 +464,7 @@
       btn.onclick = function() { activeSlug = slug; renderTabs(); renderCategory(); };
       tabs.appendChild(btn);
     });
-    // Always-available "add a section" control — so a brand-new café with no
+    // Always-available "add a section" control — so a brand-new venue with no
     // sections can build its menu from scratch (the editor used to assume sections
     // already existed and showed nothing actionable when empty).
     var addCat = document.createElement("button");

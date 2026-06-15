@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Get your café online · IT Logistics</title>
+<title>Get your venue online · IT Logistics</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
@@ -123,7 +123,7 @@
 <body>
 <header>
   <h1><a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">IT Logistics</a></h1>
-  <span class="sub">Your café, online — QR menu, kitchen dashboard, pay at the counter</span>
+  <span class="sub">Your venue, online — QR menu, kitchen dashboard, pay at the counter</span>
 </header>
 <div class="wrap">
 
@@ -131,7 +131,7 @@
   <div id="view-out" style="display:none">
     <div class="hero">
       <div class="eyebrow">No apps · No commissions</div>
-      <h1 class="big">Get your café <em>online</em> in minutes</h1>
+      <h1 class="big">Get your venue <em>online</em> in minutes</h1>
       <p class="lede">QR menu, kitchen dashboard, pay at the counter. Customers scan, order, and pay — you keep every cent.</p>
       <div class="cta">
         <button id="getStarted">Get started — it's free to set up</button>
@@ -151,7 +151,7 @@
         <div class="row">
           <div class="field">
             <label>Email</label>
-            <input type="email" id="si_email" placeholder="you@yourcafe.com" autocomplete="email" />
+            <input type="email" id="si_email" placeholder="you@yourvenue.com" autocomplete="email" />
           </div>
           <button id="si_send">Send link</button>
         </div>
@@ -165,7 +165,7 @@
   <!-- ════════════ B) WIZARD ════════════ -->
   <div id="view-wiz" style="display:none">
     <div class="panel">
-      <h2>Set up your café</h2>
+      <h2>Set up your venue</h2>
       <div class="wizard-grid">
         <div>
           <div class="stepper" id="stepper">
@@ -177,16 +177,17 @@
           </div>
 
           <div id="step-1">
-            <h3>Let's set up your café</h3>
+            <h3>Let's set up your venue</h3>
             <p class="muted-sub">Takes about 2 minutes — you can change anything later.</p>
             <div class="field">
               <label>What's it called?</label>
-              <input id="w_name" placeholder="e.g. The Corner Café" autocomplete="off" />
+              <input id="w_name" placeholder="e.g. The Corner Bistro" autocomplete="off" />
               <div class="hint" id="slugHint">Its web address will be <code>…/?r=</code></div>
+              <div class="hint">We'll confirm the exact web address after you sign up — if it's taken, we'll add a number.</div>
             </div>
             <div class="field">
               <label>Your email</label>
-              <input type="email" id="w_email" placeholder="you@yourcafe.com" autocomplete="email" />
+              <input type="email" id="w_email" placeholder="you@yourvenue.com" autocomplete="email" />
               <div class="hint">We'll email your sign-in link here so you can log back in.</div>
             </div>
           </div>
@@ -197,7 +198,7 @@
             <div class="field">
               <label>Brand colour</label>
               <div class="swatches" id="swatches"></div>
-              <input type="color" id="w_color_custom" value="#c25a3a" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
+              <input type="color" id="w_color_custom" value="#475569" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
             </div>
             <div class="grid3">
               <div class="field"><label>Currency symbol</label><input id="w_currency" value="$" /></div>
@@ -210,7 +211,7 @@
             </div>
             <div class="field">
               <label>Established tagline (optional)</label>
-              <input id="w_established" placeholder="Est. 2014" />
+              <input id="w_established" placeholder="Est. 2020" />
               <div class="hint">Add your logo later in the menu editor.</div>
             </div>
           </div>
@@ -258,7 +259,7 @@
   <!-- ════════════ C) SIGNED-IN CONSOLE ════════════ -->
   <div id="view-in" style="display:none">
     <div class="panel" id="mePanel">
-      <div style="color:var(--muted); font-size:14px;">Loading your café…</div>
+      <div style="color:var(--muted); font-size:14px;">Loading your venue…</div>
     </div>
     <div class="footer">Powered by <a href="https://itlogisticsnz.com" target="_blank" rel="noopener" style="color:inherit;">IT Logistics</a></div>
   </div>
@@ -322,7 +323,8 @@
 
   // ════════════ B) WIZARD ════════════
   var STEP = 1;
-  var PRESETS = ["#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c","#854f0b"];
+  // Neutral platform default (#475569) leads the palette; terracotta stays available as an option, not a default.
+  var PRESETS = ["#475569","#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c"];
   var TEMPLATES = {
     cafe:       ["Coffee", "Breakfast", "Brunch", "Sweets"],
     restaurant: ["Starters", "Mains", "Sides", "Desserts"],
@@ -330,7 +332,7 @@
   };
   var state = {};
   function freshState(){
-    return { name:"", slug:"", email:"", themeColor:"#c25a3a", established:"",
+    return { name:"", slug:"", email:"", themeColor:"#475569", established:"",
              currency:"$", currencyCode:"NZD", gstRate:"0.15",
              timezone:"Pacific/Auckland", locale:"en-NZ",
              sections:[{ title:"", items:[{ name:"", price:"", desc:"" }] }] };
@@ -464,9 +466,9 @@
   // ── Live preview — faithful mini of the real customer menu ──
   var PLATE_SVG = '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#c4b399" stroke-width="1.1"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/></svg>';
   function renderPreview(){
-    var color = state.themeColor || "#c25a3a";
+    var color = state.themeColor || "#475569";
     var cur = state.currency || "$";
-    var name = ((state.name||"").trim() || "Your café");
+    var name = ((state.name||"").trim() || "Your venue");
     var secs = state.sections.filter(function(s){ return (s.title||"").trim() || s.items.some(function(i){ return (i.name||"").trim(); }); });
     var pills = (secs.length ? secs : [{title:"Menu"}]).map(function(s, i){
       var t = (s.title||"").trim() || "Section";
@@ -486,12 +488,12 @@
         + '<div class="pv-rimg">'+PLATE_SVG+'</div>'
       + '</div>';
     }).join("");
-    var estLine = (state.established||"").trim() ? '<div class="pv-table">'+esc(state.established.trim())+'</div>' : '<div class="pv-table">Table 10 · ordering</div>';
+    var estLine = (state.established||"").trim() ? '<div class="pv-table">'+esc(state.established.trim())+'</div>' : '<div class="pv-table">Table 1 · ordering</div>';
     $("preview").innerHTML =
       '<div style="padding:15px 15px 0;"><div class="pv-eyebrow" style="color:'+color+';">'+esc(name)+'</div>'+estLine+'</div>'
       + '<div class="pv-pills">'+pills+'</div>'
       + '<div class="pv-title">'+esc(title)+'</div>'
-      + '<div class="pv-sub">Served from open till close</div>'
+      + '<div class="pv-sub">Your menu, your hours</div>'
       + (rows || '<div class="pv-empty">Your dishes appear here as you add them — each with its own photo.</div>')
       + '<div class="pv-bar" style="background:'+color+';"><span style="opacity:.9;">Your table</span><span style="font-family:\'Fraunces\',Georgia,serif;font-size:14px;">View order</span></div>';
   }
@@ -517,7 +519,7 @@
   }
   $("nextBtn").onclick = function(){
     if(STEP===1){
-      if(!(state.name||"").trim()){ showText($("wizMsg"),"Give your café a name to continue.","err"); return; }
+      if(!(state.name||"").trim()){ showText($("wizMsg"),"Give your venue a name to continue.","err"); return; }
       if(!validEmail(state.email)){ showText($("wizMsg"),"Enter a valid email so we can send your sign-in link.","err"); return; }
       goStep(2);
     } else if(STEP===2){ goStep(3); }
@@ -565,10 +567,10 @@
       : '<div class="muted-sub">No menu items yet — you can add them later in the menu editor.</div>';
     $("reviewBox").innerHTML =
       '<h3>Ready to go live?</h3>'
-      + '<p class="muted-sub">Quick check, then we\'ll create your café.</p>'
+      + '<p class="muted-sub">Quick check, then we\'ll create your venue.</p>'
       + '<div class="review">'
-      +   '<div><span class="rk">Café name</span><strong>'+esc(state.name.trim())+'</strong></div>'
-      +   '<div><span class="rk">Web address</span><code>…/?r='+esc(state.slug||slugify(state.name))+'</code></div>'
+      +   '<div><span class="rk">Name</span><strong>'+esc(state.name.trim())+'</strong></div>'
+      +   '<div><span class="rk">Web address</span><code>…/?r='+esc(state.slug||slugify(state.name))+'</code> <span class="hint" style="margin:0;">(confirmed after signup)</span></div>'
       +   '<div><span class="rk">Email</span>'+esc(state.email.trim())+'</div>'
       +   '<div><span class="rk">Brand colour</span><span class="swatch" style="background:'+esc(state.themeColor)+';"></span> '+esc(state.themeColor)+'</div>'
       +   '<div><span class="rk">Currency</span>'+esc(state.currency)+' '+esc(state.currencyCode)+'</div>'
@@ -578,7 +580,7 @@
       + '</div>'
       + '<div class="actions">'
       +   '<button class="ghost" id="reviewBack">Back to menu</button>'
-      +   '<button id="goLiveBtn">Create my café &amp; go live</button>'
+      +   '<button id="goLiveBtn">Create my venue &amp; go live</button>'
       + '</div>';
     $("reviewBack").onclick = function(){ goStep(3); };
     $("goLiveBtn").onclick = createCafe;
@@ -604,7 +606,7 @@
     fetch("/signup", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(payload) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, status:r.status, j:j }; }); })
       .then(function(res){
-        if(btn){ btn.disabled = false; btn.innerHTML = "Create my café &amp; go live"; }
+        if(btn){ btn.disabled = false; btn.innerHTML = "Create my venue &amp; go live"; }
         if(res.ok && res.j && res.j.success){
           SESSION = res.j.session;
           try { localStorage.setItem("ownerSession", SESSION); } catch(e){}
@@ -612,15 +614,15 @@
           return;
         }
         if(res.status === 409 || (res.j && res.j.code === "exists")){
-          showText($("wizMsg"), "This email already has a café — sign in instead.", "err");
+          showText($("wizMsg"), "This email already has a venue — sign in instead.", "err");
           renderSignedOut(false);
           var em = $("si_email"); if(em){ em.value = state.email.trim(); em.focus(); }
           return;
         }
-        showText($("wizMsg"), (res.j && res.j.error) || "Couldn't create your café — please try again.", "err");
+        showText($("wizMsg"), (res.j && res.j.error) || "Couldn't create your venue — please try again.", "err");
       })
       .catch(function(){
-        if(btn){ btn.disabled = false; btn.innerHTML = "Create my café &amp; go live"; }
+        if(btn){ btn.disabled = false; btn.innerHTML = "Create my venue &amp; go live"; }
         showText($("wizMsg"), "Couldn't reach the server — please try again.", "err");
       });
   }
@@ -645,7 +647,7 @@
       + '</div>'
       + (email ? '<p class="muted-sub" style="margin-top:16px;">We emailed your sign-in link to <strong>'+esc(email)+'</strong> — save it to log back in.</p>' : '')
       + '<div class="actions">'
-      +   '<button id="goConsole">Go to my café console</button>'
+      +   '<button id="goConsole">Go to my venue console</button>'
       + '</div>';
     $("goConsole").onclick = function(){ renderSignedIn(); };
     goStep(4);
@@ -657,7 +659,7 @@
   // ════════════ C) SIGNED-IN CONSOLE ════════════
   function renderSignedIn(){
     showView("in");
-    $("mePanel").innerHTML = '<div style="color:var(--muted); font-size:14px;"><span class="spinner gold"></span> Loading your café…</div>';
+    $("mePanel").innerHTML = '<div style="color:var(--muted); font-size:14px;"><span class="spinner gold"></span> Loading your venue…</div>';
     fetch("/me", { headers: authHeaders() })
       .then(function(r){
         if(r.status === 401){ throw { code:401 }; }
@@ -674,8 +676,8 @@
           return;
         }
         $("mePanel").innerHTML =
-          '<h2>My café</h2>'
-          + '<div class="msg err" style="display:block;">Couldn\'t load your café — check your connection and try again.</div>'
+          '<h2>My venue</h2>'
+          + '<div class="msg err" style="display:block;">Couldn\'t load your venue — check your connection and try again.</div>'
           + '<div class="actions"><button id="retryMe">Retry</button><button class="ghost" id="signOut2">Sign out</button></div>';
         $("retryMe").onclick = renderSignedIn;
         $("signOut2").onclick = signOut;
@@ -690,7 +692,7 @@
     var cust = cafe.customerUrl || "";
     var swatch = cfg.themeColor ? '<span class="swatch" style="background:'+esc(cfg.themeColor)+';margin-right:8px;"></span>' : '';
     $("mePanel").innerHTML =
-      '<h2>My café — '+swatch+esc(cfg.name || cafe.name || "Untitled")+'</h2>'
+      '<h2>My venue — '+swatch+esc(cfg.name || cafe.name || "Untitled")+'</h2>'
       + '<p class="muted-sub" style="margin-top:-6px;">Signed in as '+esc(me.email||"")+''
       +   (cafe.slug ? ' · <code>'+esc(cafe.slug)+'</code>' : '')
       +   (cfg.established ? ' · '+esc(cfg.established) : '')

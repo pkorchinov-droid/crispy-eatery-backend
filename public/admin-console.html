@@ -141,7 +141,7 @@
             <div class="field">
               <label>Brand colour</label>
               <div class="swatches" id="swatches"></div>
-              <input type="color" id="w_color_custom" value="#c25a3a" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
+              <input type="color" id="w_color_custom" value="#475569" style="width:48px; height:34px; padding:2px; margin-top:12px;" title="Custom colour" />
             </div>
             <div class="field">
               <label>Logo (optional)</label>
@@ -248,10 +248,11 @@
 
   // ── Wizard state ──
   var STEP = 1;
-  var PRESETS = ["#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c","#854f0b"];
+  // Neutral platform default (#475569) leads the palette; terracotta stays available as an option, not a default.
+  var PRESETS = ["#475569","#c25a3a","#1f8a70","#1d4ed8","#7c3aed","#d4537e","#0f766e","#b91c1c"];
   var state = {};
   function freshState(){
-    return { name:"", slug:"", themeColor:"#c25a3a", currency:"$", currencyCode:"NZD", gstRate:"0.15",
+    return { name:"", slug:"", themeColor:"#475569", currency:"$", currencyCode:"NZD", gstRate:"0.15",
              timezone:"Pacific/Auckland", locale:"en-NZ", logoFile:null, logoPreviewUrl:null,
              sections:[{ title:"", items:[{ name:"", price:"" }] }] };
   }
@@ -331,7 +332,7 @@
   // A muted plate ring stands in for each dish photo (uploaded later in the editor).
   var PLATE_SVG = '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#c4b399" stroke-width="1.1"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/></svg>';
   function renderPreview(){
-    var color = state.themeColor || "#c25a3a";
+    var color = state.themeColor || "#475569";
     var cur = state.currency || "$";
     var name = ((state.name||"").trim() || "Your restaurant");
     // sections that have any content
@@ -357,10 +358,10 @@
     }).join("");
     var logo = state.logoPreviewUrl ? '<img src="'+state.logoPreviewUrl+'" style="height:26px;width:auto;object-fit:contain;display:block;margin-bottom:7px;" alt="logo" />' : '';
     $("preview").innerHTML =
-      '<div style="padding:15px 15px 0;">'+logo+'<div class="pv-eyebrow" style="color:'+color+';">'+esc(name)+'</div><div class="pv-table">Table 10 · ordering</div></div>'
+      '<div style="padding:15px 15px 0;">'+logo+'<div class="pv-eyebrow" style="color:'+color+';">'+esc(name)+'</div><div class="pv-table">Table 1 · ordering</div></div>'
       + '<div class="pv-pills">'+pills+'</div>'
       + '<div class="pv-title">'+esc(title)+'</div>'
-      + '<div class="pv-sub">Served from open till close</div>'
+      + '<div class="pv-sub">Your menu, your hours</div>'
       + (rows || '<div class="pv-empty">Your dishes appear here as you add them — each with its own photo.</div>')
       + '<div class="pv-bar" style="background:'+color+';"><span style="opacity:.9;">Your table</span><span style="font-family:\'Fraunces\',Georgia,serif;font-size:14px;">View order</span></div>';
   }

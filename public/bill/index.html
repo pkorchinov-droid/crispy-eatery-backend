@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Crispy Eatery — Your Bill</title>
+  <title>Your Bill</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -365,6 +365,24 @@
     var params = new URLSearchParams(window.location.search);
     orderId = params.get('order');
     billToken = params.get('t');
+    // Multi-tenant: the QR/bill link carries ?r=<slug>. Without it the backend's
+    // resolveTenant falls back to DEFAULT_TENANT ("crispy"), which 404s/mis-resolves
+    // for every non-Crispy tenant. When absent we behave as before (defaults to crispy).
+    var tenantSlug = params.get('r');
+
+    // Brand name shown in the header/footer. Resolved from the order/tenant once loaded;
+    // until then (and when unavailable) we use a neutral generic — NOT "Crispy Eatery".
+    var tenantName = '';
+    function brandName() {
+      return tenantName || 'Your Order';
+    }
+
+    // Append r=<slug> (and an existing query separator) to a backend URL when a slug
+    // is present; otherwise leave the URL untouched so Crispy's existing links work.
+    function withTenant(url) {
+      if (!tenantSlug) return url;
+      return url + (url.indexOf('?') === -1 ? '?' : '&') + 'r=' + encodeURIComponent(tenantSlug);
+    }
 
     function fmt(n) {
       return '$' + Number(n).toFixed(2);
@@ -438,9 +456,27 @@
         }
       }
 
+      // Footer: prefer the tenant's own address/hours (carried on the order); fall back
+      // to Crispy's literals ONLY for Crispy's own no-?r links so its bill renders
+      // identically. Other tenants without address/hours just show their name.
+      var footerName = escHtml(brandName());
+      var addr = order.address;
+      var hoursDisplay = (order.hours && order.hours.display) ? order.hours.display : null;
+      if (!addr && !hoursDisplay && !tenantSlug) {
+        // Crispy default link (no slug): keep its original footer verbatim.
+        addr = '341 Remuera Road';
+        hoursDisplay = '7 am — 3:30 pm · daily';
+      }
+      var footerHtml =
+        '<div class="footer">' +
+          '<p>' + footerName + '</p>' +
+          (addr ? '<p style="color:#b6a988">' + escHtml(String(addr)) + '</p>' : '') +
+          (hoursDisplay ? '<p style="color:#b6a988">' + escHtml(String(hoursDisplay)) + '</p>' : '') +
+        '</div>';
+
       app.innerHTML =
         '<div class="header">' +
-          '<div class="brand">Crispy Eatery</div>' +
+          '<div class="brand">' + escHtml(brandName()) + '</div>' +
           '<h1>Your Bill</h1>' +
         '</div>' +
 
@@ -476,11 +512,7 @@
           '<div id="statusMsg" aria-live="polite"></div>' +
         '</div>' +
 
-        '<div class="footer">' +
-          '<p>Crispy Eatery</p>' +
-          '<p style="color:#b6a988">341 Remuera Road</p>' +
-          '<p style="color:#b6a988">7 am — 3:30 pm · daily</p>' +
-        '</div>';
+        footerHtml;
 
       // Wire up Pay-now redirect (avoids inline-quoting the URL)
       var payBtn = document.getElementById('payBtn');
@@ -504,7 +536,7 @@
       var app = document.getElementById('app');
       app.innerHTML =
         '<div class="header">' +
-          '<div class="brand">Crispy Eatery</div>' +
+          '<div class="brand">' + escHtml(brandName()) + '</div>' +
           '<h1>Your Bill</h1>' +
         '</div>' +
         '<div class="not-found">' +
@@ -531,7 +563,7 @@
       var app = document.getElementById('app');
       app.innerHTML =
         '<div class="header">' +
-          '<div class="brand">Crispy Eatery</div>' +
+          '<div class="brand">' + escHtml(brandName()) + '</div>' +
           '<h1>Your Bill</h1>' +
         '</div>' +
         '<div class="not-found">' +
@@ -568,7 +600,10 @@
       }
       input.classList.remove('invalid');
       if (errEl) errEl.hidden = true;
-      window.location.search = '?order=' + encodeURIComponent('#' + m[1]);
+      // Preserve the tenant slug across the reload so the lookup hits the right tenant.
+      var qs = '?order=' + encodeURIComponent('#' + m[1]);
+      if (tenantSlug) qs += '&r=' + encodeURIComponent(tenantSlug);
+      window.location.search = qs;
     }
 
     async function loadOrder() {
@@ -579,12 +614,16 @@
       try {
         var url = BACKEND + '/orders/' + encodeURIComponent(orderId);
         if (billToken) url += '?t=' + encodeURIComponent(billToken);
+        url = withTenant(url); // pass ?r=<slug> so the backend resolves the right tenant
         var res = await fetch(url);
         if (!res.ok) {
           renderNotFound();
           return;
         }
         var order = await res.json();
+        // Prefer the tenant/restaurant name carried by the order for the brand header.
+        tenantName = order.restaurantName || order.tenantName || order.name || tenantName;
+        if (tenantName) document.title = tenantName + ' — Your Bill';
         renderBill(order);
       } catch (err) {
         renderError('Could not load the order. Please try again.');
@@ -622,7 +661,7 @@
       try {
         var body = { email: email };
         if (billToken) body.token = billToken;
-        var res = await fetch(BACKEND + '/orders/' + encodeURIComponent(orderId) + '/email-bill', {
+        var res = await fetch(withTenant(BACKEND + '/orders/' + encodeURIComponent(orderId) + '/email-bill'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)

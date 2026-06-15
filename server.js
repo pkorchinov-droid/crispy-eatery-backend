@@ -44,6 +44,9 @@ const resend = process.env.RESEND_API_KEY
 // build the public ?r=<slug> menu URL). MENU_IMPORT_MODEL picks the model used
 // to read a menu photo/PDF.
 const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "IT Logistics <login@eatery.crispycatering.com>";
+// Neutral platform sender for bill emails when a tenant hasn't set its own
+// config.emailFrom — uses the platform's verified domain, never Crispy's brand.
+const BILL_EMAIL_FROM = process.env.BILL_EMAIL_FROM || "IT Logistics <bills@eatery.crispycatering.com>";
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://crispy-eatery-backend-1.onrender.com";
 const OWNER_CUSTOMER_ORIGIN = process.env.OWNER_CUSTOMER_ORIGIN || "https://sparkling-lokum-4e28b8.netlify.app";
 const MENU_IMPORT_MODEL = process.env.MENU_IMPORT_MODEL || "claude-sonnet-4-6";
@@ -420,34 +423,55 @@ function tenantStore(slug) {
 // Stored as data/tenants.json + mirrored to Supabase under the key "tenants".
 // config carries everything that used to be hardcoded for Crispy (branding,
 // surcharge, GST rate, currency, timezone, email sender, feature flags).
+// The neutral platform-default accent for a brand-new tenant that hasn't chosen
+// a colour. NOT Crispy's terracotta — a tenant must never inherit Crispy's
+// identity by default. Crispy sets its own #c25a3a in ensureDefaultTenant().
+const PLATFORM_DEFAULT_THEME = "#475569"; // slate
+
 function baseConfig() {
   return {
     name: "Restaurant",
     established: "",       // masthead tagline e.g. "Est. 2014" ("" hides it)
-    themeColor: "#c25a3a",
+    themeColor: PLATFORM_DEFAULT_THEME,
+    palette: {},          // optional deep theming: { ink, surface, card, line, muted, brand2, success }; empty → SPA neutral defaults
     logoUrl: null,
+    heroUrl: "",          // welcome-screen cover image ("" → themed gradient)
+    address: "",          // welcome screen + tax receipt ("" hides it)
+    phone: "",
+    hours: {},            // { display, open, close, pickupOpen, pickupClose } — all optional strings
     currency: "$",        // display symbol
     currencyCode: "NZD",  // ISO code for payment intents
     gstRate: 0.15,        // tax-inclusive rate; receipt GST = total * rate/(1+rate)
+    gstNumber: "",        // tax id printed on the receipt ("" → hide the GST block)
+    legalName: "",        // legal entity on the receipt (falls back to name)
     locale: "en-NZ",
     timezone: "Pacific/Auckland",
-    emailFrom: "",        // "Name <addr@domain>"; empty → generic sender
+    emailFrom: "",        // "Name <addr@domain>"; empty → generic platform sender
     surcharge: {},        // category slug → dollars added on the online menu
     surchargeDefault: 0,  // applied to categories not in the map
-    features: { groups: true, preorder: true, printing: true },
+    drinkCategories: [],  // category slugs routed to the barista + eligible for drink pickup
+    dessertCategory: "",  // category slug for the dessert-upsell nudge ("" → no nudge)
+    i18n: {},             // { enabled, languages:[{code,label}], dictionary:{code:{key:val}} }
+    receipt: {},          // { collectible, fortunes:[], wifi, footerNote }
+    printerStations: {},  // station → LAN IP (food/drinks/expo/receipt); empty → no station printing
+    features: { groups: true, preorder: true, printing: true, dessertNudge: false, drinksPreorder: false, i18n: false, collectibleReceipt: false, stationPrinting: false, poweredBy: true },
   };
 }
+// Object-valued config keys that DEEP-merge a stored partial onto the defaults
+// (so e.g. an uploaded { hours:{display} } keeps the other default hours keys).
+const CONFIG_DEEP_KEYS = ["surcharge", "features", "hours", "palette", "i18n", "receipt", "printerStations"];
 function mergeConfig(stored) {
   stored = stored || {};
   const b = baseConfig();
-  // Copy only DEFINED scalar overrides so a partial config (or an explicit
-  // `undefined`) never wipes a default. surcharge/features merge specially.
+  // Copy only DEFINED scalar/array overrides so a partial config (or an explicit
+  // `undefined`) never wipes a default. Known object keys deep-merge below.
   for (const k of Object.keys(stored)) {
-    if (k === "surcharge" || k === "features") continue;
+    if (CONFIG_DEEP_KEYS.includes(k)) continue;
     if (stored[k] !== undefined) b[k] = stored[k];
   }
-  b.surcharge = Object.assign({}, stored.surcharge || {});
-  b.features = Object.assign(b.features, stored.features || {});
+  for (const k of CONFIG_DEEP_KEYS) {
+    if (stored[k] && typeof stored[k] === "object") b[k] = Object.assign({}, b[k], stored[k]);
+  }
   return b;
 }
 const TENANTS = new Map(); // slug → { slug, name, config, staffTokenHash, createdAt }
@@ -512,15 +536,31 @@ function findTenantByToken(token) {
 // materialize the default café from the legacy STAFF_TOKEN + menu-seed so the
 // app works out of the box. The migration script is only needed to carry over
 // existing production data.
+// Crispy's full identity — the values that USED to be hardcoded across the
+// shared SPA / dashboard / receipt code. Living here (config) is what lets the
+// shared files be neutral while Crispy stays byte-identical. Used by both the
+// fresh-install creator AND the production backfill below.
+const CRISPY_DEFAULTS = {
+  name: "Crispy Eatery",
+  established: "Est. 2014",
+  themeColor: "#c25a3a",                 // Crispy keeps its terracotta (platform default is now neutral slate)
+  palette: { ink: "#2b1f17", brand2: "#7a8362", success: "#7a8362" }, // warm-black chrome + sage accents
+  address: "341 Remuera Road",
+  hours: { display: "7 am — 3:30 pm · daily", open: "7:00", close: "15:30", pickupOpen: "7:00", pickupClose: "15:30" },
+  gstNumber: "136-528-536",
+  legalName: "Twopeople Ltd",
+  drinkCategories: ["coffee", "tea", "signature"],
+  dessertCategory: "desserts",
+  printerStations: { food: "192.168.1.160", drinks: "192.168.1.76", expo: "192.168.1.210", receipt: "192.168.1.66" },
+  surcharge: { coffee: 0.20, tea: 0.20, signature: 0.20, "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60, sides: 0.20 },
+  surchargeDefault: 0.60,
+  emailFrom: "Crispy Eatery <bills@eatery.crispycatering.com>",
+  // Crispy keeps every bespoke flow it ships today; new tenants start with the clean core.
+  features: { groups: true, preorder: true, printing: true, dessertNudge: true, drinksPreorder: true, i18n: true, collectibleReceipt: true, stationPrinting: true, poweredBy: true },
+};
 function ensureDefaultTenant() {
   if (TENANTS.size > 0) return;
-  const cfg = mergeConfig({
-    name: "Crispy Eatery",
-    established: "Est. 2014",
-    surcharge: { coffee: 0.20, tea: 0.20, signature: 0.20, "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60, sides: 0.20 },
-    surchargeDefault: 0.60,
-    emailFrom: "Crispy Eatery <bills@eatery.crispycatering.com>",
-  });
+  const cfg = mergeConfig(CRISPY_DEFAULTS);
   saveTenant({
     slug: DEFAULT_TENANT,
     name: "Crispy Eatery",
@@ -529,6 +569,36 @@ function ensureDefaultTenant() {
     createdAt: new Date().toISOString(),
   });
   console.log("[tenant] auto-created default tenant '" + DEFAULT_TENANT + "'" + (STAFF_TOKEN ? "" : " (no STAFF_TOKEN → its dashboard is locked until a token is set)"));
+}
+
+// Production migration: the LIVE Crispy tenant predates the config keys that used
+// to be hardcoded (palette, address, hours, GST id, drink/dessert categories,
+// printer IPs, bespoke feature flags). ensureDefaultTenant() never runs for it
+// (it already exists), so backfill any of those keys that are still empty —
+// without ever overwriting a value the owner has actually set. Idempotent.
+function backfillDefaultTenantConfig() {
+  const t = getTenant(DEFAULT_TENANT);
+  if (!t) return;
+  const c = t.config;
+  const isEmpty = (v) =>
+    v == null || v === "" ||
+    (Array.isArray(v) && v.length === 0) ||
+    (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0);
+  let changed = false;
+  for (const k of ["palette", "address", "hours", "gstNumber", "legalName", "drinkCategories", "dessertCategory", "printerStations"]) {
+    if (isEmpty(c[k]) && !isEmpty(CRISPY_DEFAULTS[k])) { c[k] = CRISPY_DEFAULTS[k]; changed = true; }
+  }
+  // themeColor: only restore if it's still the neutral platform default (an owner
+  // would never deliberately pick the exact platform slate).
+  if (c.themeColor === PLATFORM_DEFAULT_THEME) { c.themeColor = CRISPY_DEFAULTS.themeColor; changed = true; }
+  // Bespoke flows Crispy already runs: enable unless explicitly turned off.
+  for (const f of ["dessertNudge", "drinksPreorder", "i18n", "collectibleReceipt", "stationPrinting"]) {
+    if (c.features[f] !== true) { c.features[f] = true; changed = true; }
+  }
+  if (changed) {
+    saveTenant(t);
+    console.log("[tenant] backfilled '" + DEFAULT_TENANT + "' config with bespoke defaults (production migration)");
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -972,18 +1042,24 @@ function priceViolation(items, menu) {
   return null;
 }
 
-// Drink category slugs eligible for pickup pre-orders (counter collection).
-const PICKUP_DRINK_CATEGORIES = new Set(["coffee", "tea", "signature"]);
+// The category slugs that count as "drinks" for THIS tenant — barista routing
+// and pickup-pre-order eligibility both read it from config.drinkCategories.
+function drinkCategorySet(cfg) {
+  const list = cfg && Array.isArray(cfg.drinkCategories) ? cfg.drinkCategories : [];
+  return new Set(list);
+}
 
 // Pickup pre-orders are drinks only — every line must resolve (same id-then-name
-// matching as findMenuItem, via findItemCategory) to a drink category.
-// Returns an error string on violation, or null. Skipped when the menu is empty
-// (same cold-start guard as priceViolation) so a missing menu never hard-fails.
-function pickupDrinksViolation(items, menu) {
+// matching as findMenuItem, via findItemCategory) to one of the tenant's drink
+// categories. Returns an error string on violation, or null. Skipped when the
+// menu is empty (same cold-start guard as priceViolation) so a missing menu
+// never hard-fails.
+function pickupDrinksViolation(items, menu, cfg) {
   if (!menu || !(menu.categoryOrder || []).length) return null;
+  const drinks = drinkCategorySet(cfg);
   for (const it of items) {
     const slug = findItemCategory(menu, it);
-    if (!slug || !PICKUP_DRINK_CATEGORIES.has(slug)) {
+    if (!slug || !drinks.has(slug)) {
       return `Pickup pre-orders are drinks only — "${it.name || it.id || "item"}" is not a drink`;
     }
     // The stored/printed name is client-supplied; require it to match the item
@@ -1064,13 +1140,22 @@ app.get("/tenant/:slug", (req, res) => {
     slug: t.slug,
     name: c.name || t.name,
     established: c.established || "",
-    themeColor: c.themeColor || "#c25a3a",
+    themeColor: c.themeColor || PLATFORM_DEFAULT_THEME,
+    palette: c.palette || {},
     logoUrl: c.logoUrl || null,
+    heroUrl: c.heroUrl || "",
+    address: c.address || "",
+    phone: c.phone || "",
+    hours: c.hours || {},
     currency: c.currency || "$",
     currencyCode: c.currencyCode || "NZD",
     gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
     locale: c.locale || "en-NZ",
     timezone: c.timezone || "Pacific/Auckland",
+    drinkCategories: Array.isArray(c.drinkCategories) ? c.drinkCategories : [],
+    dessertCategory: c.dessertCategory || "",
+    i18n: c.i18n || {},
+    receipt: c.receipt || {},
     features: c.features || {},
   });
 });
@@ -1093,7 +1178,7 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "established", "themeColor", "logoUrl", "currency", "currencyCode", "gstRate", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "features"]) {
+  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -1112,10 +1197,14 @@ function publicConfigOverridesFromBody(b) {
   const o = {};
   if (b.name !== undefined) o.name = sanitizeString(b.name, 80);
   if (b.established !== undefined) o.established = sanitizeString(b.established, 60);
-  if (b.themeColor !== undefined) o.themeColor = /^#[0-9a-fA-F]{6}$/.test(String(b.themeColor)) ? String(b.themeColor) : "#c25a3a";
+  if (b.themeColor !== undefined) o.themeColor = /^#[0-9a-fA-F]{6}$/.test(String(b.themeColor)) ? String(b.themeColor) : PLATFORM_DEFAULT_THEME;
   if (b.currency !== undefined) o.currency = sanitizeString(b.currency, 4);
   if (b.currencyCode !== undefined) o.currencyCode = sanitizeString(b.currencyCode, 8);
   if (b.gstRate !== undefined) { const g = Number(b.gstRate); o.gstRate = Number.isFinite(g) && g >= 0 && g <= 1 ? g : 0.15; }
+  if (b.gstNumber !== undefined) o.gstNumber = sanitizeString(b.gstNumber, 30);
+  if (b.legalName !== undefined) o.legalName = sanitizeString(b.legalName, 80);
+  if (b.address !== undefined) o.address = sanitizeString(b.address, 120);
+  if (b.phone !== undefined) o.phone = sanitizeString(b.phone, 30);
   if (b.locale !== undefined) o.locale = sanitizeString(b.locale, 20);
   if (b.timezone !== undefined) o.timezone = sanitizeString(b.timezone, 40);
   return o;
@@ -1496,7 +1585,7 @@ app.post("/order", resolveTenant, (req, res) => {
       // Reject forged/underpriced items against the authoritative menu.
       const menu = loadMenu();
       if (isPickup) {
-        const dv = pickupDrinksViolation(normalizedItems, menu);
+        const dv = pickupDrinksViolation(normalizedItems, menu, req.tenant.config);
         if (dv) {
           res.status(400).json({ error: dv });
           return;
@@ -1739,11 +1828,29 @@ app.get("/menu", resolveTenant, (req, res) => {
   // paint (the menu is fetched before the app renders).
   const c = req.tenant.config || {};
   out.slug = req.tenant.slug;                  // lets the backoffice pages build a tenant-correct "Live menu" link
-  out.isDefaultTenant = req.tenant.slug === DEFAULT_TENANT; // printing/receipt-info UI is the flagship (Crispy) only
+  out.isDefaultTenant = req.tenant.slug === DEFAULT_TENANT; // legacy flag (Crispy); per-feature gating now uses out.features
   out.restaurantName = c.name || req.tenant.name;
   out.established = c.established || "";
-  out.themeColor = c.themeColor || "#c25a3a";
+  out.themeColor = c.themeColor || PLATFORM_DEFAULT_THEME;
+  out.palette = c.palette || {};
   out.logoUrl = c.logoUrl || null;
+  out.heroUrl = c.heroUrl || "";
+  out.address = c.address || "";
+  out.phone = c.phone || "";
+  out.hours = c.hours || {};
+  out.currency = c.currency || "$";
+  out.gstRate = typeof c.gstRate === "number" ? c.gstRate : 0.15;
+  out.gstNumber = c.gstNumber || "";       // printed on the tax receipt (public on the receipt itself)
+  out.legalName = c.legalName || "";
+  out.drinkCategories = Array.isArray(c.drinkCategories) ? c.drinkCategories : [];
+  out.dessertCategory = c.dessertCategory || "";
+  out.i18n = c.i18n || {};
+  out.receipt = c.receipt || {};
+  out.features = c.features || {};
+  // Internal LAN printer IPs are exposed ONLY to this tenant's authenticated
+  // staff (resolveTenant pins req.tenant to the token's own tenant), never on the
+  // public customer fetch.
+  if (findTenantByToken(getReqToken(req))) out.printerStations = c.printerStations || {};
   res.json(out);
 });
 
@@ -2293,9 +2400,17 @@ app.get("/orders/:id", resolveTenant, (req, res) => {
     // Prevents enumeration of valid order IDs.
     return res.status(404).json({ error: "Order not found" });
   }
+  const oc = req.tenant.config || {};
   res.json({
     id: order.id,
     tableNumber: order.tableNumber,
+    // Tenant identity so the (static, same-origin) bill page renders the right
+    // restaurant name/address/hours/currency for every tenant — Crispy included
+    // (its config supplies its exact values).
+    restaurantName: oc.name || req.tenant.name,
+    address: oc.address || "",
+    hours: oc.hours || {},
+    currency: oc.currency || "$",
     // Pickup pre-order fields — undefined (omitted) for dine-in orders.
     orderType: order.orderType,
     customerName: order.customerName,
@@ -2388,7 +2503,7 @@ app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
 
       // A pickup pre-order stays drinks-only even via add-items.
       if (orders[idx].orderType === "pickup-drinks" || isPickupSentinel(orders[idx].tableNumber)) {
-        const dv = pickupDrinksViolation(newItems, addMenu);
+        const dv = pickupDrinksViolation(newItems, addMenu, req.tenant.config);
         if (dv) {
           res.status(400).json({ error: dv });
           return;
@@ -2784,7 +2899,7 @@ app.post("/orders/:id/email-bill", resolveTenant, async (req, res) => {
 
     // Per-tenant sender if configured; otherwise fall back to the platform's
     // verified domain with the restaurant's name on the From line.
-    const fromAddr = cfg.emailFrom || `${restaurantName} <bills@eatery.crispycatering.com>`;
+    const fromAddr = cfg.emailFrom || BILL_EMAIL_FROM;
     const { data, error } = await resend.emails.send({
       from: fromAddr,
       to: [email],
@@ -3561,6 +3676,7 @@ async function boot() {
   loadAuthIntoCache();         // owner accounts + sessions
   await restoreFromSupabase(); // supabase-mode: pull registry + per-tenant blobs, reload cache
   ensureDefaultTenant();       // fresh install fallback: materialize the default café
+  backfillDefaultTenantConfig(); // production migration: fill Crispy's new config keys if missing
   server = app.listen(PORT, () => {
   console.log(`\n🍽  Multi-tenant ordering backend running on http://localhost:${PORT}`);
   console.log(`   Mode    : Per-tenant storage (data/<slug>/) ${supabase ? "+ Supabase mirror" : "(file-only)"}`);

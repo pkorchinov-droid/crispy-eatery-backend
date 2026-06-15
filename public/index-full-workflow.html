@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Crispy Eatery — Kitchen</title>
+<title>Dashboard — Kitchen</title><!-- neutral fallback; replaced per-tenant from /menu restaurantName -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -1017,11 +1017,13 @@
 
 <header>
   <div>
-    <div class="logo">Crispy Eatery <span>Kitchen</span></div>
+    <!-- neutral fallback; the leading text node is replaced per-tenant from /menu restaurantName -->
+    <div class="logo">Dashboard <span>Kitchen</span></div>
   </div>
   <div class="header-actions">
     <a href="menu-admin.html" id="menuAdminLink">Menu admin ↗</a>
-    <a href="https://sparkling-lokum-4e28b8.netlify.app/" id="liveMenuLink" target="_blank" rel="noopener">Live menu ↗</a>
+    <!-- href is set per-tenant (?r=slug) from /menu once loaded; neutral placeholder until then -->
+    <a href="#" id="liveMenuLink" target="_blank" rel="noopener">Live menu ↗</a>
     <a href="#" id="printerSetupLink" onclick="printerSetup();return false;" title="Set printer IP &amp; run a test print" aria-label="Printer setup"><span aria-hidden="true">🖨</span> Printer</a>
     <a href="#" id="receiptSetupLink" onclick="receiptSetup();return false;" title="Edit business name, GST number &amp; address printed on receipts" aria-label="Receipt info"><span aria-hidden="true">🧾</span> Receipt info</a>
     <a href="#" id="groupsLink" onclick="openGroups();return false;" title="Corporate / group pre-orders" aria-label="Groups"><span aria-hidden="true">👥</span> Groups</a>
@@ -1175,7 +1177,17 @@
   // food. Add a slug here if a new drink category is created.
   var DRINK_CATEGORIES = { coffee: 1, tea: 1, signature: 1 };
   var ITEM_CATEGORY = {}; // menuItemId -> categorySlug
-  var PRINTING_ENABLED = true; // set false for non-default (self-serve) tenants — see /menu isDefaultTenant
+  // FAIL-CLOSED: default OFF so a missing/slow /menu never exposes Crispy's LAN
+  // printers/identity to another tenant. Enabled only once /menu confirms this
+  // tenant explicitly has both printing + stationPrinting features (Crispy has both).
+  var PRINTING_ENABLED = false;
+  // Per-tenant config captured from /menu (single source of truth). Defaults keep
+  // Crispy identical because Crispy's config supplies these exact values; a tenant
+  // without them gets a neutral/empty result (never Crispy's value).
+  var TENANT_PRINTER_IPS = {}; // {food,drinks,expo,receipt} LAN IPs (staff-only, from /menu)
+  var TENANT_GST_RATE = 0.15;  // overwritten from /menu gstRate (Crispy = 0.15)
+  var TENANT_CURRENCY = '$';   // overwritten from /menu currency (Crispy = "$")
+  var TENANT_RECEIPT = {};     // {restaurantName, legalName, gstNumber, address} from /menu
   function loadMenuCategories() {
     try {
       fetch(BACKEND + '/menu', { headers: authHeaders() }).then(function (r) { return r.json(); }).then(function (m) {
@@ -1183,19 +1195,36 @@
         Object.keys(cats).forEach(function (slug) {
           (cats[slug].items || []).forEach(function (it) { if (it && it.id) ITEM_CATEGORY[it.id] = slug; });
         });
-        // Tenant-aware branding: this is the original Crispy single-tenant dashboard;
-        // show the logged-in café's real name + point "Live menu" at THAT café (?r=slug).
-        var name = (m && m.restaurantName) || 'Crispy Eatery';
+        // Tenant-aware branding: show the logged-in café's real name from config.
+        // Neutral generic fallback ("Dashboard") — never Crispy's name — for a tenant
+        // whose config has no name. Crispy's config supplies "Crispy Eatery".
+        var name = (m && m.restaurantName) || 'Dashboard';
         var logo = document.querySelector('.logo');
         if (logo && logo.firstChild && logo.firstChild.nodeType === 3) logo.firstChild.nodeValue = name + ' ';
         document.title = name + ' — Kitchen';
+        // "Live menu" → the customer SPA for THIS tenant (?r=slug). Build it from the
+        // slug so it isn't hardcoded to Crispy's deployment.
         var lm = document.getElementById('liveMenuLink');
         if (lm && m && m.slug) lm.href = 'https://sparkling-lokum-4e28b8.netlify.app/?r=' + encodeURIComponent(m.slug);
-        // Printing + receipt-info is Crispy-only (bespoke LAN printers); hide all those
-        // surfaces for every other café so a new café isn't shown Crispy's printer/receipt UI.
-        // Hide printing ONLY when the tenant is EXPLICITLY non-default — so if this
-        // page ever loads against an older /menu without the flag, Crispy keeps printing.
-        PRINTING_ENABLED = !(m && m.isDefaultTenant === false);
+        // Capture per-tenant config (single source of truth) for printing/GST/currency/identity.
+        TENANT_PRINTER_IPS = (m && m.printerStations) || {}; // staff-only; absent for non-printing tenants
+        if (m && typeof m.gstRate === 'number') TENANT_GST_RATE = m.gstRate;
+        if (m && m.currency) TENANT_CURRENCY = m.currency;
+        TENANT_RECEIPT = {
+          name: (m && m.restaurantName) || '',
+          legalName: (m && m.legalName) || '',
+          gstNumber: (m && m.gstNumber) || '',
+          address: (m && m.address) || '',
+          // The legacy Crispy receipt also prints a longer address + website that
+          // never lived in config. Preserve those EXACTLY for the default tenant so
+          // its printout is byte-identical; other tenants get only their config fields.
+          isDefaultTenant: !!(m && m.isDefaultTenant)
+        };
+        // FAIL-CLOSED, config-driven printing gate: enable ONLY when this tenant
+        // explicitly carries BOTH the printing + stationPrinting features. A missing
+        // or slow /menu leaves PRINTING_ENABLED=false, so Crispy's LAN printers and
+        // identity are never fired on another café. Crispy's config has both true.
+        PRINTING_ENABLED = !!(m && m.features && m.features.printing && m.features.stationPrinting);
         if (!PRINTING_ENABLED) document.body.classList.add('no-printing');
       }).catch(function () {});
     } catch (e) {}
@@ -1318,21 +1347,27 @@
   // Kitchen/food ticket -> the dedicated WiFi kitchen printer (.160). NOT .101:
   // Lightspeed holds .101's mechanism, so ePOS-Print there times out. .160 is
   // dashboard-owned (uncontended).
+  // Printer station IPs come from the tenant's /menu config (printerStations), with
+  // an optional staff localStorage override per device. NO hardcoded Crispy default:
+  // Crispy's config supplies its exact IPs (.160/.76/.66/.210) so its behaviour is
+  // unchanged, while a tenant whose config lacks a station returns '' and that print
+  // target is skipped gracefully (callers already guard on a falsy IP).
+  function getStation(key) { return (TENANT_PRINTER_IPS && TENANT_PRINTER_IPS[key]) || ''; }
   function getKitchenPrinterIP() {
-    try { return localStorage.getItem('kitchenPrinterIP') || '192.168.1.160'; } catch (e) { return '192.168.1.160'; }
+    try { return (localStorage.getItem('kitchenPrinterIP') || getStation('food')).trim(); } catch (e) { return getStation('food'); }
   }
   function getBaristaPrinterIP() {
-    try { return (localStorage.getItem('baristaPrinterIP') || '192.168.1.76').trim(); } catch (e) { return '192.168.1.76'; }
+    try { return (localStorage.getItem('baristaPrinterIP') || getStation('drinks')).trim(); } catch (e) { return getStation('drinks'); }
   }
-  // GST receipt prints to the dedicated GST/receipt printer (.66), separate from
-  // the order-ticket printers.
+  // GST receipt prints to the dedicated GST/receipt printer, separate from the
+  // order-ticket printers.
   function getReceiptPrinterIP() {
-    try { return localStorage.getItem('receiptPrinterIP') || '192.168.1.66'; } catch (e) { return '192.168.1.66'; }
+    try { return (localStorage.getItem('receiptPrinterIP') || getStation('receipt')).trim(); } catch (e) { return getStation('receipt'); }
   }
   // Full combined order ticket (food + drinks together) prints to the expo/pass
-  // printer (.210), alongside the split kitchen (.160) / barista (.76) slips.
+  // printer, alongside the split kitchen / barista slips.
   function getFullPrinterIP() {
-    try { return (localStorage.getItem('fullPrinterIP') || '192.168.1.210').trim(); } catch (e) { return '192.168.1.210'; }
+    try { return (localStorage.getItem('fullPrinterIP') || getStation('expo')).trim(); } catch (e) { return getStation('expo'); }
   }
   function getPrinterIP() { return getKitchenPrinterIP(); } // back-compat default (test)
   function eposEsc(s) {
@@ -1341,6 +1376,10 @@
       .replace(/[\x00-\x1f\x7f]/g, ' ');
   }
   function eposRule() { return '<text>' + new Array(PRINT_LINE_WIDTH + 1).join('-') + '&#10;</text>'; }
+  // Ticket/receipt banner = the tenant's name (UPPERCASE) from /menu. Crispy's config
+  // name uppercases to "CRISPY EATERY" so its tickets are unchanged; a tenant without
+  // a name falls back to a neutral "ORDER" banner — never Crispy's name.
+  function ticketBanner() { return (String(TENANT_RECEIPT.name || '').trim().toUpperCase()) || 'ORDER'; }
 
   // SOAP body for a station ticket (no prices). `items` is the subset for that
   // station; `stationLabel` is the banner ("KITCHEN" / "BARISTA").
@@ -1349,7 +1388,7 @@
     var timeStr = when.toLocaleTimeString('en-NZ', { hour: '2-digit', minute: '2-digit', hour12: true });
     var L = [];
     L.push('<text align="center"/>');
-    L.push('<text dw="true" dh="true" em="true">CRISPY EATERY&#10;</text>');
+    L.push('<text dw="true" dh="true" em="true">' + eposEsc(ticketBanner()) + '&#10;</text>');
     L.push('<text dw="false" dh="false" em="false">* ' + eposEsc(stationLabel) + ' *&#10;</text>');
     L.push('<feed line="1"/>');
     L.push('<text align="left"/>');
@@ -1430,7 +1469,7 @@
   function printerHelp(ip) {
     ip = ip || getKitchenPrinterIP();
     return 'Could not reach the printer at https://' + ip + '. Check: (1) printer is on and on the cafe WiFi; ' +
-      '(2) on THIS iPad the "Crispy Eatery Printer CA" is installed AND switched on under ' +
+      '(2) on THIS iPad the printer CA certificate is installed AND switched on under ' +
       'Settings > General > About > Certificate Trust Settings; (3) the IP is correct (tap 🖨 Printer). ' +
       'If you just finished setup, fully close this tab and reopen it. Quick check: open https://' + ip + ' in Safari — it should load with no certificate warning.';
   }
@@ -1598,7 +1637,7 @@
   // to the kitchen printer (original behaviour).
   // ── Corporate / group pre-orders (staff "Upcoming" view) ──────
   var GROUPS_CACHE = [];
-  function gMoney(n){ return '$' + (Number(n)||0).toFixed(2); }
+  function gMoney(n){ return TENANT_CURRENCY + (Number(n)||0).toFixed(2); }
   function gStatusColor(s){ return ({open:'#5b7553',locked:'#b0832f',preparing:'#c25a3a',done:'#7d7d7d',cancelled:'#a23b2a'})[s] || '#777'; }
   function gReq(method, path, body){
     return fetch(BACKEND + path, { method: method, headers: Object.assign({ 'Content-Type':'application/json' }, authHeaders()), body: body ? JSON.stringify(body) : undefined })
@@ -1692,7 +1731,7 @@
   };
   function buildGroupTicketXml(group, mode, stationLabel){
     var L=[];
-    L.push('<text align="center"/><text dw="true" dh="true" em="true">CRISPY EATERY&#10;</text>');
+    L.push('<text align="center"/><text dw="true" dh="true" em="true">' + eposEsc(ticketBanner()) + '&#10;</text>');
     L.push('<text dw="false" dh="false" em="false">* ' + eposEsc(stationLabel) + ' &#8212; GROUP *&#10;</text><feed line="1"/><text align="left"/>');
     L.push(eposRule());
     L.push('<text dw="true" dh="true" em="true">' + eposEsc(group.company) + '&#10;</text>');
@@ -1737,7 +1776,7 @@
     var items = order.items || [];
     var kIp = getKitchenPrinterIP();
     var bIp = getBaristaPrinterIP();
-    if (!bIp) {
+    if (!bIp && kIp) {
       toast('Printing ticket for ' + order.id + '…');
       sendEpos(buildStationTicketXml(order, items, 'ORDER'), kIp)
         .then(function (res) {
@@ -1759,8 +1798,9 @@
     var drinks = items.filter(function (i) { return isDrinkItem(i); });
     var fIp = getFullPrinterIP();
     var jobs = [];
-    if (food.length) jobs.push({ label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
-    if (drinks.length) jobs.push({ label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
+    // Skip any station whose IP is missing from config (graceful per-station skip).
+    if (food.length && kIp) jobs.push({ label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
+    if (drinks.length && bIp) jobs.push({ label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
     if (fIp && items.length) jobs.push({ label: 'full', ip: fIp, xml: buildStationTicketXml(order, items, 'FULL ORDER') });
     if (!jobs.length) { toast('Nothing to print', 'err'); return; }
     toast('Printing ' + order.id + '…');
@@ -1825,28 +1865,46 @@
   //    GST is derived from the total and subtotal is the residual, so the
   //    three printed figures always reconcile to the cent.
   // ────────────────────────────────────────────────────────────
+  // Receipt legal identity from the tenant's /menu config (restaurantName / legalName
+  // / gstNumber / address). A tenant without a field simply omits that line. The
+  // legacy Crispy receipt also printed a fuller address and a website that never
+  // existed as config keys — apply those Crispy-only literals ONLY for the default
+  // tenant so its printout stays byte-identical. localStorage still overrides all.
   function getReceiptInfo() {
     var d = {
-      name: 'Crispy Eatery',
-      legal: 'Twopeople Ltd',
-      addr: '341 Remuera Road, Auckland 1050',
-      gst: '136-528-536',
-      web: 'www.crispyeatery.co.nz'
+      name: TENANT_RECEIPT.name || '',
+      legal: TENANT_RECEIPT.legalName || '',
+      addr: TENANT_RECEIPT.address || '',
+      gst: TENANT_RECEIPT.gstNumber || '',
+      web: ''
     };
+    if (TENANT_RECEIPT.isDefaultTenant) {
+      // Crispy parity: keep its exact historical receipt strings (config carries the
+      // short "341 Remuera Road" + no website; the receipt always showed these).
+      d.name = d.name || 'Crispy Eatery';
+      d.legal = d.legal || 'Twopeople Ltd';
+      d.addr = '341 Remuera Road, Auckland 1050';
+      d.gst = d.gst || '136-528-536';
+      d.web = 'www.crispyeatery.co.nz';
+    }
     try {
       var s = localStorage.getItem('receiptInfo');
       if (s) { var o = JSON.parse(s); for (var k in d) { if (o && o[k] != null && o[k] !== '') d[k] = o[k]; } }
     } catch (e) {}
     return d;
   }
-  // NZ GST 15%, prices GST-inclusive. Derive GST from the total (round half-up on
-  // integer cents), then subtotal = total - GST so subtotal + GST === total exactly.
+  // GST from the tenant's config rate (TENANT_GST_RATE; Crispy = 0.15). Prices are
+  // GST-inclusive: derive GST from the total (round half-up on integer cents), then
+  // subtotal = total - GST so subtotal + GST === total exactly. rate 0 → no GST.
   function gstBreakdown(total) {
+    var rate = Number(TENANT_GST_RATE) || 0;
     var cents = Math.round((Number(total) || 0) * 100);
-    var gst = Math.round(cents * 3 / 23);
-    return { subtotal: (cents - gst) / 100, gst: gst / 100, total: cents / 100 };
+    // gst = total * rate/(1+rate) on integer cents (Crispy: rate 0.15 → 3/23, unchanged).
+    var gst = rate > 0 ? Math.round(cents * rate / (1 + rate)) : 0;
+    return { subtotal: (cents - gst) / 100, gst: gst / 100, total: cents / 100, rate: rate };
   }
-  function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+  // Currency symbol from tenant config (TENANT_CURRENCY; Crispy = "$", default "$").
+  function money(n) { return TENANT_CURRENCY + (Number(n) || 0).toFixed(2); }
   function eposRuleEq() { return '<text>' + new Array(PRINT_LINE_WIDTH + 1).join('=') + '&#10;</text>'; }
   // left text + right text, right flush to the line edge (manual pad — no tab stops)
   function padRow(left, right) {
@@ -1863,9 +1921,12 @@
   function buildReceiptXml(order) {
     var W = PRINT_LINE_WIDTH;
     var info = getReceiptInfo();
-    var phone = info.phone || '+64 27 413 6743';
-    var wifiNet = info.wifiNet || 'Crispy Eatery Unsafe';
-    var wifiKey = info.wifiKey || 'Youneedtobuysomethingfirst';
+    // phone / WiFi are Crispy-identity strings; keep the historical literals ONLY for
+    // the default tenant (config doesn't carry them here). Other tenants → blank/omit.
+    var crispy = !!TENANT_RECEIPT.isDefaultTenant;
+    var phone = info.phone || (crispy ? '+64 27 413 6743' : '');
+    var wifiNet = info.wifiNet || (crispy ? 'Crispy Eatery Unsafe' : '');
+    var wifiKey = info.wifiKey || (crispy ? 'Youneedtobuysomethingfirst' : '');
     function rep(c, n) { return n > 0 ? new Array(n + 1).join(c) : ''; }
     function ls(s) { return String(s).split('').join(' '); }
     function esc(s) { return eposEsc(s); }
@@ -1904,9 +1965,11 @@
     var L = [];
     L.push(F1);
     L.push(P(ls('TAX INVOICE / RECEIPT'), { align: 'center', em: true }));
-    L.push(P(info.name || 'Crispy Eatery', { align: 'center', dh: true, em: true }));
+    L.push(P(info.name || 'Receipt', { align: 'center', dh: true, em: true }));
     if (info.legal || info.addr) L.push(P([info.legal, info.addr].filter(Boolean).join('  -  '), { align: 'center', font: 'font_b' }));
-    L.push(P('GST ' + (info.gst || '') + (phone ? ('   -   ' + phone) : ''), { align: 'center', font: 'font_b' }));
+    // GST id line: only print when there's a GST number and/or phone (tenant without
+    // either omits it entirely). Crispy has both → identical line as before.
+    if (info.gst || phone) L.push(P((info.gst ? 'GST ' + info.gst : '') + (info.gst && phone ? '   -   ' : '') + (phone || ''), { align: 'center', font: 'font_b' }));
     if (info.web) L.push(P(info.web, { align: 'center', font: 'font_b' }));
     L.push(HD);
     L.push('<text align="left"/>');
@@ -1927,8 +1990,10 @@
       L.push(itemRow(a.label || 'Adjustment', (amt < 0 ? '-' : '') + money(Math.abs(amt))));
     });
     L.push(P(rep('. ', Math.floor(W / 2)).replace(/ $/, ''), { align: 'left' }));
-    L.push(cols('Subtotal (incl. GST)', money(b.total), false, false));
-    L.push(cols('GST 15%', money(b.gst), false, false));
+    // GST line from the tenant rate (Crispy 0.15 → "GST 15%"); hidden entirely at rate 0.
+    var gstPct = Math.round((b.rate || 0) * 100);
+    L.push(cols('Subtotal' + (b.rate ? ' (incl. GST)' : ''), money(b.total), false, false));
+    if (b.rate) L.push(cols('GST ' + gstPct + '%', money(b.gst), false, false));
     L.push(P(pad('TOTAL NZD', money(b.total)), { align: 'left', dh: true, em: true }));
     L.push(P('+' + rep('-', W - 2) + '+', { align: 'left' }));
     L.push(P('| ' + padN(payLabel, money(b.total), W - 4) + ' |', { align: 'left', em: true }));
@@ -1972,8 +2037,10 @@
     if (!PRINTING_ENABLED) return;
     var order = orderData[orderId];
     if (!order) { toast('Order not found', 'err'); return; }
+    var rIp = getReceiptPrinterIP();
+    if (!rIp) { toast('No receipt printer configured', 'err'); return; }   // skip gracefully if unset
     toast('Printing receipt for ' + order.id + '…');
-    sendEpos(buildReceiptXml(order), getReceiptPrinterIP())
+    sendEpos(buildReceiptXml(order), rIp)
       .then(function (res) {
         if (res.ok) resolvePrintFailKey('receipt:' + order.id + ':RECEIPT');
         else recordPrintFail({ kind: 'receipt', refId: order.id, station: 'RECEIPT', ip: getReceiptPrinterIP(), table: order.tableNumber, reason: res.reason || 'printer error' });
@@ -2044,6 +2111,9 @@
   // reprint bar — but fires as one batch with a single combined toast, then flags
   // the card "Printed". Wired to PREP; the 🖨/🧾 header buttons remain for reprints.
   window.printAllBills = function (orderId) {
+    // Same fail-closed gate as printTicket/printReceipt: never fire LAN printers
+    // unless this tenant explicitly has printing enabled (Crispy does).
+    if (!PRINTING_ENABLED) return Promise.resolve();
     var order = orderData[orderId];
     if (!order) { toast('Order not found', 'err'); return Promise.resolve(); }
     var items = order.items || [];
@@ -2053,18 +2123,19 @@
     var rIp = getReceiptPrinterIP();
 
     var jobs = [];
+    // Skip any station whose IP is missing from config (graceful per-station skip).
     var combined = !bIp;   // no barista IP → one combined kitchen ticket (printTicket fallback)
     if (!combined) {
       var food = items.filter(function (i) { return !isDrinkItem(i); });
       var drinks = items.filter(function (i) { return isDrinkItem(i); });
-      if (food.length) jobs.push({ kind: 'order', station: 'KITCHEN', label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
-      if (drinks.length) jobs.push({ kind: 'order', station: 'BARISTA', label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
+      if (food.length && kIp) jobs.push({ kind: 'order', station: 'KITCHEN', label: 'kitchen', ip: kIp, xml: buildStationTicketXml(order, food, 'KITCHEN') });
+      if (drinks.length && bIp) jobs.push({ kind: 'order', station: 'BARISTA', label: 'barista', ip: bIp, xml: buildStationTicketXml(order, drinks, 'BARISTA') });
       if (fIp && items.length) jobs.push({ kind: 'order', station: 'FULL', label: 'full', ip: fIp, xml: buildStationTicketXml(order, items, 'FULL ORDER') });
-    } else if (items.length) {
+    } else if (items.length && kIp) {
       jobs.push({ kind: 'order', station: 'ORDER', label: 'order', ip: kIp, xml: buildStationTicketXml(order, items, 'ORDER') });
     }
-    // GST receipt always prints (its own dedicated .66 printer); UNPAID here.
-    jobs.push({ kind: 'receipt', station: 'RECEIPT', label: 'GST', ip: rIp, xml: buildReceiptXml(order) });
+    // GST receipt prints to its own dedicated printer (UNPAID here); skip if unset.
+    if (rIp) jobs.push({ kind: 'receipt', station: 'RECEIPT', label: 'GST', ip: rIp, xml: buildReceiptXml(order) });
     if (!jobs.length) { toast('Nothing to print', 'err'); return Promise.resolve(); }
 
     toast('Printing ' + order.id + ' — kitchen · barista · full · GST…');
@@ -2137,7 +2208,7 @@
       return '<div class="item-row' + cookable + cooked + tappable + picked + '" data-key="' + escAttr(key) + '" data-idx="' + idx + '" data-type="' + itemType + '"' + cookAction + tapAction + '>' +
         '<span class="item-qty">' + qty + '</span>' +
         '<div class="item-name">' + escHtml(item.name) + variant + notes + '</div>' +
-        '<span class="item-price">$' + (price * qty).toFixed(2) + '</span>' +
+        '<span class="item-price">' + TENANT_CURRENCY + (price * qty).toFixed(2) + '</span>' +
         cookCheck +
       '</div>';
     }
@@ -2201,7 +2272,7 @@
       ? '<div class="order-adjustments">' + adjList.map(function (a) {
           var amt = Number(a.amount) || 0;
           return '<div class="adj-row"><span class="adj-label">' + escHtml(a.label) + '</span>' +
-            '<span class="adj-amt' + (amt < 0 ? ' neg' : '') + '">' + (amt < 0 ? '-' : '+') + '$' + Math.abs(amt).toFixed(2) + '</span></div>';
+            '<span class="adj-amt' + (amt < 0 ? ' neg' : '') + '">' + (amt < 0 ? '-' : '+') + TENANT_CURRENCY + Math.abs(amt).toFixed(2) + '</span></div>';
         }).join('') + '</div>'
       : '';
 
@@ -2265,7 +2336,7 @@
       '<div class="card-body">' + itemsHtml + adjHtml + orderNotes + cookHint + pickupHint + '</div>' +
       '<div class="card-footer">' +
         '<div class="footer-left">' +
-          '<div class="order-total">$' + (Number(order.total) || 0).toFixed(2) + '</div>' +
+          '<div class="order-total">' + TENANT_CURRENCY + (Number(order.total) || 0).toFixed(2) + '</div>' +
           '<button class="btn-adjust" onclick="openAdjust(\'' + idJs + '\')" title="Adjust the bill — extra dish, decaf shot, discount">&#177; Adjust</button>' +
         '</div>' +
         '<div class="btn-group">' +
@@ -2671,7 +2742,7 @@
         sub = isPickupOrder(order)
           ? ('Pickup' + (order.customerName ? ' · ' + escHtml(order.customerName) : ''))
           : ('Table ' + escHtml(String(order.tableNumber || '-')));
-        sub += ' · $' + (Number(order.total) || 0).toFixed(2);
+        sub += ' · ' + TENANT_CURRENCY + (Number(order.total) || 0).toFixed(2);
       }
       var ov = document.createElement('div');
       ov.className = 'tender-overlay';
@@ -2808,7 +2879,7 @@
           '<span class="hi-items">' + escHtml(itemNames) + '</span>' +
         '</div>' +
         '<div class="hi-right">' +
-          '<div class="hi-total">$' + (Number(order.total) || 0).toFixed(2) + '</div>' +
+          '<div class="hi-total">' + TENANT_CURRENCY + (Number(order.total) || 0).toFixed(2) + '</div>' +
           phoneHtml +
           '<div class="hi-time">' + escHtml(formatTime(order.completedAt || order.createdAt)) + '</div>' +
         '</div>' +
@@ -2930,16 +3001,16 @@
     var listHtml = adj.length ? '<div class="cur-list">' + adj.map(function (a) {
       var amt = Number(a.amount) || 0;
       return '<div class="adj-row"><span class="adj-label">' + escHtml(a.label) + '</span>' +
-        '<span><span class="adj-amt' + (amt < 0 ? ' neg' : '') + '">' + (amt < 0 ? '-' : '+') + '$' + Math.abs(amt).toFixed(2) + '</span> ' +
+        '<span><span class="adj-amt' + (amt < 0 ? ' neg' : '') + '">' + (amt < 0 ? '-' : '+') + TENANT_CURRENCY + Math.abs(amt).toFixed(2) + '</span> ' +
         '<button class="rm" title="Remove" onclick="removeAdjustment(\'' + jsStr(orderId) + '\',\'' + jsStr(a.id) + '\')">&times;</button></span></div>';
     }).join('') + '</div>' : '';
     var presetsHtml = ADJ_PRESETS.map(function (p, i) {
-      return '<button class="preset" onclick="fillAdjPreset(' + i + ')">' + escHtml(p.label) + (p.amount ? (' +$' + p.amount.toFixed(2)) : '') + '</button>';
+      return '<button class="preset" onclick="fillAdjPreset(' + i + ')">' + escHtml(p.label) + (p.amount ? (' +' + TENANT_CURRENCY + p.amount.toFixed(2)) : '') + '</button>';
     }).join('');
     var ov = document.getElementById('adjustOverlay');
     ov.innerHTML = '<div class="adj-modal" onclick="event.stopPropagation()">' +
       '<h3>Adjust bill</h3>' +
-      '<div class="sub">Order ' + escHtml(o.id) + ' &middot; Table ' + escHtml(o.tableNumber) + ' &middot; total $' + (Number(o.total) || 0).toFixed(2) + '</div>' +
+      '<div class="sub">Order ' + escHtml(o.id) + ' &middot; Table ' + escHtml(o.tableNumber) + ' &middot; total ' + TENANT_CURRENCY + (Number(o.total) || 0).toFixed(2) + '</div>' +
       listHtml +
       '<div class="presets">' + presetsHtml + '</div>' +
       '<div class="row2">' +
