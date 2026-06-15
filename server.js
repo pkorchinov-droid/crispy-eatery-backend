@@ -35,6 +35,23 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
+// ── Stripe (real online payments) ──────────────────────────
+// Online card payment is offered ONLY for the coffee "skip the queue" pickup
+// pre-order flow (orderType "pickup-drinks") — never the dine-in / full-food
+// QR, which still pays at the counter. The /charge handler enforces that gate.
+// Hosted Stripe Checkout: the customer is redirected to Stripe's page (card +
+// Apple Pay / Google Pay), so no card data ever touches our SPA or backend.
+// Absent STRIPE_SECRET_KEY → the provider is simply unavailable (charges 503),
+// so a missing key can never silently fall through to a free order.
+let stripeClient = null;
+try {
+  if (process.env.STRIPE_SECRET_KEY) {
+    stripeClient = require("stripe")(process.env.STRIPE_SECRET_KEY);
+  }
+} catch (e) {
+  console.warn("[pay] Stripe SDK unavailable:", e && e.message);
+}
+
 // ── Self-serve onboarding (Phase 1) ────────────────────────
 // Public signup + magic-link sign-in + photo-to-menu import. ANTHROPIC_API_KEY
 // powers the menu-photo extractor (absent → manual fallback). AUTH_EMAIL_FROM
@@ -141,6 +158,98 @@ const PAYMENT_PROVIDERS = {
       };
     },
   },
+
+  // Real provider — hosted Stripe Checkout (redirect). Used only for coffee
+  // pickup pre-orders (gated in /charge). createIntent returns a `hostedUrl`
+  // the SPA redirects to; Stripe sends a signed `checkout.session.completed`
+  // webhook back, verified with WEBHOOK_SECRET_STRIPE.
+  stripe: {
+    name: "stripe",
+    // NOT skipSignature → webhooks are HMAC-verified and it's allowed in prod.
+    async createIntent({ orderId, amount, currency, idempotencyKey, metadata, returnUrl, label }) {
+      if (!stripeClient) throw new Error("Stripe not configured (set STRIPE_SECRET_KEY)");
+      const base = String(returnUrl || "");
+      const sep = base.includes("?") ? "&" : "?";
+      const back = (state) =>
+        base + sep + "checkout=" + state + "&order=" + encodeURIComponent(orderId);
+      const session = await stripeClient.checkout.sessions.create(
+        {
+          mode: "payment",
+          // 'card' surfaces Apple Pay / Google Pay automatically on supported devices.
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: String(currency || "NZD").toLowerCase(),
+                product_data: { name: label || ("Order " + orderId) },
+                unit_amount: Math.round(Number(amount) * 100), // dollars → cents
+              },
+              quantity: 1,
+            },
+          ],
+          // Round-trip our ids back to the webhook on BOTH the session and its
+          // payment intent so verifyWebhook can resolve the order either way.
+          metadata,
+          payment_intent_data: { metadata },
+          success_url: back("success"),
+          cancel_url: back("cancel"),
+        },
+        { idempotencyKey }
+      );
+      return {
+        id: session.payment_intent || session.id,
+        provider: "stripe",
+        amount,
+        currency,
+        clientSecret: null,
+        hostedUrl: session.url, // SPA redirects the customer here
+        raw: { sessionId: session.id },
+      };
+    },
+    verifyWebhook(rawBody, signature, secret) {
+      if (!stripeClient) throw new Error("Stripe not configured");
+      // Throws on a bad/absent signature → the route returns 400.
+      const evt = stripeClient.webhooks.constructEvent(rawBody, signature, secret);
+      const obj = (evt.data && evt.data.object) || {};
+      const meta = obj.metadata || {};
+      let eventType;
+      if (evt.type === "checkout.session.completed") {
+        // Card (sync) Checkout is 'paid' at completion; async methods may not be.
+        eventType = obj.payment_status === "paid" ? "payment.succeeded" : "payment.pending";
+      } else if (evt.type === "checkout.session.async_payment_succeeded") {
+        eventType = "payment.succeeded";
+      } else if (
+        evt.type === "checkout.session.async_payment_failed" ||
+        evt.type === "checkout.session.expired" ||
+        evt.type === "payment_intent.payment_failed"
+      ) {
+        eventType = "payment.failed";
+      } else {
+        // Anything else (incl. charge.refunded — a Charge carries no order
+        // metadata synchronously) is left unmapped → the route 200s without
+        // acting. Refunds are handled manually by staff.
+        eventType = evt.type;
+      }
+      // Captured amount in the smallest unit (cents) → dollars, for the
+      // amount-equality check in the route handler.
+      const cents = obj.amount_total != null ? obj.amount_total : obj.amount;
+      const amount = cents != null ? Number(cents) / 100 : null;
+      const pi = obj.payment_intent;
+      return {
+        eventType,
+        orderId: meta.orderId,
+        billToken: meta.billToken, // echoed from createIntent metadata
+        transactionId: (typeof pi === "string" ? pi : pi && pi.id) || obj.id,
+        amount,
+        // last4 / scheme aren't on the session payload synchronously; left null
+        // (the GST receipt shows "PAID ONLINE", which doesn't need them).
+        last4: null,
+        scheme: null,
+        method: "card",
+        raw: evt,
+      };
+    },
+  },
 };
 function getPaymentProvider(name) {
   const p = PAYMENT_PROVIDERS[name];
@@ -177,6 +286,18 @@ if (!STAFF_TOKEN) {
 const allowedOrigins = FRONTEND_ORIGIN
   ? FRONTEND_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean)
   : [];
+// A hosted-checkout return URL (Stripe success/cancel) must point back at one of
+// our own front-ends — never an attacker-supplied origin (open-redirect / token
+// exfil guard). Only the origin is validated; the SPA controls the path/query.
+function isAllowedReturnUrl(u) {
+  try {
+    const parsed = new URL(String(u));
+    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost") return false;
+    return allowedOrigins.includes(parsed.origin);
+  } catch (e) {
+    return false;
+  }
+}
 app.use(
   cors({
     origin: function (origin, cb) {
@@ -2984,6 +3105,22 @@ app.post("/orders/:id/charge", resolveTenant, async (req, res) => {
         return res.status(403).json({ error: "Online payment isn't available — please pay at the counter." });
       }
 
+      // Online payment (a real PSP, e.g. Stripe) is offered ONLY for the coffee
+      // "skip the queue" pickup pre-order — never the dine-in / full-food QR,
+      // which settles at the counter. This is the server-side half of that gate
+      // (the SPA only shows it in pickup mode; this stops a forged charge).
+      if (!provider.skipSignature && !isPickupOrderRec(order)) {
+        return res.status(403).json({ error: "Online payment is only available for coffee pickup pre-orders — please pay at the counter." });
+      }
+
+      // Real providers redirect the customer to a hosted page and need a return
+      // URL to send them back to. Require + validate it (must be one of our own
+      // front-ends). Mock has no redirect, so it doesn't need one.
+      const returnUrl = sanitizeString((req.body && req.body.returnUrl) || "", 300).trim();
+      if (!provider.skipSignature && !isAllowedReturnUrl(returnUrl)) {
+        return res.status(400).json({ error: "Invalid or missing returnUrl" });
+      }
+
       const amount = Number(order.total || 0);
       if (!(amount > 0)) return res.status(400).json({ error: "Order total must be > 0" });
 
@@ -2995,6 +3132,8 @@ app.post("/orders/:id/charge", resolveTenant, async (req, res) => {
         amount,
         currency: req.tenant.config.currencyCode || "NZD",
         idempotencyKey,
+        returnUrl,
+        label: (req.tenant.name ? req.tenant.name + " — " : "") + "Coffee pickup " + order.id,
         metadata: {
           orderId: order.id,
           tableNumber: order.tableNumber,
