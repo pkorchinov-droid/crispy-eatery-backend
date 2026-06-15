@@ -298,6 +298,34 @@
   }
   .pickup-info b { color: #d6e0b4; }
 
+  /* Pickup payment state — coffee pickups are prepaid online (Stripe). The
+     barista must not make a drink that hasn't been paid for yet. */
+  .pickup-pay {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    padding: 5px 18px;
+    text-transform: uppercase;
+  }
+  .pickup-pay.paid {
+    background: #1f3322;
+    border-bottom: 1px solid #2f4a35;
+    color: #7fe6a0;
+  }
+  .pickup-pay.awaiting {
+    background: #3a2a14;
+    border-bottom: 1px solid #5a3f1c;
+    color: #ffcf7a;
+  }
+  .paid-chip {
+    color: #7fe6a0;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    padding: 8px 4px;
+    white-space: nowrap;
+  }
+
   .status-badge {
     display: none;
     background: #ff9800;
@@ -2286,7 +2314,10 @@
     } else if (isReady) {
       buttons = '<button class="btn-pickup" onclick="markPickedUp(\'' + idJs + '\')">PICKED UP</button>';
     } else if (isPickedUp) {
-      buttons = '<button class="btn-paid" onclick="markPaid(\'' + idJs + '\')">PAID BY CUSTOMER</button>';
+      // Already settled online (Stripe coffee pickup) → no counter payment to take.
+      buttons = (order.paymentStatus === 'paid')
+        ? '<span class="paid-chip">&#10003; Paid online</span>'
+        : '<button class="btn-paid" onclick="markPaid(\'' + idJs + '\')">PAID BY CUSTOMER</button>';
     }
 
     // Status badge text and visibility
@@ -2312,7 +2343,10 @@
       ? '<div class="order-phone"><a href="tel:' + escAttr(escTelHref(order.phoneNumber)) + '">' + escHtml(order.phoneNumber) + '</a></div>'
       : '';
     const pickupInfo = isPickup
-      ? '<div class="pickup-info">for <b>' + escHtml(order.customerName || 'customer') + '</b> &middot; ready by <b>' + escHtml(order.pickupTime || 'ASAP') + '</b></div>'
+      ? '<div class="pickup-info">for <b>' + escHtml(order.customerName || 'customer') + '</b> &middot; ready by <b>' + escHtml(order.pickupTime || 'ASAP') + '</b></div>' +
+        (order.paymentStatus === 'paid'
+          ? '<div class="pickup-pay paid">&#10003; Paid online</div>'
+          : '<div class="pickup-pay awaiting">&#9203; Awaiting payment &mdash; don\'t make yet</div>')
       : '';
     return '<div class="order-card' + statusClass + '" id="card-' + safeId + '" data-id="' + safeId + '" data-has-kitchen="' + hasKitchen + '" data-has-barista="' + hasBarista + '" data-pickup="' + isPickup + '">' +
       '<div class="card-header">' +
