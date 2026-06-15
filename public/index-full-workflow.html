@@ -3342,6 +3342,37 @@
             var progText = card.querySelector('.pickup-progress span');
             if (progText) progText.textContent = pickedCount + '/' + totalItems;
           }
+
+          // Payment status changes independently of kitchen status — a Stripe
+          // webhook flips a coffee pickup order to 'paid' while it's still
+          // 'received'/'preparing'. The targeted status updates above never touch
+          // the payment badge, so without this the card only flips to "Paid
+          // online" on a manual reload. Reflect the payment change live here.
+          if (localOrder.paymentStatus !== order.paymentStatus) {
+            localOrder.paymentStatus = order.paymentStatus;
+            var payBadge = card.querySelector('.pickup-pay');
+            if (payBadge) {
+              if (order.paymentStatus === 'paid') {
+                payBadge.className = 'pickup-pay paid';
+                payBadge.innerHTML = '&#10003; Paid online';
+              } else {
+                payBadge.className = 'pickup-pay awaiting';
+                payBadge.innerHTML = '&#9203; Awaiting payment &mdash; don\'t make yet';
+              }
+            }
+            // If it's already picked up, swap the counter-payment button for the
+            // "Paid online" chip (or back) to match renderCard.
+            if (order.status === 'picked_up') {
+              var payBg = card.querySelector('.btn-group');
+              if (payBg) {
+                if (order.paymentStatus === 'paid') {
+                  payBg.innerHTML = '<span class="paid-chip">&#10003; Paid online</span>';
+                } else if (!payBg.querySelector('.btn-paid')) {
+                  payBg.innerHTML = '<button class="btn-paid" onclick="markPaid(\'' + jsStr(order.id) + '\')">PAID BY CUSTOMER</button>';
+                }
+              }
+            }
+          }
         }
       });
 
