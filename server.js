@@ -570,6 +570,8 @@ function baseConfig() {
     emailFrom: "",        // "Name <addr@domain>"; empty → generic platform sender
     surcharge: {},        // category slug → dollars added on the online menu
     surchargeDefault: 0,  // applied to categories not in the map
+    developerFee: 0,      // flat fee (dollars) added once to every order's total
+    developerFeeLabel: "Developer fee", // label shown at checkout + on the receipt
     drinkCategories: [],  // category slugs routed to the barista + eligible for drink pickup
     dessertCategory: "",  // category slug for the dessert-upsell nudge ("" → no nudge)
     i18n: {},             // { enabled, languages:[{code,label}], dictionary:{code:{key:val}} }
@@ -673,8 +675,10 @@ const CRISPY_DEFAULTS = {
   drinkCategories: ["coffee", "tea", "signature"],
   dessertCategory: "desserts",
   printerStations: { food: "192.168.1.160", drinks: "192.168.1.76", expo: "192.168.1.210", receipt: "192.168.1.66" },
-  surcharge: { coffee: 0.20, tea: 0.20, signature: 0.20, "all-day": 0.60, sets: 0.60, mains: 0.60, burgers: 0.60, crepes: 0.60, kids: 0.60, desserts: 0.60, sides: 0.20 },
-  surchargeDefault: 0.60,
+  surcharge: {},          // no per-dish online cut (owner removed it 2026-06-16; live tenant zeroed via PATCH /admin/tenants/crispy)
+  surchargeDefault: 0,
+  developerFee: 2,        // flat $2 developer fee per order, disclosed at checkout (2026-06-16; live tenant set via PATCH /admin/tenants/crispy)
+  developerFeeLabel: "Developer fee",
   emailFrom: "Crispy Eatery <bills@eatery.crispycatering.com>",
   // Crispy keeps every bespoke flow it ships today; new tenants start with the clean core.
   features: { groups: true, preorder: true, printing: true, dessertNudge: true, drinksPreorder: true, i18n: true, collectibleReceipt: true, stationPrinting: true, poweredBy: true },
@@ -1299,7 +1303,7 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features"]) {
+  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -1758,7 +1762,8 @@ app.post("/order", resolveTenant, (req, res) => {
         paymentStatus: "unpaid",   // unpaid | pending | paid | failed | refunded
         createdAt: new Date().toISOString(),
       };
-      order.total = clampMoney(order.total);
+      order.developerFee = developerFeeFor(req.tenant.config);
+      recomputeOrderTotal(order); // items + developer fee (no adjustments at creation)
       order.onlineSurcharge = orderSurcharge(normalizedItems, menu, req.tenant.config);
 
       orders.push(order);
@@ -1937,6 +1942,13 @@ function orderSurcharge(items, menu, cfg) {
   }
   return Math.round(s * 100) / 100;
 }
+// Flat per-order "developer fee" (dollars) from tenant config; 0 if unset/invalid.
+// Added once to each order's total at creation (and to each group member's bill),
+// and preserved through every recompute (merge / add-items / manual adjustments).
+function developerFeeFor(cfg) {
+  const n = Number(cfg && cfg.developerFee);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
 
 // GET /menu — public, returns the current menu.  The customer SPA fetches
 // this on boot and falls back to the bundled menu if we're unreachable.
@@ -1970,6 +1982,8 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.i18n = c.i18n || {};
   out.receipt = c.receipt || {};
   out.features = c.features || {};
+  out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
+  out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
   // Internal LAN printer IPs are exposed ONLY to this tenant's authenticated
   // staff (resolveTenant pins req.tenant to the token's own tenant), never on the
   // public customer fetch.
@@ -2662,7 +2676,7 @@ app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
       }
 
       orders[idx].items = mergedItems;
-      orders[idx].total = clampMoney(projectedTotal + adjustmentsTotal(orders[idx]));
+      recomputeOrderTotal(orders[idx]); // items + adjustments + the order's existing developer fee (unchanged)
       orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu(), req.tenant.config));
       // Only (re)flag a brand-new/idle tab as "received". Don't drag an order
       // that's already preparing/ready/picked_up back to the start of the board.
@@ -2852,7 +2866,9 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       primary.items = mergedItems;
       // Carry every order's manual bill adjustments into the combined bill.
       primary.adjustments = targets.reduce((acc, o) => acc.concat(Array.isArray(o.adjustments) ? o.adjustments : []), []);
-      primary.total = clampMoney(projectedTotal + adjustmentsTotal(primary));
+      // Each folded order brought its own developer fee — sum them (per-order fee).
+      primary.developerFee = clampMoney(targets.reduce((s, o) => s + (Number(o.developerFee) || 0), 0));
+      recomputeOrderTotal(primary); // items + adjustments + summed developer fees
       primary.onlineSurcharge = clampMoney(targets.reduce((s, o) => s + (Number(o.onlineSurcharge) || 0), 0));
       primary.guestCount = clampQty(targets.reduce((s, o) => s + (Number(o.guestCount) || 0), 0));
       const allNotes = targets.map((o) => (o.notes || "").trim()).filter(Boolean);
@@ -2892,7 +2908,7 @@ function adjustmentsTotal(order) {
 }
 function recomputeOrderTotal(order) {
   const itemsSum = (order.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
-  order.total = clampMoney(itemsSum + adjustmentsTotal(order));
+  order.total = clampMoney(itemsSum + adjustmentsTotal(order) + (Number(order.developerFee) || 0));
   return order.total;
 }
 
@@ -3639,12 +3655,14 @@ app.post("/groups/:code/join", resolveTenant, (req, res) => {
       const menu = loadMenu();
       const pv = priceViolation(items, menu);
       if (pv) { res.status(400).json({ error: pv }); return; }
+      const memberFee = developerFeeFor(req.tenant.config); // per-person developer fee
       const member = {
         memberId: crypto.randomBytes(6).toString("hex"),
         name,
         items,
         notes: sanitizeString(b.notes, 300),
-        total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0)),
+        developerFee: memberFee,
+        total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0) + memberFee),
         onlineSurcharge: orderSurcharge(items, menu, req.tenant.config),
         createdAt: new Date().toISOString(),
       };
