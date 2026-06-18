@@ -1983,14 +1983,15 @@ app.post("/order", resolveTenant, (req, res) => {
   });
 });
 
-// ── Static dashboard & bill ───────────────────────────────
-// Dashboard is staff-only — gate it before serving HTML.
-app.get("/dashboard", requireStaff, (_req, res, next) => next());
-app.use(
-  "/dashboard",
-  requireStaff,
-  express.static(path.join(__dirname, "public"), { index: "index-full-workflow.html" })
-);
+// ── Legacy dashboard → RETIRED (replaced by the unified /console) ──────────
+// The old staff dashboard (index-full-workflow.html) and its back-office pages
+// (/dashboard/menu-admin.html, /dashboard/reports.html) are retired: the /console
+// app supersedes them. Redirect every /dashboard* path to /console so old links/
+// bookmarks land on the new app AND the old page — which polls /orders and drives
+// the printers — never loads alongside it (no double polling/printing on the server).
+// Non-destructive: the HTML files remain in public/ for rollback (restore the
+// express.static mount below to bring the legacy dashboard back).
+app.use("/dashboard", (_req, res) => res.redirect(302, "/console"));
 // Bill page is customer-facing (lookup by order ID via URL).
 app.use("/bill", express.static(path.join(__dirname, "public", "bill")));
 
@@ -4083,11 +4084,10 @@ async function boot() {
   console.log(`     POST   /menu/categories/:slug/sold-out-all  (staff)  bulk sold-out toggle`);
   console.log(`     GET    /reports/today                 (staff)   today's sales report`);
   console.log(`     GET    /reports/week                  (staff)   last 7 days report`);
-  console.log(`     GET    /dashboard/reports.html        (staff)   reports admin page`);
   console.log(`     GET    /customers                     (staff)`);
   console.log(`     DELETE /orders                        (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
-  console.log(`     GET    /dashboard                     (staff, token via ?token= or Bearer)`);
-  console.log(`     GET    /dashboard/menu-admin.html     (staff)   backoffice — edit menu`);
+  console.log(`     GET    /console                       (login)   unified staff ops console`);
+  console.log(`     GET    /dashboard*                    → 302 /console (legacy dashboard retired)`);
   console.log(`     GET    /health                        (public)\n`);
   });
 }
