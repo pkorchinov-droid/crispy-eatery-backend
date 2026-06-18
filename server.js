@@ -1296,6 +1296,12 @@ app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "ad
 app.get("/start", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
 app.get("/owner", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
 
+// The unified staff/back-office Operations Console (Dashboard, Kitchen KDS, Reports,
+// Menu admin, Billing) behind one login. Self-contained static page; mock data for now,
+// wired to /auth + /orders + /menu + billing in a later pass. Lives alongside the legacy
+// admin pages. Spec: docs/superpowers/specs/2026-06-18-crispy-ops-console-design.md
+app.get("/console", (_req, res) => res.sendFile(path.join(__dirname, "public", "console.html")));
+
 // Admin view of a tenant (never leaks the token, only whether one is set).
 function tenantAdminView(t) {
   return { slug: t.slug, name: t.name, createdAt: t.createdAt, hasToken: !!t.staffTokenHash, config: t.config };
