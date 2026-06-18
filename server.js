@@ -366,6 +366,7 @@ function rateRule(req) {
   if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
   if (m === "POST" && p === "/signup") return ["signup", 5];
   if (m === "POST" && p === "/auth/request-link") return ["authlink", 5];
+  if (m === "POST" && p === "/auth/login") return ["authlogin", 10];
   if (m === "POST" && p === "/menu/extract") return ["extract", 5];
   return null;
 }
@@ -599,6 +600,33 @@ function mergeConfig(stored) {
 }
 const TENANTS = new Map(); // slug → { slug, name, config, staffTokenHash, createdAt }
 function hashToken(tok) { return crypto.createHash("sha256").update(String(tok)).digest("hex"); }
+// Password hashing for ops-console accounts. scrypt is built into Node (no native
+// dep like bcrypt → safe on Render). Returns {salt, hash}; verify is constant-time.
+function hashPassword(password, salt) {
+  salt = salt || crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return { salt, hash };
+}
+function verifyPassword(password, salt, hash) {
+  if (!salt || !hash) return false;
+  try {
+    const h = crypto.scryptSync(String(password), salt, 64);
+    const stored = Buffer.from(String(hash), "hex");
+    return h.length === stored.length && crypto.timingSafeEqual(h, stored);
+  } catch (e) { return false; }
+}
+// Console account lookup (keyed by lowercased login).
+function getAccount(login) {
+  const k = String(login == null ? "" : login).trim().toLowerCase();
+  return k ? AUTH.accounts[k] : null;
+}
+// Resolve the console account behind an owner session (session.email = "acct:<login>").
+function accountFromReq(req) {
+  const s = sessionFromToken(getReqToken(req));
+  if (!s || typeof s.email !== "string" || !s.email.startsWith("acct:")) return null;
+  return getAccount(s.email.slice(5));
+}
+const LOGIN_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/i;
 function normalizeSlug(s) {
   // Slugify: spaces/underscores → hyphens, drop the rest, collapse/trim hyphens.
   // Idempotent (safe to apply on both write and lookup): "Joe's Diner" →
@@ -736,7 +764,10 @@ function backfillDefaultTenantConfig() {
 //   owners[email]   = { email, name, tenants:[slug], createdAt, lastLoginAt }
 //   sessions[hash]  = { email, slug, exp }   (hash = sha256 of the session token)
 //   usedMagic[jti]  = exp                     (single-use magic-link guard)
-const AUTH = { owners: {}, sessions: {}, usedMagic: {} };
+//   accounts[login] = { login, name, passwordHash, salt, tenants:[slug], ... }
+//        login+password sign-in for the ops console (keyed by lowercased login).
+//        Parallel to magic-link owners; its session.email is "acct:<login>".
+const AUTH = { owners: {}, sessions: {}, usedMagic: {}, accounts: {} };
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 function pruneAuth() {
   const now = Date.now();
@@ -753,6 +784,7 @@ function loadAuthIntoCache() {
   AUTH.owners = obj.owners || {};
   AUTH.sessions = obj.sessions || {};
   AUTH.usedMagic = obj.usedMagic || {};
+  AUTH.accounts = obj.accounts || {};
   pruneAuth();
 }
 function persistAuth() {
@@ -1517,14 +1549,25 @@ app.post("/auth/logout", requireOwner, (req, res) => {
   res.json({ ok: true });
 });
 
-// GET /me — owner session. The owner console's "who am I + my café" call.
+// GET /me — owner/console session. "Who am I + my cafés". Additive: still returns
+// {email, cafe} for the legacy owner console; now also {login, name, cafes[]} for
+// the ops console's branding + multi-café switcher.
 app.get("/me", requireOwner, (req, res) => {
-  const owner = AUTH.owners[req.ownerEmail];
   const t = getTenant(req.ownerSlug);
   if (!t) return res.status(404).json({ error: "Café not found" });
+  const acc = accountFromReq(req);
+  const identity = acc || AUTH.owners[req.ownerEmail];
+  const slugs = (identity && Array.isArray(identity.tenants) && identity.tenants.length) ? identity.tenants : [req.ownerSlug];
+  const cafes = slugs.map(getTenant).filter(Boolean).map((tt) => {
+    const cc = tt.config || {};
+    return { slug: tt.slug, name: cc.name || tt.name, themeColor: cc.themeColor || "#c25a3a", logoUrl: cc.logoUrl || null };
+  });
   const c = t.config || {};
   res.json({
     email: req.ownerEmail,
+    login: acc ? acc.login : undefined,
+    name: acc ? acc.name : ((AUTH.owners[req.ownerEmail] && AUTH.owners[req.ownerEmail].name) || undefined),
+    cafes,
     cafe: {
       slug: t.slug,
       name: t.name,
@@ -1541,6 +1584,140 @@ app.get("/me", requireOwner, (req, res) => {
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
     },
   });
+});
+
+// ── Ops-console auth: login + password (parallel to magic-link) ──────────────
+// POST /auth/login — public, rate-limited. { login, password } → owner session.
+app.post("/auth/login", (req, res) => {
+  const login = String((req.body && req.body.login) || "").trim();
+  const password = String((req.body && req.body.password) || "");
+  const acc = getAccount(login);
+  const ok = !!acc && verifyPassword(password, acc.salt, acc.passwordHash);
+  if (!ok) return res.status(401).json({ error: "Wrong login or password." });
+  if (!Array.isArray(acc.tenants) || !acc.tenants.length) return res.status(403).json({ error: "No café is linked to this account." });
+  acc.lastLoginAt = new Date().toISOString();
+  const slug = acc.tenants[0];
+  const session = createSession("acct:" + acc.login, slug);
+  persistAuth();
+  console.log(`[auth] console login '${acc.login}' → ${slug}`);
+  res.json({ success: true, session, slug, login: acc.login });
+});
+
+// POST /auth/switch — console session. { slug } → new session for another owned café.
+app.post("/auth/switch", requireOwner, (req, res) => {
+  const acc = accountFromReq(req);
+  const identity = acc || AUTH.owners[req.ownerEmail];
+  const slug = normalizeSlug(String((req.body && req.body.slug) || ""));
+  const allowed = identity && Array.isArray(identity.tenants) && identity.tenants.includes(slug);
+  if (!allowed) return res.status(403).json({ error: "Not one of your cafés." });
+  if (!getTenant(slug)) return res.status(404).json({ error: "Unknown café." });
+  deleteSession(getReqToken(req));
+  const session = createSession(req.ownerEmail, slug);
+  res.json({ success: true, session, slug });
+});
+
+// POST /auth/credentials — console account. Change own login and/or password;
+// current password ALWAYS required. Returns a fresh session if the login changed.
+app.post("/auth/credentials", requireOwner, (req, res) => {
+  const acc = accountFromReq(req);
+  if (!acc) return res.status(400).json({ error: "Only console accounts can change credentials here." });
+  const b = req.body || {};
+  if (!verifyPassword(String(b.currentPassword || ""), acc.salt, acc.passwordHash))
+    return res.status(403).json({ error: "Current password is incorrect." });
+  const newLogin = b.newLogin != null ? String(b.newLogin).trim() : "";
+  const newPassword = b.newPassword != null ? String(b.newPassword) : "";
+  const changingLogin = newLogin && newLogin.toLowerCase() !== acc.login.toLowerCase();
+  if (changingLogin) {
+    if (!LOGIN_RE.test(newLogin)) return res.status(400).json({ error: "Login must be 3–32 chars: letters, numbers, . _ -" });
+    if (AUTH.accounts[newLogin.toLowerCase()]) return res.status(409).json({ error: "That login is already taken." });
+  }
+  if (newPassword && newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters." });
+  if (!changingLogin && !newPassword) return res.status(400).json({ error: "Nothing to change." });
+  const oldEmail = ("acct:" + acc.login).toLowerCase();
+  if (newPassword) { const h = hashPassword(newPassword); acc.salt = h.salt; acc.passwordHash = h.hash; }
+  if (changingLogin) {
+    delete AUTH.accounts[acc.login.toLowerCase()];
+    acc.login = newLogin;
+    AUTH.accounts[newLogin.toLowerCase()] = acc;
+  }
+  // Security: ANY credential change (password OR login) revokes EVERY existing
+  // session for this account — so changing the password actually locks out a
+  // lost/compromised/shared device — then we mint one fresh session for the caller.
+  for (const h of Object.keys(AUTH.sessions)) {
+    const s = AUTH.sessions[h];
+    if (s && typeof s.email === "string" && s.email.toLowerCase() === oldEmail) delete AUTH.sessions[h];
+  }
+  const session = createSession("acct:" + acc.login, req.ownerSlug);
+  persistAuth();
+  res.json({ success: true, login: acc.login, session });
+});
+
+// PATCH /me/printers — owner/console session. Account-managed station printer setup:
+// the logged-in owner sets THEIR café's station IPs (food=Kitchen, drinks=Barista,
+// expo=Full order, receipt=Receipt), saved to the café config so every device shares
+// them. An empty value clears that station. requireOwner pins it to req.ownerSlug, so
+// an owner can only edit their own café's printers.
+const STATION_KEYS = ["food", "drinks", "expo", "receipt"];
+function validStationHost(v) {
+  v = String(v == null ? "" : v).trim();
+  if (!v) return "";                                   // empty clears the station
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(v) && v.split(".").every((o) => +o >= 0 && +o <= 255)) return v; // IPv4
+  if (/^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,60}$/.test(v)) return v; // LAN hostname
+  return null;                                         // anything else is rejected
+}
+app.patch("/me/printers", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  const existing = (t.config && t.config.printerStations) || {};
+  const out = {};
+  for (const key of STATION_KEYS) {
+    if (b[key] === undefined) { if (existing[key]) out[key] = existing[key]; continue; } // not sent → keep
+    const v = validStationHost(b[key]);
+    if (v === null) return res.status(400).json({ error: `Invalid printer address for “${key}”.` });
+    if (v) out[key] = v;                               // non-empty → set; empty → drop (cleared)
+  }
+  withWriteLock(() => { t.config = t.config || {}; t.config.printerStations = out; saveTenant(t); });
+  // withWriteLock defers the write, so respond with the canonical value we just
+  // committed (out) rather than re-reading the tenant before the write lands.
+  res.json({ success: true, printerStations: out });
+});
+
+// POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
+// café's ops-console account. Generates a random initial password (returned ONCE)
+// unless one is supplied. Re-call with {link:true} to add a café to an existing login.
+app.post("/admin/tenants/:slug/credentials", requirePlatformAdmin, (req, res) => {
+  const slug = normalizeSlug(req.params.slug);
+  const t = getTenant(slug);
+  if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+  const b = req.body || {};
+  const login = String(b.login || slug).trim();
+  if (!LOGIN_RE.test(login)) return res.status(400).json({ error: "Login must be 3–32 chars: letters, numbers, . _ -" });
+  const key = login.toLowerCase();
+  const existing = AUTH.accounts[key];
+  if (existing && !(existing.tenants || []).includes(slug) && (existing.tenants || []).length && !b.link)
+    return res.status(409).json({ error: "Login already in use; pass {link:true} to add this café to it." });
+  // Linking another café to an EXISTING login only appends the slug — it must NOT
+  // reset that account's password (unless {resetPassword:true} is explicit).
+  if (existing && b.link && !b.resetPassword) {
+    existing.tenants = Array.from(new Set([...(existing.tenants || []), slug]));
+    persistAuth();
+    return res.json({ success: true, login, slug, tenants: existing.tenants, linked: true,
+      note: "Café linked to the existing account — password unchanged." });
+  }
+  const password = b.password ? String(b.password) : crypto.randomBytes(9).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
+  const { salt, hash } = hashPassword(password);
+  const tenants = existing ? Array.from(new Set([...(existing.tenants || []), slug])) : [slug];
+  AUTH.accounts[key] = {
+    login,
+    name: (existing && existing.name) || t.name,
+    passwordHash: hash, salt, tenants,
+    createdAt: (existing && existing.createdAt) || new Date().toISOString(),
+    lastLoginAt: (existing && existing.lastLoginAt) || null,
+  };
+  persistAuth();
+  res.json({ success: true, login, password, slug, tenants, consoleUrl: "/console",
+    note: "Save this password — it is shown only once. The owner can change it in the console's Settings." });
 });
 
 // Update a restaurant's config and/or rotate its staff token.
@@ -1990,10 +2167,12 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.features = c.features || {};
   out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
   out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
-  // Internal LAN printer IPs are exposed ONLY to this tenant's authenticated
-  // staff (resolveTenant pins req.tenant to the token's own tenant), never on the
-  // public customer fetch.
-  if (findTenantByToken(getReqToken(req))) out.printerStations = c.printerStations || {};
+  // Internal LAN printer IPs are exposed ONLY to this tenant's own authenticated
+  // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
+  // (tenantFromToken resolves both) — and never on the public customer fetch or
+  // to another tenant's token.
+  const authTenant = tenantFromToken(getReqToken(req));
+  if (authTenant && authTenant.slug === req.tenant.slug) out.printerStations = c.printerStations || {};
   res.json(out);
 });
 
