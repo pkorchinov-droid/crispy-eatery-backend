@@ -211,6 +211,26 @@
     </div>
 
     <div class="panel">
+      <h2>Console login</h2>
+      <p class="muted-sub" style="margin-top:-6px">Create (or reset) a café's sign-in for the Ops Console at <code>/console</code>. A password is generated and shown once below — give it to the owner; they change it in the console's Settings.</p>
+      <div class="grid3">
+        <div class="field">
+          <label>Restaurant</label>
+          <select id="cl_slug"></select>
+        </div>
+        <div class="field">
+          <label>Login (username)</label>
+          <input id="cl_login" placeholder="blank = use the slug" autocomplete="off" />
+        </div>
+        <div class="field" style="display:flex; align-items:flex-end;">
+          <button id="cl_go" style="width:100%;">Create / reset login</button>
+        </div>
+      </div>
+      <div class="msg err" id="cl_msg"></div>
+      <div id="cl_result"></div>
+    </div>
+
+    <div class="panel">
       <h2>Restaurants <button class="ghost copy" id="refresh" style="float:right;font-size:12px;padding:6px 12px">Refresh</button></h2>
       <table>
         <thead><tr><th>Theme</th><th>Name</th><th>Slug</th><th>Currency</th><th>Token</th><th>Links</th></tr></thead>
@@ -491,12 +511,9 @@
   // ── Restaurants list ──
   function loadList(){
     fetch("/admin/tenants", { headers: headers() }).then(function(r){ return r.json(); }).then(function(list){
-      var tb = $("tlist"), sel = $("qr_slug");
-      if(sel){
-        var prev = sel.value;
-        sel.innerHTML = (Array.isArray(list)?list:[]).map(function(t){ return '<option value="'+esc(t.slug)+'">'+esc(t.name)+' ('+esc(t.slug)+')</option>'; }).join("");
-        if(prev) sel.value = prev;
-      }
+      var tb = $("tlist");
+      var opts = (Array.isArray(list)?list:[]).map(function(t){ return '<option value="'+esc(t.slug)+'">'+esc(t.name)+' ('+esc(t.slug)+')</option>'; }).join("");
+      ["qr_slug","cl_slug"].forEach(function(id){ var sel=$(id); if(sel){ var prev=sel.value; sel.innerHTML=opts; if(prev) sel.value=prev; } });
       if(!Array.isArray(list) || !list.length){ tb.innerHTML='<tr><td colspan="6" style="color:var(--muted)">No restaurants yet.</td></tr>'; return; }
       tb.innerHTML = list.map(function(t){
         var c = t.config||{};
@@ -513,6 +530,28 @@
     });
   }
   $("refresh").onclick = loadList;
+
+  // ── Console login (provision an ops-console account for a café) ──
+  $("cl_go").onclick = function(){
+    var slug = $("cl_slug").value;
+    if(!slug){ show($("cl_msg"),"Pick a restaurant","err"); return; }
+    var login = $("cl_login").value.trim();
+    hide($("cl_msg")); $("cl_result").innerHTML="";
+    var btn=$("cl_go"), ot=btn.textContent; btn.disabled=true; btn.textContent="Working…";
+    fetch("/admin/tenants/"+encodeURIComponent(slug)+"/credentials", { method:"POST", headers:headers(), body:JSON.stringify(login?{login:login}:{}) })
+      .then(function(r){ return r.json().then(function(d){ if(!r.ok) throw new Error(d.error||("Error "+r.status)); return d; }); })
+      .then(function(d){
+        $("cl_result").innerHTML =
+          '<div style="margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:14px">'+
+          '<p class="muted-sub" style="margin-top:0">Give these to the owner — the password is shown <b>once</b>. They sign in, then change it in the console’s Settings.</p>'+
+          '<div class="kv"><span class="k">Sign-in URL</span><code id="cl_url">'+esc(origin()+"/console")+'</code><button class="ghost copy" data-c="cl_url">Copy</button></div>'+
+          '<div class="kv"><span class="k">Login</span><code id="cl_r_login">'+esc(d.login)+'</code><button class="ghost copy" data-c="cl_r_login">Copy</button></div>'+
+          '<div class="kv"><span class="k">Password</span><code id="cl_pw">'+esc(d.password||"(unchanged — café linked)")+'</code><button class="ghost copy" data-c="cl_pw">Copy</button></div>'+
+          '</div>';
+      })
+      .catch(function(e){ show($("cl_msg"), e.message, "err"); })
+      .then(function(){ btn.disabled=false; btn.textContent=ot; });
+  };
 
   document.addEventListener("click", function(e){
     var b = e.target.closest && e.target.closest(".copy[data-c]");
