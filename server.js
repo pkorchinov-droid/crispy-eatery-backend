@@ -2297,6 +2297,63 @@ app.post("/menu/items", requireStaff, (req, res) => {
   });
 });
 
+// POST /menu/import — staff/owner. Re-insert FULL menu items verbatim (used to
+// restore dishes removed earlier). Unlike POST /menu/items it preserves id, sizes,
+// eggOptions, tags, desc, img. Idempotent: skips any whose name already exists.
+app.post("/menu/import", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+      if (!items.length) return res.status(400).json({ error: "No items to import" });
+      if (items.length > 50) return res.status(400).json({ error: "Too many items (max 50)" });
+      const nameExists = (nm) => Object.values(menu.categories).some((c) =>
+        (c.items || []).some((it) => String(it.name || "").trim().toLowerCase() === nm.toLowerCase()));
+      const added = [], skipped = [];
+      for (const raw of items) {
+        const slug = String((raw && raw.categorySlug) || "").trim();
+        const cat = menu.categories[slug];
+        const name = String((raw && raw.name) || "").trim();
+        if (!name || name.length > 80) { skipped.push({ name: name || "(unnamed)", reason: "bad name" }); continue; }
+        if (!cat) { skipped.push({ name, reason: "unknown category: " + slug }); continue; }
+        if (nameExists(name)) { skipped.push({ name, reason: "already on the menu" }); continue; }
+        let id = slugify(raw.id || name) || slugify(name);
+        let suffix = 1; while (findItem(menu, id)) { suffix += 1; id = (slugify(raw.id || name) || slugify(name)) + "-" + suffix; }
+        const item = { id, name };
+        if (raw.sizes && typeof raw.sizes === "object" && !Array.isArray(raw.sizes)) {
+          const cleaned = {};
+          for (const sk of Object.keys(raw.sizes)) {
+            if (sk === "__proto__" || sk === "constructor" || sk === "prototype") continue;
+            const n = Number(raw.sizes[sk]);
+            if (Number.isFinite(n) && n >= 0 && n <= 9999) cleaned[String(sk).slice(0, 20)] = Math.round(n * 100) / 100;
+          }
+          if (Object.keys(cleaned).length) item.sizes = cleaned;
+        }
+        if (!item.sizes) {
+          const n = Number(raw.price);
+          if (!Number.isFinite(n) || n < 0 || n > 9999) { skipped.push({ name, reason: "no valid price/sizes" }); continue; }
+          item.price = Math.round(n * 100) / 100;
+        }
+        if (raw.desc) item.desc = String(raw.desc).slice(0, 500);
+        if (Array.isArray(raw.tags)) item.tags = raw.tags.map((t) => String(t).slice(0, 24)).slice(0, 6);
+        if (Array.isArray(raw.eggOptions)) item.eggOptions = raw.eggOptions.map((o) => String(o).slice(0, 40)).slice(0, 12);
+        if (raw.img) item.img = String(raw.img).slice(0, 200);
+        if (raw.imgRight) item.imgRight = String(raw.imgRight).slice(0, 20);
+        if (!Array.isArray(cat.items)) cat.items = [];
+        cat.items.push(item);
+        added.push({ id, name, categorySlug: slug });
+      }
+      persistMenu(menu);
+      console.log(`[menu] import: +${added.length}, skipped ${skipped.length}`);
+      res.json({ success: true, added, skipped, version: menu.version });
+    } catch (err) {
+      console.error("[menu] import error:", err.message);
+      res.status(500).json({ error: "Import failed" });
+    }
+  });
+});
+
 // POST /menu/items/:id/image — staff, upload an image for an item.
 // Multipart: field "image" carries the file (jpeg/png/webp/heic, ≤10 MB).
 // Sharp resizes to ≤1024 wide, encodes JPEG q85, uploads to Supabase Storage
