@@ -3684,12 +3684,28 @@ function aggregateReport(orders, timeZone) {
   const tableSet = new Set();
   let totalRevenue = 0;
   let onlineIncome = 0;
+  let paidRevenue = 0;
+  // Paid orders are bucketed by tender (cash/card/other); every other status keeps
+  // its own bucket (pending/failed/refunded/unpaid) so a refund or in-flight online
+  // payment is never silently mislabelled as "unpaid".
+  const payments = { cash: 0, card: 0, unpaid: 0, pending: 0, failed: 0, refunded: 0, other: 0 };
   for (const o of orders) {
     const h = timeZone ? tzParts(new Date(o.createdAt), timeZone).hour : new Date(o.createdAt).getHours();
     hourly[h].orders += 1;
     hourly[h].revenue += Number(o.total || 0);
     totalRevenue += Number(o.total || 0);
     onlineIncome += Number(o.onlineSurcharge || 0);
+    if (o.paymentStatus === "paid") {
+      const method = String(o.paymentMethod || "other").toLowerCase();
+      if (method === "cash") payments.cash += 1;
+      else if (method === "card") payments.card += 1;
+      else payments.other += 1;
+    } else {
+      const st = String(o.paymentStatus || "unpaid").toLowerCase();
+      if (payments[st] !== undefined && st !== "cash" && st !== "card") payments[st] += 1;
+      else payments.unpaid += 1;
+    }
+    if (o.paymentStatus === "paid") paidRevenue += Number(o.total || 0);
     if (o.tableNumber != null) tableSet.add(String(o.tableNumber));
     for (const it of (o.items || [])) {
       const key = it.name || "(unknown)";
@@ -3713,6 +3729,8 @@ function aggregateReport(orders, timeZone) {
     tableCount: tableSet.size,
     itemsSold,
     hourly,
+    paymentMethods: payments,
+    paidRevenue: Math.round(paidRevenue * 100) / 100,
   };
 }
 
@@ -3741,6 +3759,27 @@ app.get("/reports/today", requireStaff, (req, res) => {
     serverTime: now.toISOString(),
     ...agg,
     bills,
+  });
+});
+
+// GET /reports/yesterday — sales for the prior day in the tenant's timezone.
+// Used by the dashboard to compute today-vs-yesterday deltas. Note: orders.json
+// is wiped on each deploy, so if the café deployed today this returns zeros and
+// the dashboard simply omits the delta badges (graceful).
+app.get("/reports/yesterday", requireStaff, (req, res) => {
+  const tz = req.tenant.config.timezone;
+  const all = req.store.loadOrders();
+  const now = new Date();
+  const todayStart = tzDayStart(now, tz);
+  // Anchor safely inside the prior day (12h back) and recompute its local midnight,
+  // so the window is correct even across a DST transition (prior day ≠ exactly 24h).
+  const dayStart = tzDayStart(new Date(todayStart.getTime() - 12 * 60 * 60 * 1000), tz);
+  const orders = ordersBetween(all, dayStart.toISOString(), todayStart.toISOString());
+  const agg = aggregateReport(orders, tz);
+  res.json({
+    date: tzDateStr(dayStart, tz),
+    serverTime: now.toISOString(),
+    ...agg,
   });
 });
 
@@ -4140,6 +4179,7 @@ async function boot() {
   console.log(`     PATCH  /menu/specials                 (staff)   set/clear today's specials banner`);
   console.log(`     POST   /menu/categories/:slug/sold-out-all  (staff)  bulk sold-out toggle`);
   console.log(`     GET    /reports/today                 (staff)   today's sales report`);
+  console.log(`     GET    /reports/yesterday             (staff)   yesterday's sales (for deltas)`);
   console.log(`     GET    /reports/week                  (staff)   last 7 days report`);
   console.log(`     GET    /customers                     (staff)`);
   console.log(`     DELETE /orders                        (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
