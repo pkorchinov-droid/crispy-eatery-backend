@@ -3685,6 +3685,7 @@ function aggregateReport(orders, timeZone) {
   let totalRevenue = 0;
   let onlineIncome = 0;
   let paidRevenue = 0;
+  let developerFeeTotal = 0;
   // Paid orders are bucketed by tender (cash/card/other); every other status keeps
   // its own bucket (pending/failed/refunded/unpaid) so a refund or in-flight online
   // payment is never silently mislabelled as "unpaid".
@@ -3695,6 +3696,7 @@ function aggregateReport(orders, timeZone) {
     hourly[h].revenue += Number(o.total || 0);
     totalRevenue += Number(o.total || 0);
     onlineIncome += Number(o.onlineSurcharge || 0);
+    developerFeeTotal += Number(o.developerFee || 0);
     if (o.paymentStatus === "paid") {
       const method = String(o.paymentMethod || "other").toLowerCase();
       if (method === "cash") payments.cash += 1;
@@ -3731,6 +3733,7 @@ function aggregateReport(orders, timeZone) {
     hourly,
     paymentMethods: payments,
     paidRevenue: Math.round(paidRevenue * 100) / 100,
+    developerFeeTotal: Math.round(developerFeeTotal * 100) / 100,
   };
 }
 
