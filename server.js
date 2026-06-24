@@ -12,6 +12,12 @@ const path = require("path");
 const crypto = require("crypto");
 const { Resend } = require("resend");
 const QRCode = require("qrcode");
+// Time-of-day menu availability (lunch/dinner auto-switch). Loaded defensively so
+// that if this file is ever missing from a deploy, the server still boots and
+// simply serves every category (filtering disabled) instead of crash-looping.
+let filterMenuByTime;
+try { ({ filterMenuByTime } = require("./menu-availability")); }
+catch (e) { console.warn("[menu] availability module unavailable — time filtering disabled:", e && e.message); filterMenuByTime = (menu) => menu; }
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -2174,6 +2180,13 @@ app.get("/menu", resolveTenant, (req, res) => {
   // to another tenant's token.
   const authTenant = tenantFromToken(getReqToken(req));
   if (authTenant && authTenant.slug === req.tenant.slug) out.printerStations = c.printerStations || {};
+  // Time-of-day menu: drop categories outside their daily `avail` window from the
+  // PUBLIC customer view only (e.g. lunch until 3pm, dinner after). Staff of this
+  // tenant (token/session) and ?raw=1 diffs always see every category. Categories
+  // without an `avail` window are untouched, so other tenants are unaffected.
+  if (!raw && !(authTenant && authTenant.slug === req.tenant.slug)) {
+    filterMenuByTime(out, c.timezone || "Pacific/Auckland");
+  }
   res.json(out);
 });
 
