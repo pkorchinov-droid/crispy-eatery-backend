@@ -26,8 +26,9 @@
 
   /* Tabs */
   .tabs { display: flex; gap: 4px; padding: 12px 24px; background: #1a1510; border-bottom: 1px solid #2a2318; position: sticky; top: 70px; z-index: 90; }
-  .tab { padding: 8px 18px; background: transparent; color: #a09080; border: 1px solid #3d3428; border-radius: 8px; font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
+  .tab { padding: 12px 24px; min-height: 44px; background: transparent; color: #d8c9a8; border: 1px solid #3d3428; border-radius: 8px; font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
   .tab.active { background: #b5753a; border-color: #b5753a; color: #fff; font-weight: 600; }
+  .tab:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
 
   /* Stat cards */
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; padding: 20px 24px; }
@@ -73,7 +74,8 @@
   .ord-right { display: flex; align-items: center; gap: 10px; }
   .ord-total { font-family: Georgia, serif; font-size: 16px; color: #e8c477; font-variant-numeric: tabular-nums; }
 
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; letter-spacing: .5px; border: 1px solid; white-space: nowrap; }
+  .pill { display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: .5px; border: 1px solid; white-space: nowrap; text-transform: uppercase; }
+  .pill .pico { margin-right: 4px; font-weight: 700; }
   .pill.paid { color: #6ee7a8; border-color: #2f6b45; background: #16301f; }
   .pill.unpaid { color: #e8b96e; border-color: #6b542f; background: #2e2412; }
   .pill.pending { color: #7ab8e8; border-color: #2f4f6b; background: #14222e; }
@@ -94,23 +96,57 @@
   .btn { padding: 8px 14px; border-radius: 7px; font-size: 12px; font-weight: 600; letter-spacing: .5px; cursor: pointer; border: 1px solid; text-decoration: none; display: inline-block; }
   .btn-bill { color: #e8c477; border-color: #4a3d2e; background: #2a2318; }
   .btn-bill:hover { border-color: #b5753a; }
-  .btn-del { color: #e89090; border-color: #5e2f2f; background: #2e1616; }
-  .btn-del:hover { background: #3e1c1c; border-color: #a04040; }
+  .btn-del { color: #e89090; border: 1px solid #e89090; background: #2e1616; }
+  .btn-del:hover { background: #3e1c1c; border-color: #ff6b6b; color: #ffb0b0; animation: del-pulse 0.9s ease-in-out infinite; }
+  .btn-del:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
+  @keyframes del-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(232,144,144,0); } 50% { box-shadow: 0 0 0 4px rgba(232,144,144,0.28); } }
+  @media (prefers-reduced-motion: reduce) { .btn-del:hover { animation: none; } }
 
   .empty { padding: 40px; text-align: center; color: #5a4a38; font-family: Georgia, serif; font-style: italic; font-size: 16px; }
   .loading { padding: 40px; text-align: center; color: #8a7a68; font-size: 13px; }
   .browser-hint { padding: 4px 24px 0; font-size: 11px; color: #6a5a48; text-transform: uppercase; letter-spacing: 1px; }
 
+  /* ── Custom range (calendar) bar ── */
+  .range-bar { margin: 14px 24px 0; background: #221c13; border: 1px solid #3d3428; border-radius: 10px; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; }
+  .range-quick, .fee-quick { display: flex; gap: 8px; flex-wrap: wrap; }
+  .rq { padding: 8px 12px; min-height: 38px; background: #2a2318; color: #d8c9a8; border: 1px solid #3d3428; border-radius: 7px; font-size: 12px; cursor: pointer; letter-spacing: .5px; transition: all .15s; }
+  .rq:hover { border-color: #b5753a; color: #e8c477; }
+  .rq.on { background: #b5753a; border-color: #b5753a; color: #fff; font-weight: 600; }
+  .rq:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
+  .range-fields { display: flex; gap: 14px; flex-wrap: wrap; }
+  .rl { display: flex; flex-direction: column; gap: 5px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #8a7a68; font-weight: 600; }
+  .rl input { color-scheme: dark; background: #1a1510; color: #f5f0e8; border: 1px solid #4a3d2e; border-radius: 7px; padding: 8px 10px; font-size: 13px; font-family: inherit; min-height: 38px; }
+  .rl input:focus { outline: none; border-color: #b5753a; }
+  .range-summary { font-size: 13px; color: #a89a84; margin-left: auto; align-self: center; font-variant-numeric: tabular-nums; }
+  .range-summary b { color: #4caf50; }
+
+  /* ── Developer fee monthly bar chart ── */
+  .fee-controls { margin: 0 24px; display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; padding-bottom: 6px; }
+  .fee-chart-scroll { margin: 10px 24px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .fee-chart { display: flex; align-items: flex-end; gap: 12px; min-height: 200px; padding: 16px; background: #221c13; border: 1px solid #3d3428; border-radius: 10px; min-width: 340px; }
+  .fee-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 46px; flex: 1 0 46px; }
+  .fee-val { font-size: 11px; color: #4caf50; font-weight: 600; margin-bottom: 5px; font-variant-numeric: tabular-nums; min-height: 14px; }
+  .fee-bar { width: 100%; max-width: 40px; background: linear-gradient(180deg, #e8c477, #b5753a); border-radius: 6px 6px 0 0; transition: height .25s; }
+  .fee-col:hover .fee-bar { background: linear-gradient(180deg, #f3d488, #c98948); }
+  .fee-lbl { font-size: 10px; color: #8a7a68; margin-top: 8px; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { .fee-bar { transition: none; } }
+
   @media (max-width: 768px) {
     header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
-    .stats, .table-scroll, .browser, .browser-hint { margin-left: 12px; margin-right: 12px; }
+    .stats, .table-scroll, .browser, .browser-hint, .range-bar, .fee-controls, .fee-chart-scroll { margin-left: 12px; margin-right: 12px; }
+    .range-summary { margin-left: 0; }
     .ord-sub { max-width: 40vw; }
   }
 
   /* Print: expand everything, drop chrome */
   @media print {
     body { background: #fff !important; color: #000 !important; padding: 0; }
-    header, .tabs, .browser-hint { display: none !important; }
+    header, .tabs, .browser-hint, .range-quick, .fee-quick { display: none !important; }
+    .range-bar, .fee-controls { background: #fff !important; border: none !important; }
+    .rl, .range-summary { color: #000 !important; } .range-summary b { color: #000 !important; }
+    .rl input { background: #fff !important; color: #000 !important; border-color: #999 !important; }
+    .fee-chart { background: #fff !important; border-color: #bbb !important; }
+    .fee-bar { background: #888 !important; } .fee-val { color: #000 !important; } .fee-lbl { color: #333 !important; }
     .day-orders { display: block !important; }
     .ord-detail { display: block !important; }
     .btn-del, .day-caret { display: none !important; }
@@ -144,9 +180,10 @@
   <button class="tab active" id="tab-today" role="tab" onclick="switchView('today')">Today</button>
   <button class="tab" id="tab-week" role="tab" onclick="switchView('week')">Last 7 days</button>
   <button class="tab" id="tab-all" role="tab" onclick="switchView('all')">All time</button>
+  <button class="tab" id="tab-custom" role="tab" onclick="switchView('custom')">📅 Custom range</button>
 </div>
 
-<div id="content"><div class="loading">Loading orders…</div></div>
+<div id="content"><div class="loading" id="loadingBox"><div id="loadingMsg">Loading orders…</div><div id="loadingMeta" style="margin-top:10px;font-size:11px;color:#8a7a68"></div><div id="loadingRetry" style="margin-top:14px;display:none"><button class="tab" onclick="reload()">Retry</button></div></div></div>
 
 <script>
 (function () {
@@ -181,6 +218,19 @@
   var expandedDays = {};              // dayKey -> true
   var expandedOrders = {};            // orderId -> true
   var bootstrapped = false;
+  var fetchStartedAt = 0;             // ms timestamp of the in-flight fetch
+  var loadingTimer = null;            // interval updating the loading state
+
+  // ── Custom calendar range (used when view === "custom") ──
+  var _now = new Date();
+  var customFrom = isoDateTime(mondayOf(_now));   // default: this week, Monday 00:00
+  var customTo = isoDateTime(_now);               // default: now
+  var customQuick = "this-week";                  // highlight which quick button is active (or "")
+
+  // ── Monthly developer-fee chart range (independent of the tab scope) ──
+  var feeTo = isoDate(_now);
+  var feeFrom = isoDate(new Date(_now.getFullYear(), _now.getMonth() - 5, 1)); // last 6 months
+  var feeQuickSel = 6;
 
   // ── Helpers ──
   function fmt(n) { return "$" + (Number(n) || 0).toFixed(2); }
@@ -194,37 +244,62 @@
   function whoOf(o) { return isPickup(o) ? (o.customerName ? "Pickup · " + o.customerName : "Pickup") : "Table " + (o.tableNumber || "?"); }
   function itemsLine(o) { return (o.items || []).map(function (i) { return (i.qty || 1) + "× " + i.name + (i.size ? " (" + i.size + ")" : ""); }).join(", "); }
 
+  // ── Date helpers (local time) for the calendar range + monthly fee chart ──
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function isoDate(d) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+  function isoDateTime(d) { return isoDate(d) + "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
+  function mondayOf(d) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); var day = (x.getDay() + 6) % 7; x.setDate(x.getDate() - day); x.setHours(0, 0, 0, 0); return x; }
+  function endOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59); }
+  function monthShort(y, m) { return new Date(y, m, 1).toLocaleDateString("en-NZ", { month: "short", year: "2-digit" }); }
+
   function payInfo(o) {
     var st = o.paymentStatus || "unpaid";
     if (st === "paid") {
       var via = (o.payment && o.payment.provider === "stripe") ? "online"
         : (o.payment && o.payment.method) ? o.payment.method
         : (o.paymentMethod) ? o.paymentMethod : "";
-      return { cls: "paid", text: "PAID" + (via ? " · " + String(via).toUpperCase() : "") };
+      return { cls: "paid", icon: "✓", text: "PAID" + (via ? " · " + String(via).toUpperCase() : "") };
     }
-    if (st === "pending") return { cls: "pending", text: "PENDING" };
-    if (st === "refunded") return { cls: "refunded", text: "REFUNDED" };
-    if (st === "failed") return { cls: "unpaid", text: "FAILED" };
-    return { cls: "unpaid", text: "UNPAID" };
+    if (st === "pending") return { cls: "pending", icon: "⏳", text: "PENDING" };
+    if (st === "refunded") return { cls: "refunded", icon: "↺", text: "REFUNDED" };
+    if (st === "failed") return { cls: "unpaid", icon: "×", text: "FAILED" };
+    return { cls: "unpaid", icon: "×", text: "UNPAID" };
   }
 
   // ── Scope filter ──
   function scopeOrders() {
     if (view === "all") return ALL;
     if (view === "today") { var tk = dayKeyOf(new Date().toISOString()); return ALL.filter(function (o) { return dayKeyOf(o.createdAt) === tk; }); }
+    if (view === "custom") {
+      var fromT = customFrom ? new Date(customFrom).getTime() : -Infinity;
+      var toT = customTo ? new Date(customTo).getTime() : Infinity;
+      if (isNaN(fromT)) fromT = -Infinity;
+      if (isNaN(toT)) toT = Infinity;
+      return ALL.filter(function (o) { var t = new Date(o.createdAt).getTime(); return !isNaN(t) && t >= fromT && t <= toT; });
+    }
     // week: midnight 6 days ago → now (last 7 calendar days incl. today)
     var ws = new Date(); ws.setHours(0, 0, 0, 0); ws.setDate(ws.getDate() - 6);
     return ALL.filter(function (o) { var t = new Date(o.createdAt).getTime(); return !isNaN(t) && t >= ws.getTime(); });
   }
 
+  function customLabel() {
+    function d(x) { return x.toLocaleDateString("en-NZ", { day: "numeric", month: "short" }); }
+    var f = customFrom ? new Date(customFrom) : null, t = customTo ? new Date(customTo) : null;
+    if (f && !isNaN(f) && t && !isNaN(t)) return d(f) + " – " + d(t);
+    if (f && !isNaN(f)) return "since " + d(f);
+    if (t && !isNaN(t)) return "until " + d(t);
+    return "custom range";
+  }
+
   function computeStats(orders) {
-    var revenue = 0, paid = 0, online = 0;
+    var revenue = 0, paid = 0, online = 0, fee = 0;
     orders.forEach(function (o) {
       revenue += Number(o.total) || 0;
       online += Number(o.onlineSurcharge) || 0;
+      fee += Number(o.developerFee) || 0;
       if ((o.paymentStatus || "") === "paid") paid++;
     });
-    return { count: orders.length, revenue: revenue, avg: orders.length ? revenue / orders.length : 0, paid: paid, online: online };
+    return { count: orders.length, revenue: revenue, avg: orders.length ? revenue / orders.length : 0, paid: paid, online: online, fee: fee };
   }
 
   function itemsSold(orders) {
@@ -255,6 +330,72 @@
   // ── Render ──
   function statCard(label, value, sub) {
     return '<div class="stat"><div class="label">' + label + '</div><div class="value">' + value + '</div>' + (sub ? '<div class="sub">' + esc(sub) + '</div>' : "") + '</div>';
+  }
+
+  // ── Calendar range bar (shown on the Custom tab) ──
+  function renderRangeBar() {
+    var s = computeStats(scopeOrders());
+    function qbtn(id, lbl) { return '<button class="rq' + (customQuick === id ? " on" : "") + '" onclick="quickRange(\'' + id + '\')">' + lbl + '</button>'; }
+    var dayVal = customFrom && !isNaN(new Date(customFrom)) ? isoDate(new Date(customFrom)) : isoDate(new Date());
+    return '<div class="range-bar">' +
+      '<div class="range-quick">' +
+        qbtn("this-week", "This week") + qbtn("last-week", "Last week") +
+        qbtn("this-month", "This month") + qbtn("last-month", "Last month") +
+      '</div>' +
+      '<div class="range-fields">' +
+        '<label class="rl">📅 Day → its week<input type="date" value="' + esc(dayVal) + '" onchange="snapWeek(this.value)"></label>' +
+        '<label class="rl">From<input type="datetime-local" value="' + esc(customFrom) + '" onchange="setFrom(this.value)"></label>' +
+        '<label class="rl">To<input type="datetime-local" value="' + esc(customTo) + '" onchange="setTo(this.value)"></label>' +
+      '</div>' +
+      '<div class="range-summary">' + fmtInt(s.count) + ' order' + (s.count === 1 ? "" : "s") + ' · <b>' + fmt(s.revenue) + '</b> · fee ' + fmt(s.fee) + '</div>' +
+    '</div>';
+  }
+
+  // ── Monthly developer-fee bar chart (own date range, independent of the tab) ──
+  function feeMonths() {
+    var start = (feeFrom && !isNaN(new Date(feeFrom + "T00:00"))) ? new Date(feeFrom + "T00:00") : new Date();
+    var end = (feeTo && !isNaN(new Date(feeTo + "T00:00"))) ? new Date(feeTo + "T00:00") : new Date();
+    var months = [], byKey = {};
+    var y = start.getFullYear(), m = start.getMonth();
+    var ey = end.getFullYear(), em = end.getMonth();
+    var guard = 0;
+    while ((y < ey || (y === ey && m <= em)) && guard++ < 120) {
+      var b = { key: y + "-" + pad2(m + 1), label: monthShort(y, m), fee: 0, count: 0 };
+      months.push(b); byKey[b.key] = b;
+      m++; if (m > 11) { m = 0; y++; }
+    }
+    var fromT = (feeFrom && !isNaN(new Date(feeFrom + "T00:00"))) ? new Date(feeFrom + "T00:00").getTime() : -Infinity;
+    var toT = (feeTo && !isNaN(new Date(feeTo + "T00:00"))) ? endOfDay(new Date(feeTo + "T00:00")).getTime() : Infinity;
+    ALL.forEach(function (o) {
+      var d = new Date(o.createdAt); var t = d.getTime();
+      if (isNaN(t) || t < fromT || t > toT) return;
+      var k = d.getFullYear() + "-" + pad2(d.getMonth() + 1);
+      if (byKey[k]) { byKey[k].fee += Number(o.developerFee) || 0; byKey[k].count++; }
+    });
+    return months;
+  }
+
+  function renderFeeChart() {
+    var months = feeMonths();
+    var total = months.reduce(function (a, b) { return a + b.fee; }, 0);
+    var orders = months.reduce(function (a, b) { return a + b.count; }, 0);
+    var max = months.reduce(function (a, b) { return Math.max(a, b.fee); }, 0) || 1;
+    function fbtn(id, lbl) { return '<button class="rq' + (feeQuickSel === id ? " on" : "") + '" onclick="feeQuick(' + (typeof id === "string" ? "'" + id + "'" : id) + ')">' + lbl + '</button>'; }
+    var bars = months.map(function (b) {
+      var h = b.fee > 0 ? Math.max(4, Math.round((b.fee / max) * 150)) : 2;
+      return '<div class="fee-col" title="' + esc(b.label) + ': ' + fmt(b.fee) + ' · ' + b.count + ' order' + (b.count === 1 ? "" : "s") + '">' +
+        '<div class="fee-val">' + (b.fee ? fmt(b.fee) : "") + '</div>' +
+        '<div class="fee-bar" style="height:' + h + 'px"></div>' +
+        '<div class="fee-lbl">' + esc(b.label) + '</div>' +
+      '</div>';
+    }).join("");
+    return '<div class="section-head"><h2>Developer fee income</h2><div class="sub">monthly · ' + fmtInt(orders) + ' order' + (orders === 1 ? "" : "s") + ' in range · total <b style="color:#4caf50">' + fmt(total) + '</b></div></div>' +
+      '<div class="fee-controls">' +
+        '<div class="fee-quick">' + fbtn(6, "Last 6 mo") + fbtn(12, "Last 12 mo") + fbtn("ytd", "This year") + fbtn("all", "All time") + '</div>' +
+        '<label class="rl">From<input type="date" value="' + esc(feeFrom) + '" onchange="setFeeFrom(this.value)"></label>' +
+        '<label class="rl">To<input type="date" value="' + esc(feeTo) + '" onchange="setFeeTo(this.value)"></label>' +
+      '</div>' +
+      '<div class="fee-chart-scroll"><div class="fee-chart">' + (months.length ? bars : '<div class="empty" style="padding:24px;margin:auto">No months in range — check the dates.</div>') + '</div></div>';
   }
 
   function renderOrderDetail(o) {
@@ -293,7 +434,7 @@
       '<button class="ord-head" onclick="toggleOrder(\'' + esc(o.id).replace(/'/g, "\\'") + '\')">' +
         '<span class="ord-time">' + esc(timeOf(o.createdAt)) + '</span>' +
         '<span><span class="ord-who">' + esc(whoOf(o)) + '</span><span class="ord-sub">' + esc(o.id) + ' · ' + esc(itemsLine(o) || "no items") + '</span></span>' +
-        '<span class="ord-right"><span class="pill ' + pi.cls + '">' + esc(pi.text) + '</span><span class="ord-total">' + fmt(o.total) + '</span></span>' +
+        '<span class="ord-right"><span class="pill ' + pi.cls + '"><span class="pico">' + pi.icon + '</span>' + esc(pi.text) + '</span><span class="ord-total">' + fmt(o.total) + '</span></span>' +
       '</button>' +
       '<div class="ord-detail" id="det-' + sid + '" style="display:' + (open ? "block" : "none") + '">' + (open ? renderOrderDetail(o) : "") + '</div>' +
     '</div>';
@@ -320,18 +461,25 @@
     }
     var orders = scopeOrders();
     var s = computeStats(orders);
-    var scopeName = view === "today" ? "today" : view === "week" ? "the last 7 days" : "all time";
+    var scopeName = view === "today" ? "today" : view === "week" ? "the last 7 days" : view === "custom" ? customLabel() : "all time";
 
     var html = "";
     if (loadError) html += '<div class="browser-hint" style="color:#e8b96e">' + esc(loadError) + ' — showing last loaded data.</div>';
+
+    // Calendar range picker (Custom tab only)
+    if (view === "custom") html += renderRangeBar();
 
     html += '<div class="stats">' +
       statCard("Orders", fmtInt(s.count), scopeName) +
       statCard("Revenue", fmt(s.revenue), s.count ? "" : "no orders") +
       statCard("Avg order", fmt(s.avg), "per ticket") +
       statCard("Paid", fmtInt(s.paid), s.count ? Math.round((s.paid / s.count) * 100) + "% of orders" : "") +
+      statCard("Developer fee", fmt(s.fee), "your fee income") +
       statCard("Online income", fmt(s.online), "your online fee") +
       '</div>';
+
+    // Monthly developer-fee bar chart (own date range, independent of the tab scope)
+    html += renderFeeChart();
 
     // Items sold
     var sold = itemsSold(orders);
@@ -384,7 +532,17 @@
   };
 
   window.delOrder = function (id) {
-    if (!confirm("Delete order " + id + "?\n\nThis permanently removes it from the dashboard and the reports. Use it to clear test or mistaken orders.")) return;
+    var o = ALL.filter(function (x) { return x.id === id; })[0];
+    var lines = ["Delete order " + id + "?", ""];
+    if (o) {
+      lines.push(whoOf(o));
+      var il = itemsLine(o);
+      lines.push(il ? il : "no items");
+      lines.push("Total: " + fmt(o.total));
+      lines.push("");
+    }
+    lines.push("This permanently removes it from the dashboard and the reports. Use it to clear test or mistaken orders.");
+    if (!confirm(lines.join("\n"))) return;
     fetch(BACKEND + "/orders/" + encodeURIComponent(id), { method: "DELETE", headers: { Authorization: "Bearer " + token } })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
@@ -399,18 +557,71 @@
 
   window.switchView = function (which) {
     view = which;
-    ["today", "week", "all"].forEach(function (v) {
+    ["today", "week", "all", "custom"].forEach(function (v) {
       var t = document.getElementById("tab-" + v);
       if (t) { t.classList.toggle("active", v === which); t.setAttribute("aria-selected", v === which); }
     });
     render();
   };
 
+  // ── Calendar range controls ──
+  window.quickRange = function (which) {
+    var now = new Date(), from, to = now;
+    if (which === "this-week") { from = mondayOf(now); }
+    else if (which === "last-week") { var m = mondayOf(now); m.setDate(m.getDate() - 7); from = m; to = endOfDay(new Date(m.getFullYear(), m.getMonth(), m.getDate() + 6)); }
+    else if (which === "this-month") { from = new Date(now.getFullYear(), now.getMonth(), 1); }
+    else if (which === "last-month") { from = new Date(now.getFullYear(), now.getMonth() - 1, 1); to = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0)); }
+    else { return; }
+    customQuick = which; customFrom = isoDateTime(from); customTo = isoDateTime(to); render();
+  };
+  window.snapWeek = function (v) {
+    if (!v) return; var d = new Date(v + "T00:00"); if (isNaN(d)) return;
+    var mon = mondayOf(d), sun = endOfDay(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6));
+    customQuick = ""; customFrom = isoDateTime(mon); customTo = isoDateTime(sun); render();
+  };
+  window.setFrom = function (v) { customQuick = ""; customFrom = v; render(); };
+  window.setTo = function (v) { customQuick = ""; customTo = v; render(); };
+
+  // ── Monthly developer-fee chart controls ──
+  window.feeQuick = function (n) {
+    var now = new Date(); feeQuickSel = n; feeTo = isoDate(now);
+    if (n === "ytd") { feeFrom = isoDate(new Date(now.getFullYear(), 0, 1)); }
+    else if (n === "all") {
+      var earliest = ALL.reduce(function (min, o) { var t = new Date(o.createdAt).getTime(); return isNaN(t) ? min : Math.min(min, t); }, Infinity);
+      feeFrom = isFinite(earliest) ? isoDate(new Date(earliest)) : isoDate(new Date(now.getFullYear(), now.getMonth() - 5, 1));
+    } else { feeFrom = isoDate(new Date(now.getFullYear(), now.getMonth() - (n - 1), 1)); }
+    render();
+  };
+  window.setFeeFrom = function (v) { feeQuickSel = ""; feeFrom = v; render(); };
+  window.setFeeTo = function (v) { feeQuickSel = ""; feeTo = v; render(); };
+
   window.reload = function () { fetchOrders(); };
 
   function sigOf(arr) { return arr.length + ":" + (arr[0] ? arr[0].id : "") + ":" + (arr[0] ? (arr[0].paymentStatus || "") + arr[0].status : ""); }
 
+  // ── Loading-state ticker (FEEDBACK-5): time-since-fetch + a Retry button after 10s ──
+  function tickLoading() {
+    var box = document.getElementById("loadingBox");
+    if (!box) { stopLoadingTicker(); return; } // loading box gone (rendered) → stop
+    var secs = Math.max(0, Math.round((Date.now() - fetchStartedAt) / 1000));
+    var meta = document.getElementById("loadingMeta");
+    var retry = document.getElementById("loadingRetry");
+    if (meta) meta.textContent = "Fetching for " + secs + "s…";
+    if (retry && secs >= 10) retry.style.display = "block";
+  }
+  function startLoadingTicker() {
+    stopLoadingTicker();
+    if (!document.getElementById("loadingBox")) return; // only while still loading (pre-first-render)
+    tickLoading();
+    loadingTimer = setInterval(tickLoading, 1000);
+  }
+  function stopLoadingTicker() {
+    if (loadingTimer) { clearInterval(loadingTimer); loadingTimer = null; }
+  }
+
   function fetchOrders() {
+    fetchStartedAt = Date.now();
+    startLoadingTicker();
     return fetch(BACKEND + "/orders", { headers: { Authorization: "Bearer " + token } })
       .then(function (r) {
         if (!r.ok) {
@@ -427,7 +638,8 @@
           if (sig !== lastSig) { lastSig = sig; render(); }
         });
       })
-      .catch(function () { loadError = "Couldn't reach the server."; render(); });
+      .catch(function () { loadError = "Couldn't reach the server."; render(); })
+      .finally(function () { stopLoadingTicker(); });
   }
 
   fetchOrders();
