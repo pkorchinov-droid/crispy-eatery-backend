@@ -150,7 +150,8 @@ const state = {
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
-  switcherOpen:false, settingsOpen:false, tender:null, importOpen:false,
+  switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
+  promos:null, promoMsg:'', addDishMsg:'',
   loginErr:'', lastLogin:'', setMsg:'',
   loading:{ orders:false, menu:false, reports:false },
   err:{},
@@ -631,7 +632,8 @@ function appHTML(){
     + bottomNavHTML() + '</div>'
     + (state.settingsOpen ? settingsHTML() : '')
     + (state.tender ? tenderHTML() : '')
-    + (state.importOpen ? importHTML() : '');
+    + (state.importOpen ? importHTML() : '')
+    + (state.addDishOpen ? addDishHTML() : '');
 }
 
 function errBox(msg){
@@ -712,6 +714,68 @@ function accentSwatches(){
   html += '<button data-act="setAccent" data-val="" title="Café brand" style="flex:1;height:36px;border-radius:9px;cursor:pointer;border:2px solid '+(!curv?'var(--ink)':'transparent')+';outline:1px solid var(--border);background:'+brand+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;">★</button>';
   return html;
 }
+/* ───────── promo codes (settings section) ───────── */
+function promoCatLabel(slug){ const cats=menuCategoriesOrdered(); for(let i=0;i<cats.length;i++){ if(!cats[i].virtual && cats[i].key===slug) return cats[i].label; } return slug; }
+function promoItemName(id){ const m=state.menu; if(!m||!m.categories) return id; const ord=m.categoryOrder||Object.keys(m.categories); for(let i=0;i<ord.length;i++){ const c=m.categories[ord[i]]; if(!c) continue; const it=(c.items||[]).find(function(x){return x.id===id;}); if(it) return it.name; } return id; }
+function promoScopeLabel(p){ const s=p.target&&p.target.scope, ref=p.target&&p.target.ref; if(s==='order') return 'Whole order'; if(s==='honeycake') return 'Priciest honeycake'; if(s==='category') return 'Category · '+promoCatLabel(ref); if(s==='item') return 'Item · '+promoItemName(ref); return s||'—'; }
+// Pull the editable fields of every promo row from the DOM back into state.promos
+// (target stays as-is — it isn't editable per-row). Called before any re-render so
+// in-progress edits survive add/delete, and before Save.
+function readPromoRows(){
+  if(!Array.isArray(state.promos)) return;
+  for(let i=0;i<state.promos.length;i++){
+    const p=state.promos[i];
+    const codeEl=document.getElementById('prow-'+i+'-code'); if(codeEl) p.code=codeEl.value.trim().toUpperCase();
+    const lblEl=document.getElementById('prow-'+i+'-label'); if(lblEl) p.label=lblEl.value;
+    const modeEl=document.getElementById('prow-'+i+'-mode'); if(modeEl){ p.discount=p.discount||{}; p.discount.mode=modeEl.value; }
+    const valEl=document.getElementById('prow-'+i+'-value'); if(valEl){ p.discount=p.discount||{}; p.discount.value=Number(valEl.value); }
+    const enEl=document.getElementById('prow-'+i+'-en'); if(enEl) p.enabled=enEl.checked;
+  }
+}
+function promoSettingsHTML(){
+  const inp = "width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--input);font-size:13px;color:var(--ink);outline:none;box-sizing:border-box;";
+  const sectionLbl = "font-family:'Fraunces',serif;font-style:italic;font-size:18px;margin-bottom:6px;color:var(--ink);";
+  if(!Array.isArray(state.promos)) state.promos = JSON.parse(JSON.stringify(cfg().promos||[]));
+  const modeOpt = function(cur){ return '<option value="percent"'+(cur!=='amount'?' selected':'')+'>% off</option><option value="amount"'+(cur==='amount'?' selected':'')+'>$ off</option>'; };
+  const rows = state.promos.map(function(p,i){
+    return '<div style="border:1px solid var(--border);border-radius:11px;padding:11px;margin-bottom:9px;background:var(--input);">'
+      + '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">'
+        + '<input id="prow-'+i+'-code" value="'+esc(p.code||'')+'" autocapitalize="characters" autocorrect="off" spellcheck="false" style="flex:1;'+inp+'text-transform:uppercase;font-weight:600;letter-spacing:.04em;">'
+        + '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);white-space:nowrap;cursor:pointer;"><input type="checkbox" id="prow-'+i+'-en"'+(p.enabled!==false?' checked':'')+'> On</label>'
+        + '<button data-act="promoDelete" data-idx="'+i+'" title="Delete code" style="background:none;border:none;color:var(--neg);font-size:19px;line-height:1;cursor:pointer;padding:0 4px;">×</button>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;">'
+        + '<select id="prow-'+i+'-mode" style="'+inp+'width:auto;">'+modeOpt(p.discount&&p.discount.mode)+'</select>'
+        + '<input id="prow-'+i+'-value" type="number" min="0" step="0.5" value="'+esc(p.discount&&p.discount.value)+'" style="'+inp+'width:78px;">'
+        + '<span style="font-size:11.5px;color:var(--muted2);flex:1;text-align:right;">'+esc(promoScopeLabel(p))+'</span>'
+      + '</div>'
+      + '<input id="prow-'+i+'-label" value="'+esc(p.label||'')+'" placeholder="Label shown on the bill (optional)" style="margin-top:8px;'+inp+'">'
+    + '</div>';
+  }).join('') || '<div style="font-size:12.5px;color:var(--muted2);margin-bottom:10px;">No promo codes yet. Add one below.</div>';
+
+  const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const catOpts = cats.map(function(c){ return '<option value="'+esc(c.key)+'">'+esc(c.label)+'</option>'; }).join('');
+  let itemOpts = '';
+  cats.forEach(function(c){ (c.items||[]).forEach(function(it){ if(it&&it.id) itemOpts += '<option value="'+esc(it.id)+'">'+esc(it.name)+' · '+esc(c.label)+'</option>'; }); });
+  const scopeToggle = "var s=this.value;document.getElementById('pr-cat-wrap').style.display=s==='category'?'block':'none';document.getElementById('pr-item-wrap').style.display=s==='item'?'block':'none';";
+  const addForm = '<div style="border:1px dashed var(--border);border-radius:11px;padding:12px;margin-top:4px;">'
+    + '<div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:9px;">Add a code</div>'
+    + '<input id="pr-code" placeholder="CODE — e.g. SUMMER10" autocapitalize="characters" autocorrect="off" spellcheck="false" style="'+inp+'text-transform:uppercase;">'
+    + '<div style="display:flex;gap:8px;margin-top:8px;"><select id="pr-mode" style="'+inp+'flex:1;"><option value="percent">% off</option><option value="amount">$ off</option></select><input id="pr-value" type="number" min="0" step="0.5" placeholder="value" style="'+inp+'width:90px;"></div>'
+    + '<select id="pr-scope" onchange="'+scopeToggle+'" style="'+inp+'margin-top:8px;"><option value="order">Whole order</option><option value="category">A category</option><option value="item">A specific item</option></select>'
+    + '<div id="pr-cat-wrap" style="display:none;margin-top:8px;"><select id="pr-cat" style="'+inp+'">'+catOpts+'</select></div>'
+    + '<div id="pr-item-wrap" style="display:none;margin-top:8px;"><select id="pr-item" style="'+inp+'">'+itemOpts+'</select></div>'
+    + '<input id="pr-label" placeholder="Label (optional)" style="'+inp+'margin-top:8px;">'
+    + '<button data-act="promoAddRow" style="width:100%;margin-top:10px;padding:10px;border-radius:9px;border:1px solid var(--border);background:var(--surface);color:var(--accent);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;">+ Add code</button>'
+  + '</div>';
+
+  return '<div style="'+sectionLbl+'margin-top:26px;">Promo Codes</div>'
+    + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Codes customers type at checkout. Edit a code or its discount inline, toggle it on/off, or add new ones. Discounts are applied on the server.</div>'
+    + rows + addForm
+    + '<div id="promo-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:'+(state.promoMsg==='Saved'?'var(--pos)':'var(--neg)')+';">'+esc(state.promoMsg)+'</div>'
+    + '<button data-act="savePromos" style="width:100%;margin-top:4px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save promo codes</button>';
+}
+
 function settingsHTML(){
   const inp = "width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;";
   const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;";
@@ -747,6 +811,7 @@ function settingsHTML(){
           + '<div style="display:flex;gap:10px;margin-top:10px;"><div style="flex:1;"><label style="'+lbl+'">% per visit</label><input id="loy-ppv" type="number" min="0" max="100" step="0.5" value="'+esc(fr.percentPerVisit!=null?fr.percentPerVisit:1)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Max %</label><input id="loy-max" type="number" min="0" max="100" value="'+esc(fr.maxPercent!=null?fr.maxPercent:15)+'" style="'+inp+'"></div></div>'
           + '<button data-act="saveLoyalty" style="width:100%;margin-top:16px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save loyalty</button>';
       })()
+    + promoSettingsHTML()
     + (printerSetupAvailable() ? (
         '<div style="'+sectionLbl+'margin-top:26px;">Printers</div>'
       + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:8px;line-height:1.55;">Station printer addresses for <b style="color:var(--ink);">'+esc((state.cafe&&state.cafe.name)||'this café')+'</b> — saved to the café, shared by every device. 🖨 routes food→Kitchen · drinks→Barista · all→Expo; 🧾 receipt→Receipt.</div>'
@@ -782,6 +847,31 @@ function importHTML(){
     + '<div style="font-size:12.5px;color:var(--muted2);line-height:1.55;margin-bottom:12px;">Paste the dish definitions (JSON) you were given, then tap Import. Dishes already on the menu are skipped, so it’s safe to re-run.</div>'
     + '<textarea id="imp-json" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder=\'[ { "categorySlug": "all-day", "name": "Crispy Breakfast", "price": 30.9, "desc": "..." } ]\' style="width:100%;height:200px;border:1px solid var(--border);border-radius:10px;background:var(--input);color:var(--ink);font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.5;padding:12px;outline:none;resize:vertical;"></textarea>'
     + '<button data-act="runImport" style="width:100%;margin-top:14px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Import</button>'
+    + '</div></div>';
+}
+
+/* ───────── add a dish ───────── */
+function addDishHTML(){
+  const inp = "width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;box-sizing:border-box;";
+  const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px;";
+  const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const catOpts = cats.map(function(c){ return '<option value="'+esc(c.key)+'">'+esc(c.label)+'</option>'; }).join('');
+  const tagOpts = [['','None'],['new','New'],['chef','Chef'],['popular','Popular']].map(function(o){ return '<option value="'+o[0]+'">'+o[1]+'</option>'; }).join('');
+  return '<div style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;">'
+    + '<div data-act="closeAddDish" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
+    + '<div style="position:relative;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">Add a dish</div><button data-act="closeAddDish" style="background:none;border:none;font-size:22px;line-height:1;color:var(--muted2);cursor:pointer;">×</button></div>'
+    + (cats.length ? (''
+      + '<label style="'+lbl+'margin-top:4px;">Category</label><select id="ad-cat" style="'+inp+'">'+catOpts+'</select>'
+      + '<label style="'+lbl+'">Name</label><input id="ad-name" maxlength="80" placeholder="e.g. Crispy Breakfast" style="'+inp+'">'
+      + '<label style="'+lbl+'">Price</label><input id="ad-price" type="number" min="0" step="0.1" placeholder="0.00" style="'+inp+'">'
+      + '<label style="'+lbl+'">Description (optional)</label><textarea id="ad-desc" maxlength="500" placeholder="Short description shown on the menu" style="'+inp+'height:64px;resize:vertical;"></textarea>'
+      + '<label style="'+lbl+'">Tag (optional)</label><select id="ad-tag" style="'+inp+'">'+tagOpts+'</select>'
+      + '<label style="'+lbl+'">Photo (optional)</label><input id="ad-photo" type="file" accept="image/*" style="'+inp+'padding:9px 13px;">'
+      + '<div style="font-size:11px;color:var(--muted2);margin-top:6px;line-height:1.5;">Sizes (e.g. Small/Large) can be set later in the full menu admin. The photo is uploaded after the dish is created.</div>'
+      + '<div id="ad-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:var(--neg);">'+esc(state.addDishMsg)+'</div>'
+      + '<button data-act="submitAddDish" style="width:100%;margin-top:6px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Add dish</button>'
+    ) : '<div style="font-size:13px;color:var(--muted);margin-top:14px;">Add a category first in the full menu admin, then you can add dishes to it here.</div>')
     + '</div></div>';
 }
 
@@ -1092,7 +1182,9 @@ function menuHTML(){
       + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(hasTag(cur,'new')?'Also shown first under “New on the Menu”.':'Adds a New badge and features it at the top of the menu.')+'</div></div>'
       + '<button data-act="saveItem" style="width:100%;margin-top:24px;padding:13px;border-radius:50px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.26em;font-weight:600;cursor:pointer;">Save changes</button>';
   }
-  const toolbar = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><button data-act="openImport" style="font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import dishes</button></div>';
+  const toolbar = '<div style="display:flex;justify-content:flex-end;gap:9px;margin-bottom:12px;">'
+    + '<button data-act="openAddDish" style="font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;border:none;background:var(--btn-bg);color:var(--btn-fg);cursor:pointer;">+ Add dish</button>'
+    + '<button data-act="openImport" style="font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import dishes</button></div>';
   return '<div class="menu-split" style="display:flex;height:100%;animation:fadeUp .35s ease;"><div style="flex:1;min-width:0;overflow-y:auto;padding:24px 26px 60px;">'+toolbar+list+'</div><div class="menu-aside" style="width:340px;flex-shrink:0;border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:24px 24px 50px;">'+editor+'</div></div>';
 }
 
@@ -1312,6 +1404,65 @@ async function saveLoyalty(){
     toast('Loyalty saved','ok'); render();
   } catch(e){ toast((e && e.message) || 'Could not save','err'); }
 }
+// Add a dish: create the item (POST /menu/items), then best-effort upload the
+// photo (POST /menu/items/:id/image). A failed photo upload keeps the dish.
+async function submitAddDish(){
+  const setMsg=function(m){ state.addDishMsg=m; const el=document.getElementById('ad-msg'); if(el) el.textContent=m; };
+  const categorySlug=val('ad-cat');
+  const name=val('ad-name').trim();
+  const price=Number(val('ad-price'));
+  if(!name){ setMsg('Enter a name.'); return; }
+  if(!isFinite(price)||price<0){ setMsg('Enter a valid price.'); return; }
+  const body={ categorySlug:categorySlug, name:name, price:price };
+  const desc=val('ad-desc').trim(); if(desc) body.desc=desc;
+  const tag=val('ad-tag'); if(tag) body.tags=[tag];
+  let created;
+  try { created=await api('/menu/items', { method:'POST', body:body }); }
+  catch(e){ setMsg(e.message||'Could not add dish'); return; }
+  // Best-effort photo upload.
+  const fileEl=document.getElementById('ad-photo');
+  const file=fileEl && fileEl.files && fileEl.files[0];
+  let photoWarn='';
+  if(file && created && created.item){
+    try {
+      const fd=new FormData(); fd.append('image', file);
+      const r=await fetch('/menu/items/'+enc(created.item.id)+'/image', { method:'POST', headers: SESSION?{ 'Authorization':'Bearer '+SESSION }:{}, body:fd });
+      if(!r.ok){ const t=await r.text(); let j=null; try{ j=JSON.parse(t); }catch(e){} photoWarn=(j&&j.error)||('photo upload failed ('+r.status+')'); }
+    } catch(e){ photoWarn=e.message||'photo upload failed'; }
+  }
+  state.addDishOpen=false; state.addDishMsg='';
+  await loadMenu();
+  if(created && created.item) selectItemById(created.item.id);
+  render();
+  toast(photoWarn ? ('Added '+name+' · '+photoWarn) : ('Added '+name), photoWarn?'info':'ok');
+}
+
+// Promo codes: read the add-form, append a working-copy row (Save commits all).
+function addPromoRow(){
+  readPromoRows();
+  const setMsg=function(m){ state.promoMsg=m; render(); };
+  const code=val('pr-code').trim().toUpperCase();
+  if(!code){ setMsg('Enter a code.'); return; }
+  const mode=val('pr-mode')||'percent';
+  const value=Number(val('pr-value'));
+  if(!isFinite(value)||value<=0){ setMsg('Enter a discount value.'); return; }
+  const scope=val('pr-scope')||'order';
+  const target={ scope:scope };
+  if(scope==='category'){ const c=val('pr-cat'); if(!c){ setMsg('Pick a category.'); return; } target.ref=c; }
+  if(scope==='item'){ const it=val('pr-item'); if(!it){ setMsg('Pick an item.'); return; } target.ref=it; }
+  state.promos.push({ code:code, label:val('pr-label').trim(), enabled:true, discount:{ mode:mode, value:value }, target:target });
+  state.promoMsg='';
+  render();
+}
+async function savePromos(){
+  readPromoRows();
+  try {
+    const d=await api('/me/promos', { method:'PATCH', body:{ promos: state.promos } });
+    if(state.cafe && state.cafe.config) state.cafe.config.promos=d.promos;
+    state.promos=JSON.parse(JSON.stringify(d.promos||[]));
+    state.promoMsg='Saved'; toast('Promo codes saved','ok'); render();
+  } catch(e){ state.promoMsg=(e&&e.message)||'Could not save'; toast(state.promoMsg,'err'); render(); }
+}
 async function emailBill(id){
   const o = state.orders.find(function(x){ return x.id===id; }); if(!o) return;
   const email = window.prompt('Email the receipt to:'); if(!email) return;
@@ -1412,6 +1563,9 @@ function handle(act, ds, ev){
     case 'openImport': state.importOpen=true; render(); break;
     case 'closeImport': state.importOpen=false; render(); break;
     case 'runImport': runImport(); break;
+    case 'openAddDish': state.addDishOpen=true; state.addDishMsg=''; render(); break;
+    case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; render(); break;
+    case 'submitAddDish': submitAddDish(); break;
     case 'billSelect': state.billSel=+ds.idx; render(); break;
     case 'openTender': state.tender=ds.id; render(); break;
     case 'tenderClose': state.tender=null; render(); break;
@@ -1419,12 +1573,15 @@ function handle(act, ds, ev){
     case 'applyDiscount': applyDiscount(ds.id); break;
     case 'redeemLoyalty': redeemLoyalty(ds.id); break;
     case 'saveLoyalty': saveLoyalty(); break;
+    case 'promoAddRow': addPromoRow(); break;
+    case 'promoDelete': readPromoRows(); state.promos.splice(+ds.idx,1); state.promoMsg=''; render(); break;
+    case 'savePromos': savePromos(); break;
     case 'emailBill': emailBill(ds.id); break;
     case 'repRange': repQuick(ds.val); break;
     case 'feeRange': feeQuick(ds.val); break;
     case 'toggleSwitcher': state.switcherOpen=!state.switcherOpen; render(); break;
     case 'switchCafe': switchCafe(ds.slug); break;
-    case 'openSettings': state.settingsOpen=true; state.setMsg=''; render(); break;
+    case 'openSettings': state.settingsOpen=true; state.setMsg=''; state.promos=JSON.parse(JSON.stringify(cfg().promos||[])); state.promoMsg=''; render(); break;
     case 'closeSettings': state.settingsOpen=false; state.setMsg=''; render(); break;
     case 'setAppearance': state.prefs.appearance=ds.val; lsSet(LS.prefs,state.prefs); applyTheme(); updateSeg('setAppearance',ds.val); refreshKitchenIfVisible(); break;
     case 'setAccent': state.prefs.accent=ds.val||null; lsSet(LS.prefs,state.prefs); applyTheme(); updateAccentSwatches(); refreshKitchenIfVisible(); break;
