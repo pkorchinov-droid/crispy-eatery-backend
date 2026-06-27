@@ -19,12 +19,13 @@ let filterMenuByTime;
 try { ({ filterMenuByTime } = require("./menu-availability")); }
 catch (e) { console.warn("[menu] availability module unavailable — time filtering disabled:", e && e.message); filterMenuByTime = (menu) => menu; }
 
-// Promo-code discounts (e.g. KATYUSHA — 50% off a honeycake). Same defensive
+// Promo-code discounts — per-tenant codes (config.promos), each %/$-off the
+// whole order, a category, an item, or the legacy honeycake. Same defensive
 // load as above: if the module is missing/broken, promo codes are simply
 // disabled rather than crash-looping the server.
-let computePromoDiscount, PROMOS;
-try { ({ computePromoDiscount, PROMOS } = require("./promo")); }
-catch (e) { console.warn("[promo] module unavailable — promo codes disabled:", e && e.message); computePromoDiscount = () => null; PROMOS = {}; }
+let computePromoDiscount, normalizePromos, LEGACY_KATYUSHA;
+try { ({ computePromoDiscount, normalizePromos, LEGACY_KATYUSHA } = require("./promo")); }
+catch (e) { console.warn("[promo] module unavailable — promo codes disabled:", e && e.message); computePromoDiscount = () => null; normalizePromos = (l) => (Array.isArray(l) ? l : []); LEGACY_KATYUSHA = null; }
 
 // Loyalty program (stamp card + frequent-customer standing discount). Same
 // defensive load: a missing/broken module disables loyalty rather than crash-looping.
@@ -708,6 +709,14 @@ function persistTenants() {
 }
 function getTenant(slug) { return TENANTS.get(normalizeSlug(slug)) || null; }
 function allTenants() { return [...TENANTS.values()]; }
+// A tenant's promo codes. Explicit config.promos wins; otherwise the default
+// (Crispy) tenant falls back to the carried-over KATYUSHA until its owner first
+// saves a promo list in the console. Every other café starts empty.
+function promosForTenant(t) {
+  if (t && t.config && Array.isArray(t.config.promos)) return t.config.promos;
+  if (t && t.slug === DEFAULT_TENANT && LEGACY_KATYUSHA) return [LEGACY_KATYUSHA];
+  return [];
+}
 function saveTenant(rec) {
   rec.config = mergeConfig(rec.config);
   TENANTS.set(rec.slug, rec);
@@ -1777,6 +1786,7 @@ app.get("/me", requireOwner, (req, res) => {
         gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
         features: c.features || {},
         loyalty: c.loyalty || {},
+        promos: promosForTenant(t),
       },
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
     },
@@ -1914,6 +1924,30 @@ app.patch("/me/loyalty", requireOwner, (req, res) => {
     t.config.loyalty = L;
     saveTenant(t);
     res.json({ success: true, loyalty: t.config.loyalty, enabled: !!t.config.features.loyalty });
+  });
+});
+
+// PATCH /me/promos — owner/console session. Replace THIS café's promo-code list
+// wholesale. Body: { promos: [ { code, label?, enabled?, discount:{mode,value},
+// target:{scope,ref?} }, ... ] }. normalizePromos validates every entry against
+// the café's live menu (codes unique, ranges sane, targets resolvable) and
+// throws a friendly message on the first problem → 400. Scoped to req.ownerSlug.
+app.patch("/me/promos", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const list = (req.body && Array.isArray(req.body.promos)) ? req.body.promos : null;
+  if (!list) return res.status(400).json({ error: "Send a promos array." });
+  let cleaned;
+  try {
+    cleaned = normalizePromos(list, tenantStore(t.slug).loadMenu());
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid promo codes." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.promos = cleaned;
+    saveTenant(t);
+    res.json({ success: true, promos: cleaned });
   });
 });
 
@@ -2185,9 +2219,12 @@ app.post("/order", resolveTenant, (req, res) => {
       // are derived from the AUTHORITATIVE menu / the server's stored counters.
       const now = new Date().toISOString();
       const adjustments = [];
-      // Promo code (e.g. KATYUSHA) — only the default tenant (Crispy) has any.
-      if (req.tenant.slug === DEFAULT_TENANT && req.body && req.body.promoCode) {
-        const disc = computePromoDiscount(req.body.promoCode, normalizedItems, menu);
+      // Promo code — look the submitted code up in this café's own promo list
+      // (enabled only) and let the engine derive the authoritative discount.
+      if (req.body && req.body.promoCode) {
+        const wanted = String(req.body.promoCode).trim().toUpperCase();
+        const promo = promosForTenant(req.tenant).find((p) => p && p.enabled !== false && String(p.code || "").toUpperCase() === wanted);
+        const disc = promo ? computePromoDiscount(promo, normalizedItems, menu) : null;
         if (disc) {
           order.promoCode = disc.code;
           adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: disc.label, amount: disc.amount, promo: disc.code, addedAt: now });
@@ -2445,10 +2482,21 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.features = c.features || {};
   out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
   out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
-  // Promo codes the customer SPA may offer at checkout. Only the default tenant
-  // (Crispy) has any today; every other tenant gets an empty map so the field
-  // never appears for them. The discount math stays server-side (POST /order).
-  out.promos = (req.tenant.slug === DEFAULT_TENANT) ? PROMOS : {};
+  // Promo codes the customer SPA may offer at checkout — built from THIS café's
+  // own list, enabled only, keyed by CODE with just the fields the cart preview
+  // needs. A café with no codes gets {} so the field never appears. The discount
+  // math stays server-side and authoritative (POST /order).
+  out.promos = {};
+  for (const p of promosForTenant(req.tenant)) {
+    if (!p || p.enabled === false || !p.code) continue;
+    out.promos[String(p.code).toUpperCase()] = {
+      label: p.label || String(p.code).toUpperCase(),
+      scope: p.target && p.target.scope,
+      ref: (p.target && p.target.ref) || undefined,
+      mode: p.discount && p.discount.mode,
+      value: p.discount && p.discount.value,
+    };
+  }
   // Loyalty program (public): lets the customer SPA render the card + standing
   // discount. Off cafés get { enabled:false }. Reward name resolved from the menu.
   if (loyaltyEnabled(c)) {
