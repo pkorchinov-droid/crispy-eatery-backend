@@ -146,6 +146,7 @@ function lsJSON(k){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v)
 const state = {
   ready:false, me:null, cafe:null, cafes:[], activeSlug:'',
   orders:[], menu:null, reportsToday:null, reportsYesterday:null, reportsWeek:null,
+  customers: [], custByEmail: {},
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
@@ -236,6 +237,7 @@ const NAV = [
   { id:'reports', label:'Reports', d:['M3 3v18h18','M7 14l3-3 3 3 5-7'] },
   { id:'menu', label:'Menu', d:['M6 3v18','M6 8c2.4 0 2.4-5 0-5','M18 3c-1.8 0-3 2-3 5s1.2 4 3 4','M18 12v9'] },
   { id:'billing', label:'Billing', d:['M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z','M9 8h6','M9 12h6','M9 16h4'] },
+  { id:'customers', label:'Regulars', d:['M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z','M3 20a6 6 0 0 1 12 0','M16 3.5a3 3 0 0 1 0 5.8','M21 20a6 6 0 0 0-4-5.6'] },
 ];
 
 /* ───────── theme application ───────── */
@@ -521,6 +523,14 @@ async function loadOrders(){
   }
   catch(e){ state.err.orders = e.message; }
 }
+async function loadCustomers(){
+  try {
+    const d = await api('/customers');
+    state.customers = (d && d.customers) || [];
+    state.custByEmail = {};
+    state.customers.forEach(function(c){ state.custByEmail[c.email] = c; });
+  } catch(e){ /* non-fatal */ }
+}
 async function loadReportsToday(){ try { state.reportsToday = await api('/reports/today'); state.err.reports=null; } catch(e){ state.err.reports = e.message; } }
 async function loadReportsYesterday(){ try { state.reportsYesterday = await api('/reports/yesterday'); } catch(e){ state.reportsYesterday = null; } }
 async function loadReportsWeek(){ try { state.reportsWeek = await api('/reports/week'); state.err.reports=null; } catch(e){ state.err.reports = e.message; } }
@@ -530,7 +540,8 @@ async function refreshActive(initial){
   const A = state.active;
   const jobs = [];
   if (A==='dashboard'){ jobs.push(loadOrders(), loadReportsToday(), loadReportsYesterday()); }
-  else if (A==='kitchen' || A==='billing'){ jobs.push(loadOrders()); }
+  else if (A==='kitchen' || A==='billing'){ jobs.push(loadOrders()); if (A==='billing') jobs.push(loadCustomers()); }
+  else if (A==='customers'){ jobs.push(loadCustomers()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='reports'){ jobs.push(loadReportsWeek(), loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='menu'){ jobs.push(loadMenu()); } // reload each entry → unsaved local edits discarded
   await Promise.all(jobs);
@@ -604,8 +615,9 @@ function appHTML(){
     reports:['Reports & Analytics', 'Last 7 days'],
     menu:['Menu', menuItemCount()+' items · tap to edit'],
     billing:['Billing','Take payment & print receipts'],
+    customers:['Regulars', (state.customers||[]).length+' loyalty members'],
   };
-  const screens = { dashboard:dashboardHTML, kitchen:kitchenHTML, reports:reportsHTML, menu:menuHTML, billing:billingHTML };
+  const screens = { dashboard:dashboardHTML, kitchen:kitchenHTML, reports:reportsHTML, menu:menuHTML, billing:billingHTML, customers:customersHTML };
   let body;
   try { body = screens[A](); } catch(e){ body = errBox('Something went wrong rendering this screen: '+e.message); }
   return '<div class="app-shell" style="display:flex;height:100vh;width:100%;overflow:hidden;">'
@@ -720,6 +732,21 @@ function settingsHTML(){
     + '<label style="'+lbl+'margin-top:14px;">Accent colour</label><div style="display:flex;gap:8px;">'+accentSwatches()+'</div>'
     + '<div style="font-size:11px;color:var(--muted2);margin-top:7px;">★ = this café’s brand colour. A pick overrides it until you switch cafés.</div>'
     + '<label style="'+lbl+'margin-top:14px;">Density</label><div style="display:flex;gap:8px;">'+seg('setDensity',state.prefs.density,['Dense','Standard','Spacious'])+'</div>'
+    + (function(){
+        var L = cfg().loyalty || {}; var fr = L.frequent || {};
+        var enabled = !!(cfg().features && cfg().features.loyalty);
+        var opts = '<option value="">— none (stamp card off) —</option>';
+        var menu = state.menu || {}; var order = menu.categoryOrder || [];
+        for (var oi=0; oi<order.length; oi++){ var cat = (menu.categories||{})[order[oi]]; if(!cat) continue; var items = cat.items||[]; for (var ii=0; ii<items.length; ii++){ var it=items[ii]; if(!it||!it.id) continue; opts += '<option value="'+esc(it.id)+'"'+(L.rewardItemId===it.id?' selected':'')+'>'+esc(it.name||it.id)+'</option>'; } }
+        return '<div style="'+sectionLbl+'margin-top:26px;">Loyalty Program</div>'
+          + '<label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink);cursor:pointer;margin-bottom:14px;"><input type="checkbox" id="loy-enabled"'+(enabled?' checked':'')+'> Enable loyalty program</label>'
+          + '<label style="'+lbl+'">Stamps per free item</label><input id="loy-stamps" type="number" min="1" max="100" value="'+esc(L.stampsNeeded||10)+'" style="'+inp+'">'
+          + '<label style="'+lbl+'margin-top:14px;">Reward item (free when card is full)</label><select id="loy-reward" style="'+inp+'">'+opts+'</select>'
+          + (enabled && !L.rewardItemId ? '<div style="font-size:11.5px;color:var(--accent);margin-top:6px;">Pick a reward item to activate the stamp card.</div>' : '')
+          + '<label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink);cursor:pointer;margin-top:16px;"><input type="checkbox" id="loy-fenabled"'+((fr.enabled!==false)?' checked':'')+'> Frequent-customer standing discount</label>'
+          + '<div style="display:flex;gap:10px;margin-top:10px;"><div style="flex:1;"><label style="'+lbl+'">% per visit</label><input id="loy-ppv" type="number" min="0" max="100" step="0.5" value="'+esc(fr.percentPerVisit!=null?fr.percentPerVisit:1)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Max %</label><input id="loy-max" type="number" min="0" max="100" value="'+esc(fr.maxPercent!=null?fr.maxPercent:15)+'" style="'+inp+'"></div></div>'
+          + '<button data-act="saveLoyalty" style="width:100%;margin-top:16px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save loyalty</button>';
+      })()
     + (printerSetupAvailable() ? (
         '<div style="'+sectionLbl+'margin-top:26px;">Printers</div>'
       + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:8px;line-height:1.55;">Station printer addresses for <b style="color:var(--ink);">'+esc((state.cafe&&state.cafe.name)||'this café')+'</b> — saved to the café, shared by every device. 🖨 routes food→Kitchen · drinks→Barista · all→Expo; 🧾 receipt→Receipt.</div>'
@@ -1120,12 +1147,56 @@ function billingHTML(){
     + '<div style="text-align:center;margin-top:24px;padding-top:18px;border-top:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.32em;color:var(--muted);line-height:2;">'+esc(cafeAddress())+'</div></div></div>';
 
   function actBtn(act,label,style){ return '<button data-act="'+act+'" data-id="'+esc(b.id)+'" style="width:100%;margin-top:10px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--input);color:'+(style||'var(--ink)')+';font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;">'+label+'</button>'; }
+  const __lc = (b.loyaltyEmail && state.custByEmail) ? state.custByEmail[b.loyaltyEmail] : null;
+  const __lcL = (__lc && __lc.loyalty) || null;
+  const __stampsNeeded = (cfg().loyalty && cfg().loyalty.stampsNeeded) || 10;
+  const __hasReward = !!(__lcL && (__lcL.rewardsAvailable||0) >= 1);
+  const __activeRedemption = !!(b.loyaltyRedemption && !b.loyaltyRedemption.consumed);
+  const __loyaltyBlock = b.loyaltyEmail
+    ? '<div style="margin-top:14px;padding:12px;border-radius:12px;background:var(--accent-tint);border:1px solid var(--border);">'
+      + '<div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px;">★ '+esc(b.loyaltyEmail)+'</div>'
+      + '<div style="font-size:12px;color:var(--muted);">'
+      + ((__lc && __lc.standingDiscountPercent) ? (__lc.standingDiscountPercent+'% standing · ') : '')
+      + (__lcL ? ((__lcL.stamps||0)+'/'+__stampsNeeded+' stamps · '+(__lcL.rewardsAvailable||0)+' reward(s)') : 'loyalty member')
+      + '</div>'
+      + ((!paid && __hasReward && !__activeRedemption) ? actBtn('redeemLoyalty','★ Redeem free item','var(--accent)')
+         : (__activeRedemption ? '<div style="font-size:11.5px;color:var(--pos);margin-top:8px;">Free item applied ✓</div>' : ''))
+      + '</div>'
+    : '';
   const markPaid = paid ? '<button disabled style="width:100%;padding:13px;border-radius:10px;border:none;font-family:inherit;font-size:13.5px;font-weight:600;background:rgba(90,99,64,.18);color:var(--pos);">Payment received ✓</button>'
     : '<button data-act="openTender" data-id="'+esc(b.id)+'" style="width:100%;padding:13px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;background:var(--btn-bg);color:var(--btn-fg);">Mark as paid</button>';
   const printRcpt = PRINTING_ENABLED ? actBtn('printReceipt','🧾 Print receipt') : '';
-  const staff = '<div style="width:260px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Staff actions</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;">'+markPaid+printRcpt+actBtn('emailBill','Email receipt')+actBtn('applyDiscount','Apply discount','var(--accent)')+'</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.6;margin-top:14px;">Mark as paid records the tender (cash/card) on the order.'+(PRINTING_ENABLED?' 🧾 prints the GST tax invoice.':'')+'</div></div>';
+  const staff = '<div style="width:260px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Staff actions</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;">'+markPaid+printRcpt+actBtn('emailBill','Email receipt')+actBtn('applyDiscount','Apply discount','var(--accent)')+__loyaltyBlock+'</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.6;margin-top:14px;">Mark as paid records the tender (cash/card) on the order.'+(PRINTING_ENABLED?' 🧾 prints the GST tax invoice.':'')+'</div></div>';
 
   return '<div class="bill-split" style="display:flex;gap:36px;padding:34px 30px 60px;justify-content:center;align-items:flex-start;animation:fadeUp .35s ease;"><div style="width:300px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Open bills</div>'+openBills+'</div>'+phone+staff+'</div>';
+}
+
+function customersHTML(){
+  const sn = (cfg().loyalty && cfg().loyalty.stampsNeeded) || 10;
+  const list = (state.customers||[]).slice();
+  const rows = list.length ? list.map(function(c){
+    const L = c.loyalty || {};
+    const visits = L.lifetimeStamps != null ? L.lifetimeStamps : (c.visits||0);
+    const disc = c.standingDiscountPercent || 0;
+    return '<tr style="border-bottom:1px solid var(--border);">'
+      + '<td style="padding:11px 10px;font-size:13px;color:var(--ink);">'+esc(c.email)+'</td>'
+      + '<td style="padding:11px 10px;font-size:13px;color:var(--muted);text-align:center;">'+visits+'</td>'
+      + '<td style="padding:11px 10px;font-size:13px;color:var(--muted);text-align:center;">'+(L.stamps||0)+'/'+sn+'</td>'
+      + '<td style="padding:11px 10px;font-size:13px;text-align:center;color:'+((L.rewardsAvailable||0)>0?'var(--pos)':'var(--muted2)')+';">'+(L.rewardsAvailable||0)+'</td>'
+      + '<td style="padding:11px 10px;font-size:13px;text-align:center;color:'+(disc>0?'var(--accent)':'var(--muted2)')+';">'+(disc>0?disc+'%':'—')+'</td>'
+      + '<td style="padding:11px 10px;font-size:13px;color:var(--muted);text-align:right;">'+money(c.totalSpent||0)+'</td>'
+      + '</tr>';
+  }).join('') : '<tr><td colspan="6" style="padding:32px;text-align:center;color:var(--muted2);font-size:13px;">No loyalty members yet.</td></tr>';
+  return '<div style="padding:30px;animation:fadeUp .35s ease;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);margin-bottom:18px;">Regulars</div>'
+    + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="background:var(--surface2);">'
+    + '<th style="padding:11px 10px;text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Customer</th>'
+    + '<th style="padding:11px 10px;text-align:center;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Visits</th>'
+    + '<th style="padding:11px 10px;text-align:center;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Stamps</th>'
+    + '<th style="padding:11px 10px;text-align:center;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Rewards</th>'
+    + '<th style="padding:11px 10px;text-align:center;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Discount</th>'
+    + '<th style="padding:11px 10px;text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);">Spent</th>'
+    + '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1220,6 +1291,26 @@ async function applyDiscount(id){
   const amount = Number(raw); if(isNaN(amount)){ toast('Not a number','err'); return; }
   try { await api('/orders/'+enc(id)+'/adjust', { method:'POST', body:{ label, amount } }); toast('Adjustment added','ok'); await loadOrders(); render(); }
   catch(e){ toast(e.message,'err'); }
+}
+async function redeemLoyalty(id){
+  try { await api('/orders/'+encodeURIComponent(id)+'/redeem-loyalty', { method:'POST' }); toast('Free item redeemed','ok'); await Promise.all([loadOrders(), loadCustomers()]); render(); }
+  catch(e){ toast((e && e.message) || 'Could not redeem','err'); }
+}
+async function saveLoyalty(){
+  var g = function(id){ var el=document.getElementById(id); return el; };
+  var body = {
+    enabled: g('loy-enabled') ? g('loy-enabled').checked : undefined,
+    stampsNeeded: g('loy-stamps') ? Number(g('loy-stamps').value) : undefined,
+    rewardItemId: g('loy-reward') ? (g('loy-reward').value || null) : undefined,
+    frequentEnabled: g('loy-fenabled') ? g('loy-fenabled').checked : undefined,
+    percentPerVisit: g('loy-ppv') ? Number(g('loy-ppv').value) : undefined,
+    maxPercent: g('loy-max') ? Number(g('loy-max').value) : undefined,
+  };
+  try {
+    const d = await api('/me/loyalty', { method:'PATCH', body: body });
+    if (state.cafe && state.cafe.config){ state.cafe.config.loyalty = d.loyalty; state.cafe.config.features = state.cafe.config.features || {}; state.cafe.config.features.loyalty = !!d.enabled; }
+    toast('Loyalty saved','ok'); render();
+  } catch(e){ toast((e && e.message) || 'Could not save','err'); }
 }
 async function emailBill(id){
   const o = state.orders.find(function(x){ return x.id===id; }); if(!o) return;
@@ -1326,6 +1417,8 @@ function handle(act, ds, ev){
     case 'tenderClose': state.tender=null; render(); break;
     case 'tenderPay': tenderPay(ds.method); break;
     case 'applyDiscount': applyDiscount(ds.id); break;
+    case 'redeemLoyalty': redeemLoyalty(ds.id); break;
+    case 'saveLoyalty': saveLoyalty(); break;
     case 'emailBill': emailBill(ds.id); break;
     case 'repRange': repQuick(ds.val); break;
     case 'feeRange': feeQuick(ds.val); break;
