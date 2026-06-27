@@ -10,7 +10,7 @@
 <style>
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;}
-  body{font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg,#ebe2d2);color:var(--ink,#2b1f17);-webkit-font-smoothing:antialiased;transition:background .2s ease;}
+  body{font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg,#1a1510);color:var(--ink,#f4ede0);-webkit-font-smoothing:antialiased;transition:background .2s ease;}
   input{font-family:inherit;}
   ::-webkit-scrollbar{width:10px;height:10px;}
   ::-webkit-scrollbar-thumb{background:rgba(127,110,90,.3);border-radius:8px;border:2px solid transparent;background-clip:padding-box;}
@@ -74,13 +74,13 @@ const ACCENTS = {
   Plum:       { a:'#8a4f7e', d:'#6d3c63', l:'#c08fb5', tint:'#f7eef5', tintDark:'#352433' },
 };
 const KDS = {
-  Midnight: { bg:'#14110e', panel:'#1d1812', line:'#3a3026', ink:'#f3ead9', muted:'#a99176', accent:'#e8c477' },
+  Midnight: { bg:'#1a1510', panel:'#2a2318', line:'#3d3428', ink:'#f4ede0', muted:'#d8c9a8', accent:'#e8c477' },
   Charcoal: { bg:'#16181c', panel:'#21242b', line:'#363b45', ink:'#eef1f5', muted:'#9aa3b0', accent:'#e8c477' },
   Daylight: { bg:'#e7ddcb', panel:'#fbf6ec', line:'#ddd0b6', ink:'#2b1f17', muted:'#8a7558', accent:'#b9852f' },
 };
 const APPEARANCE = {
   Light:    { bg:'#ebe2d2', surface:'#fbf6ec', surface2:'#f4ede0', border:'#e6dcc7', topbarLine:'#e0d4bd', ink:'#2b1f17', muted:'#8a7558', muted2:'#a8997f', track:'#ece1cd', divider:'#e2d6bf', input:'#ffffff', btnBg:'#2b1f17', btnFg:'#f4ede0', phone:'#2b1f17', pos:'#5a6340', neg:'#a84a2e', kds:'Daylight' },
-  Dark:     { bg:'#14110e', surface:'#1f1912', surface2:'#241d15', border:'#3a3026', topbarLine:'#3a3026', ink:'#f3ead9', muted:'#b6a489', muted2:'#94836a', track:'#2a2118', divider:'#34291d', input:'#26201a', btnBg:'#f3ead9', btnFg:'#1f1912', phone:'#0b0906', pos:'#8fb36a', neg:'#e0875f', kds:'Midnight' },
+  Dark:     { bg:'#1a1510', surface:'#2a2318', surface2:'#221c14', border:'#3d3428', topbarLine:'#3d3428', ink:'#f4ede0', muted:'#d8c9a8', muted2:'#b6a489', track:'#322a1e', divider:'#3d3428', input:'#211b14', btnBg:'#f4ede0', btnFg:'#2a2318', phone:'#0d0a07', pos:'#8fb36a', neg:'#e0875f', kds:'Midnight' },
   Charcoal: { bg:'#16181c', surface:'#21242b', surface2:'#1c1f25', border:'#363b45', topbarLine:'#363b45', ink:'#eef1f5', muted:'#9aa3b0', muted2:'#79828f', track:'#2b2f37', divider:'#2b2f37', input:'#262a31', btnBg:'#eef1f5', btnFg:'#21242b', phone:'#0c0d10', pos:'#8fb36a', neg:'#e0875f', kds:'Charcoal' },
 };
 const DENSITY = { Dense:0.85, Standard:1, Spacious:1.18 };
@@ -146,8 +146,9 @@ function lsJSON(k){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v)
 const state = {
   ready:false, me:null, cafe:null, cafes:[], activeSlug:'',
   orders:[], menu:null, reportsToday:null, reportsYesterday:null, reportsWeek:null,
+  rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
-  prefs:{ appearance:'Light', accent:null, density:'Standard' },
+  prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false,
   loginErr:'', lastLogin:'', setMsg:'',
   loading:{ orders:false, menu:false, reports:false },
@@ -244,7 +245,7 @@ function accentObj(){
   if (tc) return accentFromHex(tc);
   return ACCENTS.Terracotta;
 }
-function appearanceObj(){ return APPEARANCE[state.prefs.appearance] || APPEARANCE.Light; }
+function appearanceObj(){ return APPEARANCE[state.prefs.appearance] || APPEARANCE.Dark; }
 function kdsPalette(){ return KDS[appearanceObj().kds] || KDS.Midnight; }
 function applyTheme(){
   const r = document.documentElement.style;
@@ -530,7 +531,7 @@ async function refreshActive(initial){
   const jobs = [];
   if (A==='dashboard'){ jobs.push(loadOrders(), loadReportsToday(), loadReportsYesterday()); }
   else if (A==='kitchen' || A==='billing'){ jobs.push(loadOrders()); }
-  else if (A==='reports'){ jobs.push(loadReportsWeek()); if(!state.menu) jobs.push(loadMenu()); }
+  else if (A==='reports'){ jobs.push(loadReportsWeek(), loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='menu'){ jobs.push(loadMenu()); } // reload each entry → unsaved local edits discarded
   await Promise.all(jobs);
   render();
@@ -878,7 +879,107 @@ function kitchenContentHTML(){
   return '<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:20px;color:var(--kds-accent);">Kitchen Display</div><div style="font-size:12px;color:var(--kds-muted);">Tap a ticket to advance'+(printBtn?' · 🖨 prints to the stations':'')+'</div><div style="margin-left:auto;display:flex;gap:18px;">'+stats+'</div></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start;">'+board+'</div>';
 }
 
+/* ── Reports: custom sales range + monthly developer-fee chart ──
+   All client-side from state.orders (the full /orders history, refreshed every
+   poll). No backend change — each order already carries developerFee + total. */
+function rPad2(n){ return String(n).padStart(2,'0'); }
+function rIsoDate(d){ return d.getFullYear()+'-'+rPad2(d.getMonth()+1)+'-'+rPad2(d.getDate()); }
+function rIsoDT(d){ return rIsoDate(d)+'T'+rPad2(d.getHours())+':'+rPad2(d.getMinutes()); }
+function rMonday(d){ var x=new Date(d.getFullYear(),d.getMonth(),d.getDate()); var k=(x.getDay()+6)%7; x.setDate(x.getDate()-k); x.setHours(0,0,0,0); return x; }
+function rEod(d){ return new Date(d.getFullYear(),d.getMonth(),d.getDate(),23,59,59); }
+function rMonShort(y,m){ return new Date(y,m,1).toLocaleDateString('en-NZ',{month:'short',year:'2-digit'}); }
+function rScheme(){ return (state.prefs && state.prefs.appearance==='Light') ? 'light' : 'dark'; }
+function ensureRanges(){
+  if(!state.rep){ var n=new Date(); state.rep={ from:rIsoDT(rMonday(n)), to:rIsoDT(n), quick:'this-week' }; }
+  if(!state.fee){ var m=new Date(); state.fee={ from:rIsoDate(new Date(m.getFullYear(),m.getMonth()-5,1)), to:rIsoDate(m), quick:6 }; }
+}
+function ordersInRange(fromStr,toStr){
+  var f=fromStr?new Date(fromStr).getTime():-Infinity, t=toStr?new Date(toStr).getTime():Infinity;
+  if(isNaN(f))f=-Infinity; if(isNaN(t))t=Infinity;
+  return (state.orders||[]).filter(function(o){ var x=new Date(o.createdAt).getTime(); return !isNaN(x)&&x>=f&&x<=t; });
+}
+function rangeStats(list){
+  var rev=0,fee=0,paid=0;
+  list.forEach(function(o){ rev+=Number(o.total)||0; fee+=Number(o.developerFee)||0; if((o.paymentStatus||'')==='paid')paid++; });
+  return { count:list.length, rev:rev, fee:fee, paid:paid, avg:list.length?rev/list.length:0 };
+}
+// Day axis for the range chart: fill every calendar day when the span ≤ 45 days,
+// otherwise just the days that actually have orders (keeps wide ranges readable).
+function rangeDayBars(list,fromStr,toStr){
+  var byKey={};
+  list.forEach(function(o){ var d=new Date(o.createdAt); if(isNaN(d))return; var k=rIsoDate(d); if(!byKey[k])byKey[k]={rev:0,count:0}; byKey[k].rev+=Number(o.total)||0; byKey[k].count++; });
+  var f=fromStr?new Date(fromStr):null, t=toStr?new Date(toStr):null, keys=[];
+  if(f&&!isNaN(f)&&t&&!isNaN(t)){
+    var s=new Date(f.getFullYear(),f.getMonth(),f.getDate()), e=new Date(t.getFullYear(),t.getMonth(),t.getDate()), span=Math.round((e-s)/86400000)+1;
+    if(e>=s && span<=45){ for(var d=new Date(s),g=0; d<=e&&g++<60; d.setDate(d.getDate()+1)) keys.push(rIsoDate(d)); }
+  }
+  if(!keys.length) keys=Object.keys(byKey).sort();
+  return keys.map(function(k){ var d=new Date(k+'T00:00'); return { key:k, label:d.toLocaleDateString('en-NZ',{weekday:'short',day:'numeric'}), rev:(byKey[k]?byKey[k].rev:0), count:(byKey[k]?byKey[k].count:0) }; });
+}
+function feeMonths(){
+  var from=state.fee.from, to=state.fee.to;
+  var start=(from&&!isNaN(new Date(from+'T00:00')))?new Date(from+'T00:00'):new Date();
+  var end=(to&&!isNaN(new Date(to+'T00:00')))?new Date(to+'T00:00'):new Date();
+  var months=[],byKey={},y=start.getFullYear(),m=start.getMonth(),ey=end.getFullYear(),em=end.getMonth(),g=0;
+  while((y<ey||(y===ey&&m<=em))&&g++<120){ var b={key:y+'-'+rPad2(m+1),label:rMonShort(y,m),fee:0,count:0}; months.push(b); byKey[b.key]=b; m++; if(m>11){m=0;y++;} }
+  var fT=(from&&!isNaN(new Date(from+'T00:00')))?new Date(from+'T00:00').getTime():-Infinity;
+  var tT=(to&&!isNaN(new Date(to+'T00:00')))?rEod(new Date(to+'T00:00')).getTime():Infinity;
+  (state.orders||[]).forEach(function(o){ var d=new Date(o.createdAt),x=d.getTime(); if(isNaN(x)||x<fT||x>tT)return; var k=d.getFullYear()+'-'+rPad2(d.getMonth()+1); if(byKey[k]){byKey[k].fee+=Number(o.developerFee)||0;byKey[k].count++;} });
+  return months;
+}
+function rQuickBtn(act,val,label,curv){
+  var on=String(val)===String(curv);
+  return '<button data-act="'+act+'" data-val="'+esc(String(val))+'" style="padding:7px 12px;border:1px solid '+(on?'var(--accent)':'var(--border)')+';border-radius:9px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;background:'+(on?'var(--accent)':'var(--input)')+';color:'+(on?'#fff':'var(--muted)')+';">'+esc(label)+'</button>';
+}
+function rDateField(label,name,type,value){
+  return '<label style="display:flex;flex-direction:column;gap:5px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted2);font-weight:600;">'+esc(label)
+    +'<input type="'+type+'" data-input="'+name+'" value="'+esc(value)+'" style="color-scheme:'+rScheme()+';background:var(--input);color:var(--ink);border:1px solid var(--border);border-radius:9px;padding:8px 10px;font-family:inherit;font-size:13px;"></label>';
+}
+function customRangePanel(){
+  var r=state.rep, list=ordersInRange(r.from,r.to), s=rangeStats(list);
+  var dayLbl=(r.from&&!isNaN(new Date(r.from)))?rIsoDate(new Date(r.from)):rIsoDate(new Date());
+  var controls = '<div style="display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end;margin-bottom:20px;">'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+      + rQuickBtn('repRange','this-week','This week',r.quick) + rQuickBtn('repRange','last-week','Last week',r.quick)
+      + rQuickBtn('repRange','this-month','This month',r.quick) + rQuickBtn('repRange','last-month','Last month',r.quick)
+    + '</div>'
+    + rDateField('📅 Day → its week','repDay','date',dayLbl)
+    + rDateField('From','repFrom','datetime-local',r.from)
+    + rDateField('To','repTo','datetime-local',r.to)
+    + '</div>';
+  var kpiDefs=[['Orders',String(s.count),''],['Revenue',money(s.rev),s.count?'':'no sales'],['Avg ticket',money(s.avg),'per order'],['Developer fee',money(s.fee),'your fee'],['Paid',String(s.paid),s.count?Math.round(s.paid/s.count*100)+'%':'']];
+  var kpis=kpiDefs.map(function(k){ return '<div style="background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px 16px;"><div style="font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted2);">'+k[0]+'</div><div style="font-family:\'Fraunces\',serif;font-size:24px;font-weight:500;margin-top:7px;line-height:1;color:'+(k[0]==='Developer fee'?'var(--accent)':'var(--ink)')+';">'+k[1]+'</div>'+(k[2]?'<div style="font-size:11px;margin-top:6px;color:var(--muted2);">'+esc(k[2])+'</div>':'')+'</div>'; }).join('');
+  var bars=rangeDayBars(list,r.from,r.to);
+  var bmax=Math.max.apply(null,bars.map(function(b){return b.rev;}).concat([1]));
+  var chart = bars.length ? bars.map(function(b){ var hi=b.rev===bmax&&b.rev>0; var bw=bars.length>14?'min-width:34px;':''; return '<div style="flex:1;'+bw+'display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end;"><div style="font-family:\'Fraunces\',serif;font-size:11px;color:var(--muted);white-space:nowrap;">'+(b.rev>=1000?'$'+(b.rev/1000).toFixed(1)+'k':money(b.rev))+'</div><div title="'+esc(b.label)+' · '+b.count+' orders" style="width:100%;max-width:46px;height:'+Math.max(Math.round(b.rev/bmax*100),2)+'%;border-radius:7px 7px 3px 3px;background:'+(hi?'linear-gradient(180deg,var(--accent),var(--accent-d))':'linear-gradient(180deg,#dca877,#cf9a64)')+';"></div><div style="font-size:11px;color:var(--muted2);white-space:nowrap;">'+esc(b.label)+'</div></div>'; }).join('') : '<div style="color:var(--muted2);font-size:13px;margin:auto;">No sales in this range.</div>';
+  return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 24px;margin-bottom:18px;">'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);">Sales explorer</div><div style="font-size:12px;color:var(--muted2);">Pick any week or time window</div></div>'
+    + controls
+    + '<div class="kpi-grid" style="margin-bottom:20px;">'+kpis+'</div>'
+    + '<div style="overflow-x:auto;"><div style="display:flex;align-items:flex-end;gap:12px;height:180px;min-width:'+(bars.length>10?(bars.length*44):0)+'px;">'+chart+'</div></div>'
+    + '</div>';
+}
+function feeChartPanel(){
+  var f=state.fee, months=feeMonths();
+  var total=months.reduce(function(a,b){return a+b.fee;},0), orders=months.reduce(function(a,b){return a+b.count;},0);
+  var max=months.reduce(function(a,b){return Math.max(a,b.fee);},0)||1;
+  var controls='<div style="display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end;margin-bottom:20px;">'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+      + rQuickBtn('feeRange','6','Last 6 mo',f.quick) + rQuickBtn('feeRange','12','Last 12 mo',f.quick)
+      + rQuickBtn('feeRange','ytd','This year',f.quick) + rQuickBtn('feeRange','all','All time',f.quick)
+    + '</div>'
+    + rDateField('From','feeFrom','date',f.from) + rDateField('To','feeTo','date',f.to)
+    + '</div>';
+  var bars=months.length?months.map(function(b){ var hi=b.fee===max&&b.fee>0; return '<div style="flex:1;min-width:44px;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end;"><div style="font-family:\'Fraunces\',serif;font-size:12px;color:'+(b.fee?'var(--pos)':'var(--muted2)')+';white-space:nowrap;">'+(b.fee?money(b.fee):'')+'</div><div title="'+esc(b.label)+' · '+money(b.fee)+' · '+b.count+' orders" style="width:100%;max-width:46px;height:'+(b.fee>0?Math.max(Math.round(b.fee/max*100),3):1)+'%;border-radius:7px 7px 3px 3px;background:'+(hi?'linear-gradient(180deg,var(--accent),var(--accent-d))':'linear-gradient(180deg,#dca877,#cf9a64)')+';"></div><div style="font-size:11px;color:var(--muted2);white-space:nowrap;">'+esc(b.label)+'</div></div>'; }).join('') : '<div style="color:var(--muted2);font-size:13px;margin:auto;">No months in range.</div>';
+  return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 24px;margin-bottom:18px;">'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);">Developer fee income · monthly</div><div style="font-size:12px;color:var(--muted2);">'+orders+' order'+(orders===1?'':'s')+' · total <span style="color:var(--pos);font-weight:600;">'+money(total)+'</span></div></div>'
+    + controls
+    + '<div style="overflow-x:auto;"><div style="display:flex;align-items:flex-end;gap:14px;height:200px;min-width:'+(months.length*52)+'px;">'+bars+'</div></div>'
+    + '</div>';
+}
+
 function reportsHTML(){
+  ensureRanges();
   const rw = state.reportsWeek;
   if (!rw) return state.err.reports ? errBox(state.err.reports) : loadingBox('Loading reports…');
   const days = rw.days || [];
@@ -917,6 +1018,9 @@ function reportsHTML(){
   const pmPanel = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 24px;margin-top:18px;"><div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);">Payment methods</div><div style="font-size:12px;color:var(--muted2);">Paid '+money(rw.paidRevenue||0)+' of '+money(rw.totalRevenue)+'</div></div>'+pmRows+'</div>';
 
   return '<div class="pad-screen" style="padding:26px 30px 60px;max-width:1180px;animation:fadeUp .35s ease;">'
+    + customRangePanel()
+    + feeChartPanel()
+    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);margin:6px 2px 14px;">Last 7 days overview</div>'
     + '<div class="kpi-grid" style="margin-bottom:18px;">'+kpis+'</div>'
     + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 24px;margin-bottom:18px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;margin-bottom:22px;color:var(--ink);">Revenue this week</div><div style="display:flex;align-items:flex-end;gap:16px;height:200px;">'+weekly+'</div></div>'
     + '<div class="split-grid" style="grid-template-columns:1fr 1fr;">'
@@ -1124,6 +1228,35 @@ async function emailBill(id){
   catch(e){ toast(e.message,'err'); }
 }
 
+// ── Reports range controls (Sales explorer + monthly dev-fee chart) ──
+function repQuick(which){
+  ensureRanges();
+  var now=new Date(), from, to=now;
+  if(which==='this-week'){ from=rMonday(now); }
+  else if(which==='last-week'){ var m=rMonday(now); m.setDate(m.getDate()-7); from=m; to=rEod(new Date(m.getFullYear(),m.getMonth(),m.getDate()+6)); }
+  else if(which==='this-month'){ from=new Date(now.getFullYear(),now.getMonth(),1); }
+  else if(which==='last-month'){ from=new Date(now.getFullYear(),now.getMonth()-1,1); to=rEod(new Date(now.getFullYear(),now.getMonth(),0)); }
+  else return;
+  state.rep={ from:rIsoDT(from), to:rIsoDT(to), quick:which }; render();
+}
+function feeQuick(n){
+  ensureRanges();
+  var now=new Date(); var from, to=now;
+  if(n==='ytd'){ from=new Date(now.getFullYear(),0,1); }
+  else if(n==='all'){
+    var earliest=(state.orders||[]).reduce(function(min,o){ var t=new Date(o.createdAt).getTime(); return isNaN(t)?min:Math.min(min,t); }, Infinity);
+    from=isFinite(earliest)?new Date(earliest):new Date(now.getFullYear(),now.getMonth()-5,1);
+  } else { var k=Number(n)||6; from=new Date(now.getFullYear(),now.getMonth()-(k-1),1); }
+  state.fee={ from:rIsoDate(from), to:rIsoDate(to), quick:n }; render();
+}
+function handleInput(name,value){
+  ensureRanges();
+  if(name==='repFrom'){ state.rep.from=value; state.rep.quick=''; render(); }
+  else if(name==='repTo'){ state.rep.to=value; state.rep.quick=''; render(); }
+  else if(name==='repDay'){ if(!value)return; var d=new Date(value+'T00:00'); if(isNaN(d))return; var mo=rMonday(d), su=rEod(new Date(mo.getFullYear(),mo.getMonth(),mo.getDate()+6)); state.rep={ from:rIsoDT(mo), to:rIsoDT(su), quick:'' }; render(); }
+  else if(name==='feeFrom'){ state.fee.from=value; state.fee.quick=''; render(); }
+  else if(name==='feeTo'){ state.fee.to=value; state.fee.quick=''; render(); }
+}
 function setSettingsMsg(msg){ state.setMsg=msg; const el=document.getElementById('set-msg'); if(el){ el.textContent=msg; el.style.color = msg.indexOf('Saved')===0?'var(--pos)':msg.indexOf('Nothing')===0?'var(--muted)':'var(--neg)'; } }
 function updateSeg(act,curv){ document.querySelectorAll('[data-act="'+act+'"]').forEach(function(b){ const on=b.getAttribute('data-val')===curv; b.style.background=on?'var(--accent)':'var(--input)'; b.style.color=on?'#fff':'var(--muted)'; }); }
 function updateAccentSwatches(){ document.querySelectorAll('[data-act="setAccent"]').forEach(function(b){ b.style.border='2px solid '+(b.getAttribute('data-val')===(state.prefs.accent||'')?'var(--ink)':'transparent'); }); }
@@ -1194,6 +1327,8 @@ function handle(act, ds, ev){
     case 'tenderPay': tenderPay(ds.method); break;
     case 'applyDiscount': applyDiscount(ds.id); break;
     case 'emailBill': emailBill(ds.id); break;
+    case 'repRange': repQuick(ds.val); break;
+    case 'feeRange': feeQuick(ds.val); break;
     case 'toggleSwitcher': state.switcherOpen=!state.switcherOpen; render(); break;
     case 'switchCafe': switchCafe(ds.slug); break;
     case 'openSettings': state.settingsOpen=true; state.setMsg=''; render(); break;
@@ -1217,7 +1352,7 @@ async function doLoginFromForm(){
   finally { _loginBusy=false; }
 }
 function boot(){
-  const p=lsJSON(LS.prefs); if(p) state.prefs={ appearance:p.appearance||'Light', accent:p.accent||null, density:p.density||'Standard' };
+  const p=lsJSON(LS.prefs); if(p) state.prefs={ appearance:p.appearance||'Dark', accent:p.accent||null, density:p.density||'Standard' };
   state.lastLogin = lsGet(LS.last) || '';
   SESSION = lsGet(LS.session) || '';
 
@@ -1233,6 +1368,10 @@ function boot(){
     const f=e.target.closest('form[data-act]'); if(!f) return;
     e.preventDefault();
     if(f.getAttribute('data-act')==='login') doLoginFromForm();
+  });
+  root.addEventListener('change', function(e){
+    const el=e.target.closest('[data-input]'); if(!el) return;
+    handleInput(el.getAttribute('data-input'), el.value);
   });
 
   applyTheme();
