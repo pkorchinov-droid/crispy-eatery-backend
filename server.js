@@ -19,6 +19,13 @@ let filterMenuByTime;
 try { ({ filterMenuByTime } = require("./menu-availability")); }
 catch (e) { console.warn("[menu] availability module unavailable — time filtering disabled:", e && e.message); filterMenuByTime = (menu) => menu; }
 
+// Promo-code discounts (e.g. KATYUSHA — 50% off a honeycake). Same defensive
+// load as above: if the module is missing/broken, promo codes are simply
+// disabled rather than crash-looping the server.
+let computePromoDiscount, PROMOS;
+try { ({ computePromoDiscount, PROMOS } = require("./promo")); }
+catch (e) { console.warn("[promo] module unavailable — promo codes disabled:", e && e.message); computePromoDiscount = () => null; PROMOS = {}; }
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
@@ -1952,7 +1959,24 @@ app.post("/order", resolveTenant, (req, res) => {
         createdAt: new Date().toISOString(),
       };
       order.developerFee = developerFeeFor(req.tenant.config);
-      recomputeOrderTotal(order); // items + developer fee (no adjustments at creation)
+      // Promo code (e.g. KATYUSHA) — only the default tenant (Crispy) has any.
+      // The discount is computed here from the AUTHORITATIVE menu (never a
+      // client-sent amount) and seeded into the order's adjustments, so it flows
+      // into the bill total, the dashboard, and the GST receipt like any other.
+      if (req.tenant.slug === DEFAULT_TENANT && req.body && req.body.promoCode) {
+        const disc = computePromoDiscount(req.body.promoCode, normalizedItems, menu);
+        if (disc) {
+          order.promoCode = disc.code;
+          order.adjustments = [{
+            id: crypto.randomBytes(6).toString("hex"),
+            label: disc.label,
+            amount: disc.amount,
+            promo: disc.code,
+            addedAt: new Date().toISOString(),
+          }];
+        }
+      }
+      recomputeOrderTotal(order); // items + developer fee + any promo discount
       order.onlineSurcharge = orderSurcharge(normalizedItems, menu, req.tenant.config);
 
       orders.push(order);
@@ -2174,6 +2198,10 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.features = c.features || {};
   out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
   out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
+  // Promo codes the customer SPA may offer at checkout. Only the default tenant
+  // (Crispy) has any today; every other tenant gets an empty map so the field
+  // never appears for them. The discount math stays server-side (POST /order).
+  out.promos = (req.tenant.slug === DEFAULT_TENANT) ? PROMOS : {};
   // Internal LAN printer IPs are exposed ONLY to this tenant's own authenticated
   // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
   // (tenantFromToken resolves both) — and never on the public customer fetch or
