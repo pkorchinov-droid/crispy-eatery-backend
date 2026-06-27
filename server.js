@@ -26,6 +26,21 @@ let computePromoDiscount, PROMOS;
 try { ({ computePromoDiscount, PROMOS } = require("./promo")); }
 catch (e) { console.warn("[promo] module unavailable — promo codes disabled:", e && e.message); computePromoDiscount = () => null; PROMOS = {}; }
 
+// Loyalty program (stamp card + frequent-customer standing discount). Same
+// defensive load: a missing/broken module disables loyalty rather than crash-looping.
+let computeRewardDiscount, computeFrequentDiscount, loyaltyConfig, loyaltyEnabled, itemsSubtotal, frequentPercent, earnStamp;
+try {
+  ({ computeRewardDiscount, computeFrequentDiscount, loyaltyConfig, loyaltyEnabled, itemsSubtotal, frequentPercent, earnStamp } = require("./loyalty"));
+} catch (e) {
+  console.warn("[loyalty] module unavailable — loyalty disabled:", e && e.message);
+  computeRewardDiscount = () => null; computeFrequentDiscount = () => null;
+  loyaltyConfig = (c) => ((c && c.loyalty) || {}); loyaltyEnabled = () => false;
+  itemsSubtotal = () => 0; frequentPercent = () => 0; earnStamp = (l) => l;
+}
+// resolveMenuItem is reused for the reward-item name lookup in GET /menu.
+let resolveMenuItem;
+try { ({ resolveMenuItem } = require("./promo")); } catch { resolveMenuItem = () => null; }
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
@@ -379,6 +394,7 @@ function rateRule(req) {
   if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
   if (m === "POST" && p === "/signup") return ["signup", 5];
   if (m === "POST" && p === "/auth/request-link") return ["authlink", 5];
+  if (m === "POST" && p === "/loyalty/request-link") return ["loyaltylink", 5];
   if (m === "POST" && p === "/auth/login") return ["authlogin", 10];
   if (m === "POST" && p === "/menu/extract") return ["extract", 5];
   return null;
@@ -518,6 +534,7 @@ function tenantStore(slug) {
   const menuFile = path.join(dir, "menu.json");
   const groupsFile = path.join(dir, "groups.json");
   const customersFile = path.join(dir, "customers.json");
+  const loyaltySessionsFile = path.join(dir, "loyalty-sessions.json");
   return {
     slug,
     loadOrders() { const a = readJson(ordersFile, []); return Array.isArray(a) ? a : []; },
@@ -550,7 +567,18 @@ function tenantStore(slug) {
     persistGroups(groups) { writeJson(groupsFile, groups); return mirrorToSupabase(tKey(slug, "groups"), groups); },
     loadCustomers() { const a = readJson(customersFile, []); return Array.isArray(a) ? a : []; },
     persistCustomers(customers) { writeJson(customersFile, customers); return mirrorToSupabase(tKey(slug, "customers"), customers); },
+    loadLoyaltySessions() { const o = readJson(loyaltySessionsFile, {}); return (o && typeof o === "object" && !Array.isArray(o)) ? o : {}; },
+    persistLoyaltySessions(sessions) { writeJson(loyaltySessionsFile, sessions); return mirrorToSupabase(tKey(slug, "loyalty-sessions"), sessions); },
   };
+}
+
+// Drop expired customer loyalty sessions in place (called before any write).
+function pruneLoyaltySessions(sessions) {
+  const now = Date.now();
+  for (const k of Object.keys(sessions)) {
+    if (!sessions[k] || !(sessions[k].exp > now)) delete sessions[k];
+  }
+  return sessions;
 }
 
 // ── Tenant registry ────────────────────────────────────────
@@ -761,6 +789,13 @@ function backfillDefaultTenantConfig() {
   for (const f of ["dessertNudge", "drinksPreorder", "i18n", "collectibleReceipt", "stationPrinting"]) {
     if (c.features[f] !== true) { c.features[f] = true; changed = true; }
   }
+  // Loyalty: feature on; FC track live now (+1%/visit, cap 15%); stamp track
+  // stays inactive until the owner picks a reward item in settings.
+  if (c.features.loyalty === undefined) { c.features.loyalty = true; changed = true; }
+  if (!c.loyalty || typeof c.loyalty !== "object") {
+    c.loyalty = { stampsNeeded: 10, rewardItemId: null, minOrder: 0, frequent: { enabled: true, percentPerVisit: 1, maxPercent: 15 } };
+    changed = true;
+  }
   if (changed) {
     saveTenant(t);
     console.log("[tenant] backfilled '" + DEFAULT_TENANT + "' config with bespoke defaults (production migration)");
@@ -854,6 +889,70 @@ function sessionFromToken(tok) {
 function deleteSession(tok) {
   delete AUTH.sessions[hashToken(tok)];
   persistAuth();
+}
+
+// ── Customer (loyalty) magic-link auth — per-tenant, disjoint from owner auth ──
+// Token payload { e:email, t:slug, exp, j }; the HMAC is computed over "cust."+p
+// so it can never be verified as an owner token (and vice-versa). 15-min, single-use.
+function signCustomerToken(email, slug) {
+  if (!authSecret()) return null;
+  const payload = { e: email, t: slug, exp: Date.now() + 900000, j: crypto.randomBytes(9).toString("hex") };
+  const p = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  const sig = b64url(crypto.createHmac("sha256", authSecret()).update("cust." + p).digest());
+  return p + "." + sig;
+}
+function verifyCustomerToken(tok) {
+  try {
+    if (!authSecret()) return null;
+    const parts = String(tok || "").split(".");
+    if (parts.length !== 2) return null;
+    const [p, sig] = parts;
+    const want = b64url(crypto.createHmac("sha256", authSecret()).update("cust." + p).digest());
+    if (!safeEqual(sig, want)) return null;
+    const payload = JSON.parse(Buffer.from(p.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    if (!payload || typeof payload.exp !== "number" || payload.exp <= Date.now()) return null;
+    if (!payload.e || !payload.t) return null;
+    if (AUTH.usedMagic[payload.j]) return null;             // single-use (shared guard)
+    return { email: String(payload.e), slug: String(payload.t), jti: payload.j, exp: payload.exp };
+  } catch { return null; }
+}
+function buildCustomerMagicLink(email, slug) {
+  const t = signCustomerToken(email, slug);
+  return t ? PUBLIC_BASE_URL + "/loyalty/verify?token=" + encodeURIComponent(t) : null;
+}
+// Resolve the loyalty Bearer/?token to { email } for the request's tenant, or null.
+function customerFromReq(req) {
+  if (!req.store) return null;
+  const tok = getReqToken(req);
+  if (!tok) return null;
+  const rec = req.store.loadLoyaltySessions()[hashToken(tok)];
+  return (rec && rec.exp > Date.now()) ? { email: rec.email } : null;
+}
+function requireCustomer(req, res, next) {
+  const c = customerFromReq(req);
+  if (!c) return res.status(401).json({ error: "Please sign in to your loyalty account" });
+  req.customer = c;
+  next();
+}
+// Add the session hash for a freshly-minted token to a tenant's session store
+// (mutates `sessions` in place). The raw token is generated by the caller so it
+// can be returned in the response BEFORE the (locked) write lands.
+function addLoyaltySession(sessions, token, email) {
+  sessions[hashToken(token)] = { email, exp: Date.now() + 2592000000 };
+  return sessions;
+}
+// Find or create a per-tenant customer ACCOUNT by lowercased email, initializing
+// the loyalty counters. Reuses an existing customer record if one exists (e.g.
+// from the email-bill CRM) so history carries over.
+function upsertCustomerAccount(customers, email) {
+  email = String(email || "").toLowerCase();   // self-defending: never create dup records on case
+  const now = new Date().toISOString();
+  let c = customers.find((x) => x.email === email);
+  if (!c) { c = { email, firstVisit: now, lastVisit: now, visits: 0, totalSpent: 0, orders: [] }; customers.push(c); }
+  if (!c.loyalty) c.loyalty = { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+  if (!c.account) c.account = { createdAt: now, lastLoginAt: now };
+  else c.account.lastLoginAt = now;
+  return c;
 }
 // Resolve a token to a tenant: a tenant STAFF token first (existing behaviour),
 // else an owner SESSION token scoped to that owner's café. This is what lets an
@@ -1354,7 +1453,7 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features"]) {
+  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features", "loyalty"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -1562,6 +1661,90 @@ app.post("/auth/logout", requireOwner, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Customer loyalty accounts (magic-link, per-tenant) ─────────────────────
+// POST /loyalty/request-link — public, rate-limited. ALWAYS { ok:true } (no
+// account enumeration). Emails a tenant-bound magic link; doubles as join (the
+// account is materialized only on verify). Non-prod also returns a devLink.
+app.post("/loyalty/request-link", resolveTenant, async (req, res) => {
+  if (authSecret() === "") return res.status(503).json({ error: "Loyalty sign-in is not configured" });
+  const email = String((req.body && req.body.email) || "").trim().toLowerCase();
+  const out = { ok: true };
+  if (EMAIL_RE.test(email) && email.length <= 254) {
+    const slug = req.tenant.slug;
+    const link = buildCustomerMagicLink(email, slug);
+    if (link && resend) {
+      const brand = (req.tenant.config && req.tenant.config.name) || req.tenant.name;
+      const fromAddr = (req.tenant.config && req.tenant.config.emailFrom) || AUTH_EMAIL_FROM;
+      try {
+        await resend.emails.send({
+          from: fromAddr, to: [email], subject: `Your ${brand} rewards sign-in link`,
+          text: [`Tap to sign in to your ${brand} rewards card:`, "", link, "",
+                 "This link works once and expires in 15 minutes.",
+                 "If you didn't request this, you can ignore this email."].join("\n"),
+        });
+        console.log(`[loyalty] magic link sent → ${maskPII(email)} (${slug})`);
+      } catch (e) { console.error(`[loyalty] link send failed for ${maskPII(email)}:`, e && e.message); }
+    }
+    if (!IS_PROD && link) out.devLink = link;   // dev-only; never gated on Resend
+  }
+  res.json(out);
+});
+
+// GET /loyalty/verify — public. Validates the tenant-bound single-use token,
+// upserts the customer account, mints a session, and redirects to the customer
+// SPA with the session in the URL FRAGMENT (never logged), scoped to ?r=<slug>.
+// The session token is generated up-front so it can go in the redirect; the file
+// writes are awaited under the write lock (serialized against POST /order) so the
+// session row is durably stored before the client follows up with it.
+app.get("/loyalty/verify", async (req, res) => {
+  const v = verifyCustomerToken(req.query.token);
+  const fail = (slug) => res.redirect(OWNER_CUSTOMER_ORIGIN + "/?r=" + encodeURIComponent(slug || DEFAULT_TENANT) + "#loyalty_err=1");
+  if (!v) return fail();
+  const t = getTenant(v.slug);
+  if (!t) return fail(v.slug);
+  const store = tenantStore(v.slug);
+  const token = crypto.randomBytes(32).toString("hex");   // known before the lock
+  await withWriteLock(() => {
+    AUTH.usedMagic[v.jti] = v.exp; persistAuth();          // burn the token (single-use)
+    const customers = store.loadCustomers();
+    upsertCustomerAccount(customers, v.email);
+    store.persistCustomers(customers);
+    const sessions = addLoyaltySession(pruneLoyaltySessions(store.loadLoyaltySessions()), token, v.email);
+    store.persistLoyaltySessions(sessions);
+  });
+  return res.redirect(OWNER_CUSTOMER_ORIGIN + "/?r=" + encodeURIComponent(v.slug) + "#loyalty=" + token);
+});
+
+// GET /loyalty/me — the signed-in customer's card + standing-discount status.
+app.get("/loyalty/me", resolveTenant, requireCustomer, (req, res) => {
+  const cfg = req.tenant.config;
+  const customers = req.store.loadCustomers();
+  const c = customers.find((x) => x.email === req.customer.email);
+  const L = loyaltyConfig(cfg);
+  const loyalty = (c && c.loyalty) || { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+  const rewardItem = L.rewardItemId ? resolveMenuItem(req.store.loadMenu(), { id: L.rewardItemId }) : null;
+  res.json({
+    enabled: loyaltyEnabled(cfg),
+    email: req.customer.email,
+    stamps: loyalty.stamps, rewardsAvailable: loyalty.rewardsAvailable,
+    lifetimeStamps: loyalty.lifetimeStamps, stampsNeeded: L.stampsNeeded,
+    rewardItemId: L.rewardItemId, rewardName: rewardItem ? rewardItem.name : null,
+    paidVisits: loyalty.lifetimeStamps,
+    standingDiscountPercent: frequentPercent(cfg, c),
+  });
+});
+
+// POST /loyalty/logout — end the current customer session.
+app.post("/loyalty/logout", resolveTenant, requireCustomer, async (req, res) => {
+  const tok = getReqToken(req);
+  await withWriteLock(() => {
+    const sessions = pruneLoyaltySessions(req.store.loadLoyaltySessions());
+    delete sessions[hashToken(tok)];
+    req.store.persistLoyaltySessions(sessions);
+  });
+  res.json({ ok: true });
+});
+
 // GET /me — owner/console session. "Who am I + my cafés". Additive: still returns
 // {email, cafe} for the legacy owner console; now also {login, name, cafes[]} for
 // the ops console's branding + multi-café switcher.
@@ -1593,6 +1776,7 @@ app.get("/me", requireOwner, (req, res) => {
         currencyCode: c.currencyCode || "NZD",
         gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
         features: c.features || {},
+        loyalty: c.loyalty || {},
       },
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
     },
@@ -1694,6 +1878,43 @@ app.patch("/me/printers", requireOwner, (req, res) => {
   // withWriteLock defers the write, so respond with the canonical value we just
   // committed (out) rather than re-reading the tenant before the write lands.
   res.json({ success: true, printerStations: out });
+});
+
+// PATCH /me/loyalty — owner/console session. The logged-in owner configures THEIR
+// café's loyalty program: enable flag, stamps-per-reward, reward item, min order,
+// and the frequent-customer ramp. Scoped to req.ownerSlug so an owner only edits
+// their own café. Values are clamped; loyaltyConfig normalizes again on read.
+app.patch("/me/loyalty", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.features = t.config.features || {};
+    if (b.enabled !== undefined) t.config.features.loyalty = !!b.enabled;
+    const L = Object.assign({}, t.config.loyalty);
+    if (b.stampsNeeded !== undefined) {
+      const n = Math.floor(Number(b.stampsNeeded));
+      L.stampsNeeded = Number.isFinite(n) && n > 0 && n <= 100 ? n : 10;
+    }
+    if (b.rewardItemId !== undefined) {
+      L.rewardItemId = b.rewardItemId == null ? null : (sanitizeString(String(b.rewardItemId), 80).trim() || null);
+    }
+    if (b.minOrder !== undefined) { const m = Number(b.minOrder); L.minOrder = Number.isFinite(m) && m > 0 ? Math.round(m * 100) / 100 : 0; }
+    const f = Object.assign({}, L.frequent);
+    if (b.frequentEnabled !== undefined) f.enabled = !!b.frequentEnabled;
+    if (b.percentPerVisit !== undefined) { const p = Number(b.percentPerVisit); f.percentPerVisit = Number.isFinite(p) && p > 0 && p <= 100 ? p : 1; }
+    if (b.maxPercent !== undefined) { const mx = Number(b.maxPercent); f.maxPercent = Number.isFinite(mx) && mx >= 0 && mx <= 100 ? mx : 15; }
+    L.frequent = f;
+    // Reward item must resolve to a real menu item, else clear it (keeps stamp track inert).
+    if (L.rewardItemId) {
+      const item = resolveMenuItem(tenantStore(t.slug).loadMenu(), { id: L.rewardItemId });
+      if (!item) L.rewardItemId = null;
+    }
+    t.config.loyalty = L;
+    saveTenant(t);
+    res.json({ success: true, loyalty: t.config.loyalty, enabled: !!t.config.features.loyalty });
+  });
 });
 
 // POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
@@ -1876,7 +2097,7 @@ app.get("/qr-pack", requireStaff, async (req, res) => {
 
 // ── POST /order — receive order from QR menu (PUBLIC) ─────
 app.post("/order", resolveTenant, (req, res) => {
-  const { loadOrders, persistOrders, loadMenu } = req.store;
+  const { loadOrders, persistOrders, loadMenu, loadCustomers, persistCustomers } = req.store;
   withWriteLock(() => {
     try {
       const { tableNumber, items, notes, guestCount, phoneNumber, orderType, customerName, pickupTime } = req.body || {};
@@ -1959,23 +2180,49 @@ app.post("/order", resolveTenant, (req, res) => {
         createdAt: new Date().toISOString(),
       };
       order.developerFee = developerFeeFor(req.tenant.config);
+      // Build the order's adjustments from: promo code, the customer's standing
+      // frequent-customer discount, and an opted-in stamp-card reward. All amounts
+      // are derived from the AUTHORITATIVE menu / the server's stored counters.
+      const now = new Date().toISOString();
+      const adjustments = [];
       // Promo code (e.g. KATYUSHA) — only the default tenant (Crispy) has any.
-      // The discount is computed here from the AUTHORITATIVE menu (never a
-      // client-sent amount) and seeded into the order's adjustments, so it flows
-      // into the bill total, the dashboard, and the GST receipt like any other.
       if (req.tenant.slug === DEFAULT_TENANT && req.body && req.body.promoCode) {
         const disc = computePromoDiscount(req.body.promoCode, normalizedItems, menu);
         if (disc) {
           order.promoCode = disc.code;
-          order.adjustments = [{
-            id: crypto.randomBytes(6).toString("hex"),
-            label: disc.label,
-            amount: disc.amount,
-            promo: disc.code,
-            addedAt: new Date().toISOString(),
-          }];
+          adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: disc.label, amount: disc.amount, promo: disc.code, addedAt: now });
         }
       }
+      // Loyalty attribution: a logged-in customer's session (Bearer) attributes the
+      // order so the stamp lands on the right card when it's marked paid.
+      let loyaltyCustomer = null;
+      if (loyaltyEnabled(req.tenant.config)) {
+        const cust = customerFromReq(req);
+        if (cust) {
+          const customers = loadCustomers();
+          loyaltyCustomer = customers.find((x) => x.email === cust.email && x.account) || null;
+          if (loyaltyCustomer) order.loyaltyEmail = loyaltyCustomer.email;
+        }
+      }
+      // Frequent-customer standing discount (auto, server-authoritative percent).
+      if (loyaltyCustomer) {
+        const fd = computeFrequentDiscount(req.tenant.config, loyaltyCustomer, normalizedItems);
+        if (fd) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: fd.label, amount: fd.amount, frequent: true, percent: fd.percent, addedAt: now });
+      }
+      // Stamp-card reward redemption (opt-in: needs a redeemable reward + item in cart).
+      if (loyaltyCustomer && req.body && req.body.redeemReward) {
+        const rd = computeRewardDiscount(req.tenant.config, menu, normalizedItems);
+        const avail = (loyaltyCustomer.loyalty && loyaltyCustomer.loyalty.rewardsAvailable) || 0;
+        if (rd && avail >= 1) {
+          adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: rd.label, amount: rd.amount, loyaltyReward: true, addedAt: now });
+          order.loyaltyRedemption = { rewardItemId: rd.rewardItemId, amount: rd.amount, consumed: false };
+          // Reserve the reward now (we are inside the route's write lock).
+          const customers = loadCustomers();
+          const c = customers.find((x) => x.email === loyaltyCustomer.email);
+          if (c && c.loyalty) { c.loyalty.rewardsAvailable = Math.max(0, (c.loyalty.rewardsAvailable || 0) - 1); persistCustomers(customers); }
+        }
+      }
+      if (adjustments.length) order.adjustments = adjustments;
       recomputeOrderTotal(order); // items + developer fee + any promo discount
       order.onlineSurcharge = orderSurcharge(normalizedItems, menu, req.tenant.config);
 
@@ -2202,6 +2449,22 @@ app.get("/menu", resolveTenant, (req, res) => {
   // (Crispy) has any today; every other tenant gets an empty map so the field
   // never appears for them. The discount math stays server-side (POST /order).
   out.promos = (req.tenant.slug === DEFAULT_TENANT) ? PROMOS : {};
+  // Loyalty program (public): lets the customer SPA render the card + standing
+  // discount. Off cafés get { enabled:false }. Reward name resolved from the menu.
+  if (loyaltyEnabled(c)) {
+    const Lc = loyaltyConfig(c);
+    const freq = Lc.frequent || {};
+    const rewardItem = Lc.rewardItemId ? resolveMenuItem(menu, { id: Lc.rewardItemId }) : null;
+    out.loyalty = {
+      enabled: true,
+      stampsNeeded: Lc.stampsNeeded,
+      rewardItemId: Lc.rewardItemId,
+      rewardName: rewardItem ? rewardItem.name : null,
+      frequent: { enabled: !!freq.enabled, percentPerVisit: Number(freq.percentPerVisit) || 0, maxPercent: Number(freq.maxPercent) || 0 },
+    };
+  } else {
+    out.loyalty = { enabled: false };
+  }
   // Internal LAN printer IPs are exposed ONLY to this tenant's own authenticated
   // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
   // (tenantFromToken resolves both) — and never on the public customer fetch or
@@ -3063,10 +3326,11 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
       const cleanMethod =
         paymentMethod !== undefined ? sanitizeString(paymentMethod, 24) : undefined;
       if (paymentStatus !== undefined) {
+        const wasPaid = orders[idx].paymentStatus === "paid";
         orders[idx].paymentStatus = paymentStatus;
-        if (paymentStatus === "paid" && !orders[idx].paidAt) {
-          orders[idx].paidAt = new Date().toISOString();
-        }
+        if (paymentStatus === "paid" && !orders[idx].paidAt) orders[idx].paidAt = new Date().toISOString();
+        if (paymentStatus === "paid" && !wasPaid) awardLoyaltyOnPaid(req.store, orders[idx], req.tenant.config);
+        if (paymentStatus === "failed") restoreReservedReward(req.store, orders[idx]);
       }
       if (cleanMethod !== undefined) {
         orders[idx].paymentMethod = cleanMethod;
@@ -3135,6 +3399,13 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       if (targets.some((o) => ["paid", "pending", "refunded"].includes(o.paymentStatus))) {
         return res.status(409).json({ error: "One or more of these orders is paid or being paid — combine before taking payment." });
       }
+      // Loyalty: a combined order can track at most ONE pending reward redemption
+      // (finalize-on-paid / restore-on-cancel key off a single order.loyaltyRedemption),
+      // so refuse rather than silently orphan a reserved reward.
+      const pendingRedemptions = targets.filter((o) => o.loyaltyRedemption && !o.loyaltyRedemption.consumed);
+      if (pendingRedemptions.length > 1) {
+        return res.status(409).json({ error: "More than one of these orders has a pending loyalty reward — settle those separately before combining." });
+      }
 
       // Earliest order is the primary (keeps id + billToken so its bill link survives).
       targets.sort((a, b2) => new Date(a.createdAt || 0) - new Date(b2.createdAt || 0));
@@ -3166,6 +3437,14 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       delete primary._lastAddHash;
       delete primary._lastAddAt;
       primary.mergedFrom = (primary.mergedFrom || []).concat(others.map((o) => o.id));
+      // Carry loyalty state onto the combined order so the stamp still lands on paid
+      // and a reserved reward stays tracked (and is credited back to the right card on
+      // cancel). Attribution follows the pending reward's owner when there is one.
+      const keptRedemption = pendingRedemptions[0];
+      const mergedLoyaltyEmail = keptRedemption ? keptRedemption.loyaltyEmail : targets.map((o) => o.loyaltyEmail).find(Boolean);
+      if (mergedLoyaltyEmail) primary.loyaltyEmail = mergedLoyaltyEmail; else delete primary.loyaltyEmail;
+      delete primary.loyaltyStampAwarded;                 // unpaid combined order earns its own single stamp
+      if (keptRedemption) primary.loyaltyRedemption = keptRedemption.loyaltyRedemption; else delete primary.loyaltyRedemption;
       primary.updatedAt = new Date().toISOString();
 
       const removeIds = new Set(others.map((o) => o.id));
@@ -3194,6 +3473,41 @@ function recomputeOrderTotal(order) {
   const itemsSum = (order.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
   order.total = clampMoney(itemsSum + adjustmentsTotal(order) + (Number(order.developerFee) || 0));
   return order.total;
+}
+
+// Award one stamp when an order first transitions to paid, and finalize any
+// reserved reward. Idempotent per order via order.loyaltyStampAwarded. Mutates
+// `order` and persists the tenant's customers; the caller persists orders.
+function awardLoyaltyOnPaid(store, order, cfg) {
+  try {
+    if (!loyaltyEnabled(cfg) || !order || !order.loyaltyEmail) return;
+    if (order.loyaltyRedemption && !order.loyaltyRedemption.consumed) order.loyaltyRedemption.consumed = true;
+    if (order.loyaltyStampAwarded) return;
+    const L = loyaltyConfig(cfg);
+    order.loyaltyStampAwarded = true;                  // set first so it can't double-award
+    if (itemsSubtotal(order.items) < L.minOrder) return;
+    const customers = store.loadCustomers();
+    const c = customers.find((x) => x.email === order.loyaltyEmail);
+    if (!c) return;
+    if (!c.loyalty) c.loyalty = { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+    earnStamp(c.loyalty, L.stampsNeeded);
+    c.lastVisit = new Date().toISOString();
+    store.persistCustomers(customers);
+  } catch (e) { console.error("[loyalty] award error:", e.message); }
+}
+// Give back a reward that was reserved at order time but never consumed (order
+// cancelled / payment failed). Idempotent via the consumed flag.
+function restoreReservedReward(store, order) {
+  try {
+    if (!order || !order.loyaltyEmail || !order.loyaltyRedemption || order.loyaltyRedemption.consumed) return;
+    const customers = store.loadCustomers();
+    const c = customers.find((x) => x.email === order.loyaltyEmail);
+    if (c && c.loyalty) {
+      c.loyalty.rewardsAvailable = (c.loyalty.rewardsAvailable || 0) + 1;
+      order.loyaltyRedemption.consumed = true;         // prevent double restore
+      store.persistCustomers(customers);
+    }
+  } catch (e) { console.error("[loyalty] restore error:", e.message); }
 }
 
 // POST /orders/:id/adjust — add a manual charge/discount to the bill.
@@ -3254,6 +3568,47 @@ app.delete("/orders/:id/adjust/:adjId", requireStaff, (req, res) => {
     } catch (e) {
       console.error("[adjust] delete error:", e.message);
       res.status(500).json({ error: "Failed to remove the adjustment" });
+    }
+  });
+});
+
+// POST /orders/:id/redeem-loyalty — staff redeem a stamp-card reward against an
+// order already ATTRIBUTED to a logged-in customer (order.loyaltyEmail). Requires
+// a redeemable reward and the reward item in the cart. Mirrors the self-redeem in
+// POST /order: seed a negative adjustment + reserve the reward.
+app.post("/orders/:id/redeem-loyalty", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders, loadMenu, loadCustomers, persistCustomers } = req.store;
+  withWriteLock(() => {
+    try {
+      const cfg = req.tenant.config;
+      if (!loyaltyEnabled(cfg)) return res.status(400).json({ error: "Loyalty is not enabled" });
+      const orders = loadOrders();
+      const o = orders.find((x) => x.id === req.params.id);
+      if (!o) return res.status(404).json({ error: "Order not found" });
+      if (["paid", "pending", "refunded"].includes(o.paymentStatus)) {
+        return res.status(409).json({ error: "Order is paid or being paid — can't change the bill." });
+      }
+      if (!o.loyaltyEmail) return res.status(400).json({ error: "This order is not linked to a loyalty account." });
+      if (o.loyaltyRedemption && !o.loyaltyRedemption.consumed) return res.status(409).json({ error: "A reward is already applied to this order." });
+      const rd = computeRewardDiscount(cfg, loadMenu(), o.items);
+      if (!rd) return res.status(400).json({ error: "The reward item isn't on this order." });
+      const customers = loadCustomers();
+      const c = customers.find((x) => x.email === o.loyaltyEmail);
+      const avail = (c && c.loyalty && c.loyalty.rewardsAvailable) || 0;
+      if (!c || avail < 1) return res.status(409).json({ error: "No reward available on this customer's card." });
+      if (!Array.isArray(o.adjustments)) o.adjustments = [];
+      o.adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: rd.label, amount: rd.amount, loyaltyReward: true, addedAt: new Date().toISOString() });
+      o.loyaltyRedemption = { rewardItemId: rd.rewardItemId, amount: rd.amount, consumed: false };
+      c.loyalty.rewardsAvailable = Math.max(0, avail - 1);
+      recomputeOrderTotal(o);
+      o.updatedAt = new Date().toISOString();
+      persistCustomers(customers);
+      persistOrders(orders);
+      console.log(`[loyalty] staff redeemed reward on ${o.id} for ${maskPII(o.loyaltyEmail)}`);
+      res.json({ success: true, order: o });
+    } catch (e) {
+      console.error("[loyalty] staff redeem error:", e.message);
+      res.status(500).json({ error: "Failed to redeem reward" });
     }
   });
 });
@@ -3587,6 +3942,7 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
           provider: providerName,
           capturedAt: new Date().toISOString(),
         };
+        awardLoyaltyOnPaid(req.store, o, req.tenant.config);
         persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → paid (${event.scheme || "card"} •••${event.last4 || "????"})`);
         return res.status(200).json({ received: true, processed: true });
@@ -3600,6 +3956,7 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
         }
         o.paymentStatus = "failed";
         if (o.paymentIntent) o.paymentIntent.failedAt = new Date().toISOString();
+        restoreReservedReward(req.store, o);
         persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → failed`);
         return res.status(200).json({ received: true, processed: true });
@@ -3656,6 +4013,7 @@ app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
         provider: "simulated",
         capturedAt: new Date().toISOString(),
       };
+      awardLoyaltyOnPaid(req.store, o, req.tenant.config);
       persistOrders(all);
       console.log(`[pay] simulated payment for ${o.id}`);
       res.json({ success: true, order: o });
@@ -3863,10 +4221,11 @@ app.get("/reports/week", requireStaff, (req, res) => {
 // ── GET /customers — staff ────────────────────────────────
 app.get("/customers", requireStaff, (req, res) => {
   const customers = req.store.loadCustomers();
-  res.json({
-    count: customers.length,
-    customers: customers.slice().sort((a, b) => b.visits - a.visits),
-  });
+  const cfg = req.tenant.config;
+  const enriched = customers.slice()
+    .sort((a, b) => ((b.loyalty && b.loyalty.lifetimeStamps) || b.visits || 0) - ((a.loyalty && a.loyalty.lifetimeStamps) || a.visits || 0))
+    .map((c) => Object.assign({}, c, { standingDiscountPercent: frequentPercent(cfg, c) }));
+  res.json({ count: customers.length, customers: enriched });
 });
 
 // ── DELETE /orders — staff + extra safety ──────────────────
@@ -3902,6 +4261,7 @@ app.delete("/orders/:id", requireStaff, (req, res) => {
       const idx = orders.findIndex((o) => o.id === req.params.id);
       if (idx === -1) { res.status(404).json({ error: "Order not found" }); return; }
       const removed = orders.splice(idx, 1)[0];
+      restoreReservedReward(req.store, removed);
       persistOrders(orders);
       console.log(`[orders] deleted ${removed.id} (table ${removed.tableNumber}) for ${req.store.slug}`);
       res.json({ success: true, id: removed.id });
@@ -4148,6 +4508,7 @@ async function restoreFromSupabase() {
       { name: "orders",    file: path.join(dir, "orders.json"),    valid: (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string" && Array.isArray(o.items)) },
       { name: "customers", file: path.join(dir, "customers.json"), valid: (v) => Array.isArray(v) && v.every((c) => c && typeof c === "object" && typeof c.email === "string") },
       { name: "groups",    file: path.join(dir, "groups.json"),    valid: (v) => Array.isArray(v) && v.every((g) => g && typeof g === "object" && typeof g.code === "string") },
+      { name: "loyalty-sessions", file: path.join(dir, "loyalty-sessions.json"), valid: (v) => v && typeof v === "object" && !Array.isArray(v) },
     ];
     for (const tg of targets) {
       try {
