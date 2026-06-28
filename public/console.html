@@ -151,7 +151,7 @@ const state = {
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
-  promos:null, promoMsg:'', addDishMsg:'',
+  promos:null, promoMsg:'', addDishMsg:'', mealDealMsg:'',
   loginErr:'', lastLogin:'', setMsg:'',
   loading:{ orders:false, menu:false, reports:false },
   err:{},
@@ -776,6 +776,35 @@ function promoSettingsHTML(){
     + '<button data-act="savePromos" style="width:100%;margin-top:4px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save promo codes</button>';
 }
 
+/* ───────── breakfast / meal deal (settings section) ───────── */
+// A time-gated "buy a meal, get a drink for $X" deal. Auto-applied at checkout
+// (no code). The owner toggles it, sets the daily cutoff + price, and ticks the
+// qualifying-meal and eligible-drink categories. Saved via PATCH /me/mealdeal.
+function mealDealSettingsHTML(){
+  const inp = "width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--input);font-size:13px;color:var(--ink);outline:none;box-sizing:border-box;";
+  const sectionLbl = "font-family:'Fraunces',serif;font-style:italic;font-size:18px;margin-bottom:6px;color:var(--ink);";
+  const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px;";
+  const md = cfg().mealDeal || {};
+  const enabled = !!md.enabled;
+  const win = md.window || {};
+  const cutoff = win.to || '11:00';
+  const price = (typeof md.drinkPrice === 'number') ? md.drinkPrice : 1;
+  const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const qsel = {}; (Array.isArray(md.qualifyCategories)?md.qualifyCategories:[]).forEach(function(s){ qsel[s]=1; });
+  const dsel = {}; (Array.isArray(md.drinkCategories)?md.drinkCategories:[]).forEach(function(s){ dsel[s]=1; });
+  const checks = function(cls, sel){
+    return cats.map(function(c){ return '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink);cursor:pointer;margin:0 14px 8px 0;"><input type="checkbox" class="'+cls+'" value="'+esc(c.key)+'"'+(sel[c.key]?' checked':'')+'> '+esc(c.label)+'</label>'; }).join('') || '<div style="font-size:12px;color:var(--muted2);">Add menu categories first.</div>';
+  };
+  return '<div style="'+sectionLbl+'margin-top:26px;">Breakfast / meal deal</div>'
+    + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Before the cutoff each day, ordering a qualifying meal lets the customer get one eligible drink for the set price. Auto-applied at checkout — no code. One discounted drink per qualifying meal.</div>'
+    + '<label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink);cursor:pointer;margin-bottom:6px;"><input type="checkbox" id="md-enabled"'+(enabled?' checked':'')+'> Enable the meal deal</label>'
+    + '<div style="display:flex;gap:10px;"><div style="flex:1;"><label style="'+lbl+'">Available before</label><input id="md-cutoff" type="time" value="'+esc(cutoff)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Drink price ($)</label><input id="md-price" type="number" min="0" step="0.5" value="'+esc(price)+'" style="'+inp+'"></div></div>'
+    + '<label style="'+lbl+'">Qualifying meal categories</label><div style="display:flex;flex-wrap:wrap;">'+checks('md-q', qsel)+'</div>'
+    + '<label style="'+lbl+'">Eligible $'+esc(price)+' drink categories</label><div style="display:flex;flex-wrap:wrap;">'+checks('md-d', dsel)+'</div>'
+    + '<div id="md-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:'+(state.mealDealMsg==='Saved'?'var(--pos)':'var(--neg)')+';">'+esc(state.mealDealMsg)+'</div>'
+    + '<button data-act="saveMealDeal" style="width:100%;margin-top:4px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save meal deal</button>';
+}
+
 function settingsHTML(){
   const inp = "width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;";
   const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;";
@@ -812,6 +841,7 @@ function settingsHTML(){
           + '<button data-act="saveLoyalty" style="width:100%;margin-top:16px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Save loyalty</button>';
       })()
     + promoSettingsHTML()
+    + mealDealSettingsHTML()
     + (printerSetupAvailable() ? (
         '<div style="'+sectionLbl+'margin-top:26px;">Printers</div>'
       + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:8px;line-height:1.55;">Station printer addresses for <b style="color:var(--ink);">'+esc((state.cafe&&state.cafe.name)||'this café')+'</b> — saved to the café, shared by every device. 🖨 routes food→Kitchen · drinks→Barista · all→Expo; 🧾 receipt→Receipt.</div>'
@@ -1463,6 +1493,26 @@ async function savePromos(){
     state.promoMsg='Saved'; toast('Promo codes saved','ok'); render();
   } catch(e){ state.promoMsg=(e&&e.message)||'Could not save'; toast(state.promoMsg,'err'); render(); }
 }
+// Meal deal: collect the ticked categories + cutoff/price, PATCH /me/mealdeal.
+async function saveMealDeal(){
+  const g=function(id){ return document.getElementById(id); };
+  const collect=function(cls){ const out=[]; const els=document.querySelectorAll('.'+cls+':checked'); for(let i=0;i<els.length;i++) out.push(els[i].value); return out; };
+  const enabled = g('md-enabled') ? g('md-enabled').checked : false;
+  const cutoff = (g('md-cutoff') && g('md-cutoff').value) || '11:00';
+  const price = g('md-price') ? Number(g('md-price').value) : 1;
+  const qualifyCategories = collect('md-q');
+  const drinkCategories = collect('md-d');
+  if(enabled){
+    if(!qualifyCategories.length){ state.mealDealMsg='Pick at least one qualifying meal category.'; render(); return; }
+    if(!drinkCategories.length){ state.mealDealMsg='Pick at least one drink category.'; render(); return; }
+  }
+  const body = { mealDeal: { enabled:enabled, label:'', window:{ from:'00:00', to:cutoff }, qualifyCategories:qualifyCategories, drinkCategories:drinkCategories, drinkPrice: isFinite(price)?price:1 } };
+  try {
+    const d = await api('/me/mealdeal', { method:'PATCH', body: body });
+    if(state.cafe && state.cafe.config) state.cafe.config.mealDeal = d.mealDeal;
+    state.mealDealMsg='Saved'; toast('Meal deal saved','ok'); render();
+  } catch(e){ state.mealDealMsg=(e&&e.message)||'Could not save'; toast(state.mealDealMsg,'err'); render(); }
+}
 async function emailBill(id){
   const o = state.orders.find(function(x){ return x.id===id; }); if(!o) return;
   const email = window.prompt('Email the receipt to:'); if(!email) return;
@@ -1576,12 +1626,13 @@ function handle(act, ds, ev){
     case 'promoAddRow': addPromoRow(); break;
     case 'promoDelete': readPromoRows(); state.promos.splice(+ds.idx,1); state.promoMsg=''; render(); break;
     case 'savePromos': savePromos(); break;
+    case 'saveMealDeal': saveMealDeal(); break;
     case 'emailBill': emailBill(ds.id); break;
     case 'repRange': repQuick(ds.val); break;
     case 'feeRange': feeQuick(ds.val); break;
     case 'toggleSwitcher': state.switcherOpen=!state.switcherOpen; render(); break;
     case 'switchCafe': switchCafe(ds.slug); break;
-    case 'openSettings': state.settingsOpen=true; state.setMsg=''; state.promos=JSON.parse(JSON.stringify(cfg().promos||[])); state.promoMsg=''; render(); break;
+    case 'openSettings': state.settingsOpen=true; state.setMsg=''; state.promos=JSON.parse(JSON.stringify(cfg().promos||[])); state.promoMsg=''; state.mealDealMsg=''; render(); break;
     case 'closeSettings': state.settingsOpen=false; state.setMsg=''; render(); break;
     case 'setAppearance': state.prefs.appearance=ds.val; lsSet(LS.prefs,state.prefs); applyTheme(); updateSeg('setAppearance',ds.val); refreshKitchenIfVisible(); break;
     case 'setAccent': state.prefs.accent=ds.val||null; lsSet(LS.prefs,state.prefs); applyTheme(); updateAccentSwatches(); refreshKitchenIfVisible(); break;
