@@ -148,6 +148,7 @@ const state = {
   orders:[], menu:null, reportsToday:null, reportsYesterday:null, reportsWeek:null,
   customers: [], custByEmail: {},
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
+  dayReport:null,       // end-of-shift items-sold report (lazy-init { date })
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
@@ -236,6 +237,7 @@ const NAV = [
   { id:'dashboard', label:'Dashboard', d:['M3 3h7v7H3z','M14 3h7v7h-7z','M14 14h7v7h-7z','M3 14h7v7H3z'] },
   { id:'kitchen', label:'Kitchen', d:['M12 2c1.4 2.4 1 4-.2 5.2C10.8 8.4 10 9.6 10 11a2 2 0 0 0 4 0c0-.6-.2-1-.4-1.4 1.8 1 3 2.8 3 5a4.6 4.6 0 0 1-9.2 0c0-3.4 2.4-5 3.8-7.4C12 5.6 12.4 3.8 12 2z'] },
   { id:'reports', label:'Reports', d:['M3 3v18h18','M7 14l3-3 3 3 5-7'] },
+  { id:'dayreport', label:'Day report', d:['M9 3h6v3H9z','M7 5H5v16h14V5h-2','M8 11h8','M8 15h5'] },
   { id:'menu', label:'Menu', d:['M6 3v18','M6 8c2.4 0 2.4-5 0-5','M18 3c-1.8 0-3 2-3 5s1.2 4 3 4','M18 12v9'] },
   { id:'billing', label:'Billing', d:['M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z','M9 8h6','M9 12h6','M9 16h4'] },
   { id:'customers', label:'Regulars', d:['M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z','M3 20a6 6 0 0 1 12 0','M16 3.5a3 3 0 0 1 0 5.8','M21 20a6 6 0 0 0-4-5.6'] },
@@ -544,6 +546,7 @@ async function refreshActive(initial){
   else if (A==='kitchen' || A==='billing'){ jobs.push(loadOrders()); if (A==='billing') jobs.push(loadCustomers()); }
   else if (A==='customers'){ jobs.push(loadCustomers()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='reports'){ jobs.push(loadReportsWeek(), loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
+  else if (A==='dayreport'){ jobs.push(loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='menu'){ jobs.push(loadMenu()); } // reload each entry → unsaved local edits discarded
   await Promise.all(jobs);
   render();
@@ -614,11 +617,12 @@ function appHTML(){
     dashboard:['Dashboard', new Date().toLocaleDateString('en-NZ',{weekday:'long',day:'numeric',month:'long'})+' · live'],
     kitchen:['Kitchen', activeTickets().length+' active tickets on the pass'],
     reports:['Reports & Analytics', 'Last 7 days'],
+    dayreport:['Day report', 'End of shift · everything sold'],
     menu:['Menu', menuItemCount()+' items · tap to edit'],
     billing:['Billing','Take payment & print receipts'],
     customers:['Regulars', (state.customers||[]).length+' loyalty members'],
   };
-  const screens = { dashboard:dashboardHTML, kitchen:kitchenHTML, reports:reportsHTML, menu:menuHTML, billing:billingHTML, customers:customersHTML };
+  const screens = { dashboard:dashboardHTML, kitchen:kitchenHTML, reports:reportsHTML, dayreport:dayReportHTML, menu:menuHTML, billing:billingHTML, customers:customersHTML };
   let body;
   try { body = screens[A](); } catch(e){ body = errBox('Something went wrong rendering this screen: '+e.message); }
   return '<div class="app-shell" style="display:flex;height:100dvh;width:100%;overflow:hidden;">'
@@ -787,6 +791,7 @@ function mealDealSettingsHTML(){
   const md = cfg().mealDeal || {};
   const enabled = !!md.enabled;
   const win = md.window || {};
+  const start = win.from || '07:00';
   const cutoff = win.to || '11:00';
   const price = (typeof md.drinkPrice === 'number') ? md.drinkPrice : 1;
   const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
@@ -796,9 +801,9 @@ function mealDealSettingsHTML(){
     return cats.map(function(c){ return '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink);cursor:pointer;margin:0 14px 8px 0;"><input type="checkbox" class="'+cls+'" value="'+esc(c.key)+'"'+(sel[c.key]?' checked':'')+'> '+esc(c.label)+'</label>'; }).join('') || '<div style="font-size:12px;color:var(--muted2);">Add menu categories first.</div>';
   };
   return '<div style="'+sectionLbl+'margin-top:26px;">Breakfast / meal deal</div>'
-    + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">Before the cutoff each day, ordering a qualifying meal lets the customer get one eligible drink for the set price. Auto-applied at checkout — no code. One discounted drink per qualifying meal.</div>'
+    + '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:12px;line-height:1.5;">During the daily window below, ordering a qualifying meal lets the customer get one eligible drink for the set price. Auto-applied at checkout — no code, no staff action. One discounted drink per qualifying meal.</div>'
     + '<label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink);cursor:pointer;margin-bottom:6px;"><input type="checkbox" id="md-enabled"'+(enabled?' checked':'')+'> Enable the meal deal</label>'
-    + '<div style="display:flex;gap:10px;"><div style="flex:1;"><label style="'+lbl+'">Available before</label><input id="md-cutoff" type="time" value="'+esc(cutoff)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Drink price ($)</label><input id="md-price" type="number" min="0" step="0.5" value="'+esc(price)+'" style="'+inp+'"></div></div>'
+    + '<div style="display:flex;gap:10px;"><div style="flex:1;"><label style="'+lbl+'">From</label><input id="md-start" type="time" value="'+esc(start)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Until</label><input id="md-cutoff" type="time" value="'+esc(cutoff)+'" style="'+inp+'"></div><div style="flex:1;"><label style="'+lbl+'">Drink price ($)</label><input id="md-price" type="number" min="0" step="0.5" value="'+esc(price)+'" style="'+inp+'"></div></div>'
     + '<label style="'+lbl+'">Qualifying meal categories</label><div style="display:flex;flex-wrap:wrap;">'+checks('md-q', qsel)+'</div>'
     + '<label style="'+lbl+'">Eligible $'+esc(price)+' drink categories</label><div style="display:flex;flex-wrap:wrap;">'+checks('md-d', dsel)+'</div>'
     + '<div id="md-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:'+(state.mealDealMsg==='Saved'?'var(--pos)':'var(--neg)')+';">'+esc(state.mealDealMsg)+'</div>'
@@ -950,13 +955,17 @@ function dashboardHTML(){
   const pmToday = (rt && rt.paymentMethods) || null;
   const cashN = pmToday ? (pmToday.cash||0) : 0;
   const cardN = pmToday ? (pmToday.card||0) : 0;
+  // Paid = any settled tender; Unpaid = still awaiting payment (refunded is neither).
+  const paidN = pmToday ? (cashN + cardN + (pmToday.other||0)) : 0;
+  const unpaidN = pmToday ? ((pmToday.unpaid||0)+(pmToday.pending||0)+(pmToday.failed||0)) : 0;
   const devFeeLine = (rt && rt.developerFeeTotal!=null) ? '<div style="font-size:11.5px;font-weight:600;color:var(--accent);margin-top:6px;">'+money(rt.developerFeeTotal)+' developer fee</div>' : '';
   const kpis = [
     { label:'Sales today', value: rt?money(rt.totalRevenue):'—', foot:(rt?rt.totalOrders:0)+' orders', delta: rt&&ry?deltaBadge(rt.totalRevenue, ry.totalRevenue):'', extra: devFeeLine },
     { label:'Orders', value: rt?String(rt.totalOrders):'—', foot:'today', delta: rt&&ry?deltaBadge(rt.totalOrders, ry.totalOrders):'' },
     { label:'Avg ticket', value: rt?money(rt.avgOrder):'—', foot:'per order', delta: rt&&ry?deltaBadge(rt.avgOrder, ry.avgOrder):'' },
-    { label:'Payments', value: (cashN+cardN)?String(cashN+cardN):'—', foot:'Cash '+cashN+' · Card '+cardN, delta:'' },
-  ].map(function(k){ return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 18px 16px;box-shadow:0 14px 30px -22px rgba(0,0,0,.4);"><div style="font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);">'+k.label+'</div><div style="font-family:\'Fraunces\',serif;font-size:33px;font-weight:500;margin-top:12px;line-height:1;color:var(--ink);">'+k.value+'</div><div style="font-size:11.5px;color:var(--muted2);margin-top:7px;">'+esc(k.foot)+'</div>'+k.delta+(k.extra||'')+'</div>'; }).join('');
+    { label:'Unpaid', value: rt?String(unpaidN):'—', foot:'awaiting payment', delta:'', vColor:'var(--neg)' },
+    { label:'Paid', value: rt?String(paidN):'—', foot:'Cash '+cashN+' · Card '+cardN, delta:'', vColor:'var(--pos)' },
+  ].map(function(k){ return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 18px 16px;box-shadow:0 14px 30px -22px rgba(0,0,0,.4);"><div style="font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);">'+k.label+'</div><div style="font-family:\'Fraunces\',serif;font-size:33px;font-weight:500;margin-top:12px;line-height:1;color:'+(k.vColor||'var(--ink)')+';">'+k.value+'</div><div style="font-size:11.5px;color:var(--muted2);margin-top:7px;">'+esc(k.foot)+'</div>'+k.delta+(k.extra||'')+'</div>'; }).join('');
 
   const open = activeTickets().slice(0,6);
   const recent = open.length ? open.map(function(o){
@@ -973,7 +982,7 @@ function dashboardHTML(){
 
   return '<div class="pad-screen" style="padding:26px 30px 60px;max-width:1180px;'+entAnim()+'">'
     + (state.err.reports?errInline(state.err.reports):'')
-    + '<div class="kpi-grid">'+kpis+'</div>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">'+kpis+'</div>'
     + '<div class="split-grid" style="grid-template-columns:1.55fr 1fr;margin-top:18px;">'
     + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;"><div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;color:var(--ink);">Live orders</div><button data-act="goKitchen" style="background:none;border:none;color:var(--accent);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;letter-spacing:.03em;">Open kitchen →</button></div>'+recent+'</div>'
     + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Top sellers today</div>'+top+'</div></div>'
@@ -1183,6 +1192,126 @@ function reportsHTML(){
     + pmPanel + '</div>';
 }
 function loadingBox(msg){ return '<div style="padding:60px 30px;text-align:center;color:var(--muted2);font-size:13.5px;"><span class="spin"></span><div style="margin-top:12px;">'+esc(msg)+'</div></div>'; }
+
+/* ── Day report: end-of-shift "everything sold today" summary ──
+   A clean, day-pickable, printable list of every item sold on the selected day,
+   split into Food vs Drinks with quantity + revenue. No tables / orders /
+   customers — just the totals a kitchen needs for prep + purchase planning.
+   Computed client-side from state.orders (the full history); no backend call. */
+function dayReportEnsure(){ if(!state.dayReport || !state.dayReport.date) state.dayReport = { date: rIsoDate(new Date()) }; }
+function dayReportDrinkSlugs(){
+  const out = {}; const list = Array.isArray(cfg().drinkCategories) ? cfg().drinkCategories : [];
+  if(list.length) list.forEach(function(s){ out[s]=1; });
+  else Object.keys(DRINK_CATEGORIES).forEach(function(s){ out[s]=1; });
+  return out;
+}
+// Aggregate the selected day's order lines into Food + Drinks, each [{name,qty,revenue}].
+function dayReportItems(dateStr){
+  const nameToCat = {};
+  menuCategoriesOrdered().forEach(function(c){ if(c.virtual) return; (c.items||[]).forEach(function(it){ if(it && it.name!=null && nameToCat[it.name]===undefined) nameToCat[it.name]=c.key; }); });
+  const drinkSlugs = dayReportDrinkSlugs();
+  const map = {};
+  let orderCount = 0;
+  (state.orders||[]).forEach(function(o){
+    if(rIsoDate(new Date(o.createdAt)) !== dateStr) return;
+    orderCount++;
+    (o.items||[]).forEach(function(i){
+      const key = i.name + (i.size ? ' ('+i.size+')' : '');
+      const slug = nameToCat[i.name];
+      const drink = slug ? !!drinkSlugs[slug] : isDrink(i.name||'');
+      if(!map[key]) map[key] = { name:key, qty:0, revenue:0, drink:drink };
+      map[key].qty += Number(i.qty)||1;
+      map[key].revenue += (Number(i.price)||0) * (Number(i.qty)||1);
+    });
+  });
+  const arr = Object.keys(map).map(function(k){ return map[k]; });
+  const byQty = function(a,b){ return b.qty-a.qty || b.revenue-a.revenue; };
+  const sum = function(list){ return list.reduce(function(s,x){ return { qty:s.qty+x.qty, revenue:Math.round((s.revenue+x.revenue)*100)/100 }; }, {qty:0,revenue:0}); };
+  const food = arr.filter(function(x){ return !x.drink; }).sort(byQty);
+  const drinks = arr.filter(function(x){ return x.drink; }).sort(byQty);
+  return { food:food, drinks:drinks, foodTot:sum(food), drinkTot:sum(drinks), grand:sum(arr), orderCount:orderCount };
+}
+function dayReportHumanDate(dateStr){ const d=new Date(dateStr+'T00:00'); return isNaN(d)?dateStr:d.toLocaleDateString('en-NZ',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); }
+function dayReportShift(delta){
+  dayReportEnsure();
+  let d = new Date(state.dayReport.date+'T00:00'); if(isNaN(d)) d=new Date();
+  d.setDate(d.getDate()+delta);
+  const today = new Date(); today.setHours(0,0,0,0);
+  if(d.getTime() > today.getTime()) d = today;   // never browse into the future
+  state.dayReport.date = rIsoDate(d); render();
+}
+function dayReportSetToday(){ dayReportEnsure(); state.dayReport.date = rIsoDate(new Date()); render(); }
+
+function dayReportHTML(){
+  dayReportEnsure();
+  if(!state.orders && state.loading.orders!==false) return loadingBox('Loading orders…');
+  const dateStr = state.dayReport.date;
+  const rep = dayReportItems(dateStr);
+  const isToday = dateStr === rIsoDate(new Date());
+  const btn = 'padding:9px 13px;border:1px solid var(--border);border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;background:var(--input);color:var(--ink);';
+  const dateInp = 'color-scheme:'+rScheme()+';background:var(--input);color:var(--ink);border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-family:inherit;font-size:13.5px;';
+
+  const section = function(title, list, tot){
+    const head = '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);">'+title+'</div><div style="font-size:12.5px;color:var(--muted2);">'+tot.qty+' sold · '+money(tot.revenue)+'</div></div>';
+    if(!list.length) return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-top:18px;">'+head+'<div style="color:var(--muted2);font-size:13px;">No '+title.toLowerCase()+' sold on this day.</div></div>';
+    const rows = list.map(function(x){
+      return '<tr style="border-bottom:1px dotted var(--divider);"><td style="padding:9px 0;font-size:13.5px;color:var(--ink);">'+esc(x.name)+'</td><td style="padding:9px 0;text-align:right;font-family:\'Fraunces\',serif;font-size:16px;color:var(--accent);width:64px;">'+x.qty+'</td><td style="padding:9px 0;text-align:right;font-size:13.5px;color:var(--muted);width:96px;font-variant-numeric:tabular-nums;">'+money(x.revenue)+'</td></tr>';
+    }).join('');
+    const foot = '<tr><td style="padding:11px 0 0;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;">Subtotal</td><td style="padding:11px 0 0;text-align:right;font-family:\'Fraunces\',serif;font-size:16px;color:var(--ink);">'+tot.qty+'</td><td style="padding:11px 0 0;text-align:right;font-size:13.5px;color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;">'+money(tot.revenue)+'</td></tr>';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-top:18px;">'+head
+      + '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Item</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Qty</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Revenue</th></tr></thead><tbody>'+rows+foot+'</tbody></table></div>';
+  };
+
+  const controls = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+    + '<button data-act="dayReportPrev" title="Previous day" style="'+btn+'">‹</button>'
+    + '<input type="date" data-input="dayReportDate" value="'+esc(dateStr)+'" max="'+esc(rIsoDate(new Date()))+'" style="'+dateInp+'">'
+    + '<button data-act="dayReportNext"'+(isToday?' disabled':'')+' title="Next day" style="'+btn+(isToday?'opacity:.4;cursor:default;':'')+'">›</button>'
+    + '<button data-act="dayReportToday" style="'+btn+(isToday?'border-color:var(--accent);color:var(--accent);':'')+'">Today</button>'
+    + '<div style="flex:1;"></div>'
+    + '<button data-act="dayReportPrint" style="display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;background:var(--btn-bg);color:var(--btn-fg);">'+ic(ICON.print,1.6,15)+' Print</button>'
+    + '</div>';
+
+  const summary = '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:23px;color:var(--ink);margin:16px 2px 4px;">'+esc(dayReportHumanDate(dateStr))+'</div>'
+    + '<div style="font-size:12.5px;color:var(--muted2);">'+rep.grand.qty+' item'+(rep.grand.qty===1?'':'s')+' sold · '+money(rep.grand.revenue)+' · '+rep.orderCount+' order'+(rep.orderCount===1?'':'s')+'</div>';
+
+  return '<div class="pad-screen" style="padding:26px 30px 60px;max-width:980px;animation:fadeUp .35s ease;">'
+    + (state.err.orders?errInline(state.err.orders):'')
+    + controls + summary
+    + section('Food', rep.food, rep.foodTot)
+    + section('Drinks', rep.drinks, rep.drinkTot)
+    + '</div>';
+}
+
+// Print a clean, self-contained items sheet for the kitchen (no console chrome).
+function dayReportPrint(){
+  dayReportEnsure();
+  const dateStr = state.dayReport.date;
+  const rep = dayReportItems(dateStr);
+  const cafeName = (state.cafe && state.cafe.name) || 'Café';
+  const rows = function(list){
+    if(!list.length) return '<tr><td colspan="3" style="color:#777;font-style:italic;">None</td></tr>';
+    return list.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="n">'+x.qty+'</td><td class="n">'+money(x.revenue)+'</td></tr>'; }).join('');
+  };
+  const tfoot = function(tot){ return '<tfoot><tr><td>Subtotal</td><td class="n">'+tot.qty+'</td><td class="n">'+money(tot.revenue)+'</td></tr></tfoot>'; };
+  const table = function(title, list, tot){ return '<h2>'+esc(title)+'</h2><table><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Revenue</th></tr></thead><tbody>'+rows(list)+'</tbody>'+tfoot(tot)+'</table>'; };
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(cafeName)+' — items sold '+esc(dateStr)+'</title>'
+    + '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#111;padding:26px;max-width:680px;margin:0 auto;}'
+    + 'h1{font-size:20px;margin:0 0 2px;}.sub{color:#555;font-size:13px;}.tot{color:#333;font-size:13px;margin:4px 0 4px;}'
+    + 'h2{font-size:15px;border-bottom:2px solid #111;padding-bottom:4px;margin:24px 0 4px;}'
+    + 'table{width:100%;border-collapse:collapse;}th,td{padding:6px 4px;font-size:13px;border-bottom:1px solid #ddd;text-align:left;}'
+    + 'th{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:#555;}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}'
+    + 'tfoot td{font-weight:700;border-top:2px solid #111;border-bottom:none;}@media print{body{padding:0;}}</style></head><body>'
+    + '<h1>'+esc(cafeName)+' — Items sold</h1>'
+    + '<div class="sub">'+esc(dayReportHumanDate(dateStr))+'</div>'
+    + '<div class="tot">'+rep.grand.qty+' items sold · '+money(rep.grand.revenue)+' · '+rep.orderCount+' orders</div>'
+    + table('Food', rep.food, rep.foodTot)
+    + table('Drinks', rep.drinks, rep.drinkTot)
+    + '</body></html>';
+  const w = window.open('', '_blank');
+  if(!w){ toast('Allow pop-ups to print the report','err'); return; }
+  w.document.write(html); w.document.close(); w.focus();
+  setTimeout(function(){ try{ w.print(); }catch(e){} }, 350);
+}
 
 function menuHTML(){
   if(!state.menu) return state.err.menu?errBox(state.err.menu):loadingBox('Loading menu…');
@@ -1513,6 +1642,7 @@ async function saveMealDeal(){
   const g=function(id){ return document.getElementById(id); };
   const collect=function(cls){ const out=[]; const els=document.querySelectorAll('.'+cls+':checked'); for(let i=0;i<els.length;i++) out.push(els[i].value); return out; };
   const enabled = g('md-enabled') ? g('md-enabled').checked : false;
+  const start = (g('md-start') && g('md-start').value) || '07:00';
   const cutoff = (g('md-cutoff') && g('md-cutoff').value) || '11:00';
   const price = g('md-price') ? Number(g('md-price').value) : 1;
   const qualifyCategories = collect('md-q');
@@ -1521,7 +1651,7 @@ async function saveMealDeal(){
     if(!qualifyCategories.length){ state.mealDealMsg='Pick at least one qualifying meal category.'; render(); return; }
     if(!drinkCategories.length){ state.mealDealMsg='Pick at least one drink category.'; render(); return; }
   }
-  const body = { mealDeal: { enabled:enabled, label:'', window:{ from:'00:00', to:cutoff }, qualifyCategories:qualifyCategories, drinkCategories:drinkCategories, drinkPrice: isFinite(price)?price:1 } };
+  const body = { mealDeal: { enabled:enabled, label:'', window:{ from:start, to:cutoff }, qualifyCategories:qualifyCategories, drinkCategories:drinkCategories, drinkPrice: isFinite(price)?price:1 } };
   try {
     const d = await api('/me/mealdeal', { method:'PATCH', body: body });
     if(state.cafe && state.cafe.config) state.cafe.config.mealDeal = d.mealDeal;
@@ -1563,6 +1693,7 @@ function handleInput(name,value){
   else if(name==='repDay'){ if(!value)return; var d=new Date(value+'T00:00'); if(isNaN(d))return; var mo=rMonday(d), su=rEod(new Date(mo.getFullYear(),mo.getMonth(),mo.getDate()+6)); state.rep={ from:rIsoDT(mo), to:rIsoDT(su), quick:'' }; render(); }
   else if(name==='feeFrom'){ state.fee.from=value; state.fee.quick=''; render(); }
   else if(name==='feeTo'){ state.fee.to=value; state.fee.quick=''; render(); }
+  else if(name==='dayReportDate'){ if(value){ dayReportEnsure(); state.dayReport.date=value; render(); } }
 }
 function setSettingsMsg(msg){ state.setMsg=msg; const el=document.getElementById('set-msg'); if(el){ el.textContent=msg; el.style.color = msg.indexOf('Saved')===0?'var(--pos)':msg.indexOf('Nothing')===0?'var(--muted)':'var(--neg)'; } }
 function updateSeg(act,curv){ document.querySelectorAll('[data-act="'+act+'"]').forEach(function(b){ const on=b.getAttribute('data-val')===curv; b.style.background=on?'var(--accent)':'var(--input)'; b.style.color=on?'#fff':'var(--muted)'; }); }
@@ -1650,6 +1781,10 @@ function handle(act, ds, ev){
     case 'promoDelete': readPromoRows(); state.promos.splice(+ds.idx,1); state.promoMsg=''; render(); break;
     case 'savePromos': savePromos(); break;
     case 'saveMealDeal': saveMealDeal(); break;
+    case 'dayReportPrev': dayReportShift(-1); break;
+    case 'dayReportNext': dayReportShift(1); break;
+    case 'dayReportToday': dayReportSetToday(); break;
+    case 'dayReportPrint': dayReportPrint(); break;
     case 'emailBill': emailBill(ds.id); break;
     case 'repRange': repQuick(ds.val); break;
     case 'feeRange': feeQuick(ds.val); break;
