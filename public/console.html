@@ -33,6 +33,10 @@
   .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
   .split-grid{display:grid;gap:18px;}
   @keyframes ringpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,90,60,.55);}50%{box-shadow:0 0 0 6px rgba(255,90,60,0);}}
+  /* Tablet / narrow desktop (e.g. iPad with the sidebar open): the bill preview +
+     staff actions stack into one column so they sit beside the open-bills list
+     instead of overflowing the 3-wide row and clipping. */
+  @media (max-width:1300px){ .bill-main{flex-direction:column !important;align-items:center;} }
   @media (max-width:768px){
     .app-sidebar{display:none !important;}
     .app-header{padding:14px 16px;}
@@ -1205,31 +1209,63 @@ function dayReportDrinkSlugs(){
   else Object.keys(DRINK_CATEGORIES).forEach(function(s){ out[s]=1; });
   return out;
 }
-// Aggregate the selected day's order lines into Food + Drinks, each [{name,qty,revenue}].
+// Alternative-milk option labels, read from the live menu's add-on groups whose
+// label mentions "milk" (e.g. Oat/Almond/Coconut/Soy Milk). Tenant-agnostic.
+function dayReportMilkOptions(){
+  const out = []; const seen = {};
+  const cats = (state.menu && state.menu.categories) || {};
+  Object.keys(cats).forEach(function(slug){
+    (cats[slug].addOns || []).forEach(function(grp){
+      if(grp && /milk/i.test(grp.label||'')){
+        (grp.options||[]).forEach(function(o){ if(o && !seen[o]){ seen[o]=1; out.push(o); } });
+      }
+    });
+  });
+  return out;
+}
+// The first alt-milk option named in a line's notes (where add-ons are stored), or null.
+function detectMilk(notes, milks){
+  if(!notes || !milks.length) return null;
+  const low = String(notes).toLowerCase();
+  for(let k=0;k<milks.length;k++){ if(low.indexOf(milks[k].toLowerCase())>=0) return milks[k]; }
+  return null;
+}
+// Aggregate the selected day's order lines into Food + Drinks (each [{name,qty,revenue}])
+// + an alternative-milk tally. Alt-milk drinks split into their own rows (· Oat Milk).
 function dayReportItems(dateStr){
   const nameToCat = {};
   menuCategoriesOrdered().forEach(function(c){ if(c.virtual) return; (c.items||[]).forEach(function(it){ if(it && it.name!=null && nameToCat[it.name]===undefined) nameToCat[it.name]=c.key; }); });
   const drinkSlugs = dayReportDrinkSlugs();
+  const milks = dayReportMilkOptions();
+  const milkTally = {}; milks.forEach(function(m){ milkTally[m] = { name:m, qty:0, revenue:0 }; });
+  let altMilkQty = 0, altMilkRevenue = 0;
   const map = {};
   let orderCount = 0;
   (state.orders||[]).forEach(function(o){
     if(rIsoDate(new Date(o.createdAt)) !== dateStr) return;
     orderCount++;
     (o.items||[]).forEach(function(i){
-      const key = i.name + (i.size ? ' ('+i.size+')' : '');
+      const qn = Number(i.qty)||1;
+      const lineRev = (Number(i.price)||0) * qn;
       const slug = nameToCat[i.name];
       const drink = slug ? !!drinkSlugs[slug] : isDrink(i.name||'');
+      const milk = detectMilk(i.notes, milks);
+      const key = i.name + (i.size ? ' ('+i.size+')' : '') + (milk ? ' · '+milk : '');
       if(!map[key]) map[key] = { name:key, qty:0, revenue:0, drink:drink };
-      map[key].qty += Number(i.qty)||1;
-      map[key].revenue += (Number(i.price)||0) * (Number(i.qty)||1);
+      map[key].qty += qn;
+      map[key].revenue += lineRev;
+      if(milk && milkTally[milk]){ milkTally[milk].qty += qn; milkTally[milk].revenue += lineRev; altMilkQty += qn; altMilkRevenue += lineRev; }
     });
   });
   const arr = Object.keys(map).map(function(k){ return map[k]; });
   const byQty = function(a,b){ return b.qty-a.qty || b.revenue-a.revenue; };
-  const sum = function(list){ return list.reduce(function(s,x){ return { qty:s.qty+x.qty, revenue:Math.round((s.revenue+x.revenue)*100)/100 }; }, {qty:0,revenue:0}); };
+  const r2 = function(n){ return Math.round(n*100)/100; };
+  const sum = function(list){ return list.reduce(function(s,x){ return { qty:s.qty+x.qty, revenue:r2(s.revenue+x.revenue) }; }, {qty:0,revenue:0}); };
   const food = arr.filter(function(x){ return !x.drink; }).sort(byQty);
   const drinks = arr.filter(function(x){ return x.drink; }).sort(byQty);
-  return { food:food, drinks:drinks, foodTot:sum(food), drinkTot:sum(drinks), grand:sum(arr), orderCount:orderCount };
+  const milk = milks.map(function(m){ return { name:m, qty:milkTally[m].qty, revenue:r2(milkTally[m].revenue) }; });
+  return { food:food, drinks:drinks, foodTot:sum(food), drinkTot:sum(drinks), grand:sum(arr), orderCount:orderCount,
+           milk:milk, altMilkQty:altMilkQty, altMilkRevenue:r2(altMilkRevenue) };
 }
 function dayReportHumanDate(dateStr){ const d=new Date(dateStr+'T00:00'); return isNaN(d)?dateStr:d.toLocaleDateString('en-NZ',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); }
 function dayReportShift(delta){
@@ -1262,6 +1298,21 @@ function dayReportHTML(){
       + '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Item</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Qty</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Revenue</th></tr></thead><tbody>'+rows+foot+'</tbody></table></div>';
   };
 
+  // Alternative-milk tally (Oat/Almond/… counts + the sales they appeared on).
+  const milkSection = function(){
+    const milks = rep.milk || [];
+    if(!milks.length) return '';   // tenant menu has no milk add-ons
+    const head = '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);">Alternative milk</div><div style="font-size:12.5px;color:var(--muted2);">'+rep.altMilkQty+' drink'+(rep.altMilkQty===1?'':'s')+' · '+money(rep.altMilkRevenue)+'</div></div>';
+    if(!rep.altMilkQty) return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-top:18px;">'+head+'<div style="color:var(--muted2);font-size:13px;">No alternative milk added on this day.</div></div>';
+    const note = '<div style="font-size:11.5px;color:var(--muted2);margin-bottom:12px;">Counted from each drink’s add-ons · sales = full drink price.</div>';
+    const rows = milks.map(function(m){
+      const dim = m.qty===0 ? 'opacity:.4;' : '';
+      return '<tr style="border-bottom:1px dotted var(--divider);'+dim+'"><td style="padding:9px 0;font-size:13.5px;color:var(--ink);">'+esc(m.name)+'</td><td style="padding:9px 0;text-align:right;font-family:\'Fraunces\',serif;font-size:16px;color:var(--accent);width:64px;">'+m.qty+'</td><td style="padding:9px 0;text-align:right;font-size:13.5px;color:var(--muted);width:110px;font-variant-numeric:tabular-nums;">'+money(m.revenue)+'</td></tr>';
+    }).join('');
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-top:18px;">'+head+note
+      + '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Milk</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Qty</th><th style="text-align:right;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);padding-bottom:8px;border-bottom:1px solid var(--border);">Drink sales</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  };
+
   const controls = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
     + '<button data-act="dayReportPrev" title="Previous day" style="'+btn+'">‹</button>'
     + '<input type="date" data-input="dayReportDate" value="'+esc(dateStr)+'" max="'+esc(rIsoDate(new Date()))+'" style="'+dateInp+'">'
@@ -1279,6 +1330,7 @@ function dayReportHTML(){
     + controls + summary
     + section('Food', rep.food, rep.foodTot)
     + section('Drinks', rep.drinks, rep.drinkTot)
+    + milkSection()
     + '</div>';
 }
 
@@ -1294,6 +1346,14 @@ function dayReportPrint(){
   };
   const tfoot = function(tot){ return '<tfoot><tr><td>Subtotal</td><td class="n">'+tot.qty+'</td><td class="n">'+money(tot.revenue)+'</td></tr></tfoot>'; };
   const table = function(title, list, tot){ return '<h2>'+esc(title)+'</h2><table><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Revenue</th></tr></thead><tbody>'+rows(list)+'</tbody>'+tfoot(tot)+'</table>'; };
+  const milkTable = function(){
+    const milks = rep.milk || [];
+    if(!milks.length) return '';
+    if(!rep.altMilkQty) return '<h2>Alternative milk</h2><p style="font-size:13px;color:#555;">None added on this day.</p>';
+    const mrows = milks.map(function(m){ return '<tr style="'+(m.qty===0?'color:#999;':'')+'"><td>'+esc(m.name)+'</td><td class="n">'+m.qty+'</td><td class="n">'+money(m.revenue)+'</td></tr>'; }).join('');
+    const mfoot = '<tfoot><tr><td>Total</td><td class="n">'+rep.altMilkQty+'</td><td class="n">'+money(rep.altMilkRevenue)+'</td></tr></tfoot>';
+    return '<h2>Alternative milk</h2><table><thead><tr><th>Milk</th><th class="n">Qty</th><th class="n">Drink sales</th></tr></thead><tbody>'+mrows+'</tbody>'+mfoot+'</table>';
+  };
   const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(cafeName)+' — items sold '+esc(dateStr)+'</title>'
     + '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#111;padding:26px;max-width:680px;margin:0 auto;}'
     + 'h1{font-size:20px;margin:0 0 2px;}.sub{color:#555;font-size:13px;}.tot{color:#333;font-size:13px;margin:4px 0 4px;}'
@@ -1306,6 +1366,7 @@ function dayReportPrint(){
     + '<div class="tot">'+rep.grand.qty+' items sold · '+money(rep.grand.revenue)+' · '+rep.orderCount+' orders</div>'
     + table('Food', rep.food, rep.foodTot)
     + table('Drinks', rep.drinks, rep.drinkTot)
+    + milkTable()
     + '</body></html>';
   const w = window.open('', '_blank');
   if(!w){ toast('Allow pop-ups to print the report','err'); return; }
@@ -1425,7 +1486,13 @@ function billingHTML(){
   const printRcpt = PRINTING_ENABLED ? actBtn('printReceipt','🧾 Print receipt') : '';
   const staff = '<div style="width:260px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Staff actions</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;">'+markPaid+printRcpt+actBtn('emailBill','Email receipt')+actBtn('applyDiscount','Apply discount','var(--accent)')+__loyaltyBlock+'</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.6;margin-top:14px;">Mark as paid records the tender (cash/card) on the order.'+(PRINTING_ENABLED?' 🧾 prints the GST tax invoice.':'')+'</div></div>';
 
-  return '<div class="bill-split" style="display:flex;gap:36px;padding:34px 30px 60px;justify-content:center;align-items:flex-start;'+entAnim()+'"><div style="width:300px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Open bills</div>'+openBills+'</div>'+phone+staff+'</div>';
+  // Three panes — open bills · the bill · staff actions. They wrap (never clip):
+  // on a roomy desktop all three sit in a row; once the sidebar squeezes the width
+  // (iPad/narrow laptop) the bill+actions pair drops below the list together.
+  return '<div class="bill-split" style="display:flex;flex-wrap:wrap;gap:28px;padding:34px 30px 60px;justify-content:center;align-items:flex-start;'+entAnim()+'">'
+    + '<div style="width:300px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Open bills</div>'+openBills+'</div>'
+    + '<div class="bill-main" style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start;justify-content:center;">'+phone+staff+'</div>'
+    + '</div>';
 }
 
 function customersHTML(){
