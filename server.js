@@ -42,6 +42,13 @@ try {
 let resolveMenuItem;
 try { ({ resolveMenuItem } = require("./promo")); } catch { resolveMenuItem = () => null; }
 
+// Breakfast meal deal — a time-gated, auto-applied promo (config.mealDeal): a
+// qualifying meal before the daily cutoff unlocks one eligible drink for $1.
+// Same defensive load — a missing/broken module disables the deal, never 500s.
+let computeMealDeal, mealDealActive, normalizeMealDeal;
+try { ({ computeMealDeal, mealDealActive, normalizeMealDeal } = require("./mealdeal")); }
+catch (e) { console.warn("[mealdeal] module unavailable — meal deal disabled:", e && e.message); computeMealDeal = () => null; mealDealActive = () => false; normalizeMealDeal = () => { throw new Error("Meal deal unavailable."); }; }
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
@@ -1462,7 +1469,7 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features", "loyalty"]) {
+  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features", "loyalty", "mealDeal"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -1951,6 +1958,30 @@ app.patch("/me/promos", requireOwner, (req, res) => {
   });
 });
 
+// PATCH /me/mealdeal — owner/console session. Replace THIS café's breakfast meal
+// deal wholesale. Body: { mealDeal: { enabled, label?, window:{from?,to?},
+// qualifyCategories:[slug], drinkCategories:[slug], drinkPrice } }.
+// normalizeMealDeal validates categories against the café's live menu and the
+// window/price ranges, throwing a friendly message on the first problem → 400.
+app.patch("/me/mealdeal", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const raw = req.body && typeof req.body.mealDeal === "object" ? req.body.mealDeal : null;
+  if (!raw) return res.status(400).json({ error: "Send a mealDeal object." });
+  let cleaned;
+  try {
+    cleaned = normalizeMealDeal(raw, tenantStore(t.slug).loadMenu());
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid meal deal." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.mealDeal = cleaned;
+    saveTenant(t);
+    res.json({ success: true, mealDeal: cleaned });
+  });
+});
+
 // POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
 // café's ops-console account. Generates a random initial password (returned ONCE)
 // unless one is supplied. Re-call with {link:true} to add a café to an existing login.
@@ -2246,6 +2277,13 @@ app.post("/order", resolveTenant, (req, res) => {
         const fd = computeFrequentDiscount(req.tenant.config, loyaltyCustomer, normalizedItems);
         if (fd) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: fd.label, amount: fd.amount, frequent: true, percent: fd.percent, addedAt: now });
       }
+      // Breakfast meal deal (auto, no code): a qualifying meal before the cutoff
+      // reprices an eligible drink to $1. Time + prices are server-authoritative,
+      // re-checked here at order time in the tenant's timezone.
+      {
+        const md = computeMealDeal(req.tenant.config && req.tenant.config.mealDeal, normalizedItems, menu, { timezone: req.tenant.config && req.tenant.config.timezone });
+        if (md) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: md.label, amount: md.amount, mealDeal: true, addedAt: now });
+      }
       // Stamp-card reward redemption (opt-in: needs a redeemable reward + item in cart).
       if (loyaltyCustomer && req.body && req.body.redeemReward) {
         const rd = computeRewardDiscount(req.tenant.config, menu, normalizedItems);
@@ -2512,6 +2550,20 @@ app.get("/menu", resolveTenant, (req, res) => {
     };
   } else {
     out.loyalty = { enabled: false };
+  }
+  // Breakfast meal deal (public): lets the SPA preview the $1-drink deal and show
+  // a banner. `active` is computed server-side in the tenant's timezone so the
+  // preview matches what POST /order applies. Omitted entirely when disabled.
+  if (c.mealDeal && c.mealDeal.enabled) {
+    const m = c.mealDeal;
+    out.mealDeal = {
+      enabled: true,
+      active: mealDealActive(m, { timezone: c.timezone || "Pacific/Auckland" }),
+      label: m.label || "Meal deal",
+      drinkPrice: typeof m.drinkPrice === "number" ? m.drinkPrice : 1,
+      qualifyCategories: Array.isArray(m.qualifyCategories) ? m.qualifyCategories : [],
+      drinkCategories: Array.isArray(m.drinkCategories) ? m.drinkCategories : [],
+    };
   }
   // Internal LAN printer IPs are exposed ONLY to this tenant's own authenticated
   // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
