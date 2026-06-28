@@ -8,7 +8,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1510; color: #f5f0e8; min-height: 100vh; padding-bottom: 60px;
+    background: #1a1510; color: #f5f0e8; min-height: 100vh; min-height: 100dvh; padding-bottom: 60px; overscroll-behavior-y: none;
   }
   header {
     display: flex; align-items: center; justify-content: space-between;
@@ -643,7 +643,14 @@
   }
 
   fetchOrders();
-  setInterval(function () { if (document.visibilityState === "visible") fetchOrders(); }, 60000);
+  // Background refresh: when new orders arrive the #content re-render would reset
+  // the document scroll (jumping the owner back to the top). Preserve their
+  // position across the auto-refresh only — user-initiated reloads still reset.
+  setInterval(function () {
+    if (document.visibilityState !== "visible") return;
+    var y = window.scrollY;
+    fetchOrders().then(function () { if (window.scrollY !== y) window.scrollTo(0, y); });
+  }, 60000);
 })();
 </script>
 

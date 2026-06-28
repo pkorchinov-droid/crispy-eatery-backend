@@ -12,7 +12,9 @@
     background: #1a1510;
     color: #f5f0e8;
     min-height: 100vh;
+    min-height: 100dvh;
     overflow-x: hidden;
+    overscroll-behavior-y: none;
   }
 
   /* ── Header ─────────────────────────────────────── */
@@ -69,17 +71,20 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #a09080;
+    color: #c9b89a;
     margin-top: 2px;
   }
 
+  /* A11Y-4: status dot bumped to 14×14 + carries a text label (Live/Error/Offline)
+     so connection state never rides on color alone. */
   .status-dot {
-    width: 10px;
-    height: 10px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     display: inline-block;
-    margin-right: 6px;
+    margin-right: 7px;
     animation: pulse 2s infinite;
+    flex-shrink: 0;
   }
 
   .status-dot.live { background: #4caf50; }
@@ -91,8 +96,9 @@
   }
 
   .conn-status {
-    font-size: 12px;
-    color: #a09080;
+    font-size: 13px;
+    font-weight: 600;
+    color: #d8c9a8;
     display: flex;
     align-items: center;
   }
@@ -165,19 +171,33 @@
   .adj-modal h3 { margin: 0 0 4px; font-size: 18px; color: #e8c477; font-weight: 600; }
   .adj-modal .sub { color: #a99a82; font-size: 13px; margin: 0 0 16px; }
   .adj-modal .cur-list { margin: 0 0 14px; }
-  .adj-modal .cur-list .adj-row { border-bottom: 1px solid #3a3026; }
-  .adj-modal .cur-list .rm { background: transparent; border: none; color: #a99a82; cursor: pointer; font-size: 16px; padding: 0 4px; }
-  .adj-modal .cur-list .rm:hover { color: #e08a6a; }
+  /* SPEED-1: adjustment rows are a comfortable touch target with a clear hit area
+     on the × remove control. */
+  .adj-modal .cur-list .adj-row { border-bottom: 1px solid #3a3026; min-height: 44px; }
+  .adj-modal .cur-list .rm { background: transparent; border: none; color: #c9b89a; cursor: pointer; font-size: 16px; padding: 6px 8px; border-radius: 6px; min-height: 32px; min-width: 32px; }
+  .adj-modal .cur-list .rm:hover { color: #e08a6a; background: #3a2a22; }
   .adj-modal label { display: block; font-size: 11px; color: #a99a82; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 4px; }
   .adj-modal input { width: 100%; background: #15110b; border: 1px solid #4a4030; color: #f3ead9; border-radius: 8px; padding: 9px 11px; font-size: 14px; }
-  .adj-modal input:focus { outline: none; border-color: #e8c477; }
-  .adj-modal .presets { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 14px; }
-  .adj-modal .preset { background: #15110b; border: 1px solid #4a4030; color: #d8c9a8; border-radius: 18px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  /* Section 0: visible focus ring (replaces outline:none). */
+  .adj-modal input:focus { border-color: #e8c477; }
+  .adj-modal input:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
+  .adj-modal .presets { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+  /* A11Y-5: bigger preset chips with a real hit area + visible focus ring. */
+  .adj-modal .preset { background: #15110b; border: 1px solid #4a4030; color: #d8c9a8; border-radius: 18px; padding: 8px 14px; min-height: 28px; font-size: 12px; cursor: pointer; }
   .adj-modal .preset:hover { border-color: #e8c477; }
+  .adj-modal .preset:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
   .adj-modal .row2 { display: grid; grid-template-columns: 1fr 110px; gap: 10px; align-items: end; }
   .adj-modal .actions { display: flex; gap: 10px; margin-top: 16px; }
-  .adj-modal .btn-add { flex: 1; background: #e8c477; color: #1a1208; border: none; border-radius: 8px; padding: 11px; font-size: 14px; font-weight: 700; cursor: pointer; }
-  .adj-modal .btn-close { background: transparent; color: #c8b893; border: 1px solid #4a4030; border-radius: 8px; padding: 11px 16px; font-size: 14px; cursor: pointer; }
+  .adj-modal .btn-add { flex: 1; background: #e8c477; color: #1a1208; border: none; border-radius: 8px; padding: 11px; min-height: 44px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  /* SPEED-5: the Done/Close button now reads as a real button (subtle fill + border). */
+  .adj-modal .btn-close { background: #352c20; color: #e8dcc4; border: 1px solid #5a4f3a; border-radius: 8px; padding: 11px 16px; min-height: 44px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .adj-modal .btn-close:hover { border-color: #7a6c4e; background: #3f3526; }
+  .adj-modal .btn-add:focus-visible, .adj-modal .btn-close:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
+  /* SPEED-5: explicit × close affordance, top-right of the modal. */
+  .adj-modal { position: relative; }
+  .adj-modal .adj-x { position: absolute; top: 10px; right: 10px; background: transparent; border: none; color: #c9b89a; font-size: 22px; line-height: 1; cursor: pointer; min-height: 44px; min-width: 44px; border-radius: 8px; }
+  .adj-modal .adj-x:hover { color: #f3ead9; background: #3a3026; }
+  .adj-modal .adj-x:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
   .adj-modal .adj-err { display: none; color: #f0a988; font-size: 12px; margin-top: 8px; }
 
   /* ── Order card ─────────────────────────────────── */
@@ -195,6 +215,77 @@
     box-shadow: 0 0 20px rgba(232, 196, 119, 0.3);
   }
 
+  /* B.1 AnimatedList — newly-inserted cards slide/fade in (cheap transform+opacity,
+     GPU-only; reduced-motion users get an instant card). */
+  @keyframes orderIn {
+    from { opacity: 0; transform: translateY(-12px) scale(.98); }
+    to   { opacity: 1; transform: none; }
+  }
+  .order-in { animation: orderIn .3s ease-out both; }
+
+  /* B.1 print-failure: a momentary red border on the card whose ticket failed. */
+  @keyframes cardPrintFail {
+    0%, 100% { box-shadow: 0 0 0 rgba(239,83,80,0); border-color: #3d3428; }
+    50%      { box-shadow: 0 0 16px rgba(239,83,80,.55); border-color: #ef5350; }
+  }
+  .order-card.print-failed { animation: cardPrintFail .7s ease 2; }
+
+  /* B.1 StarBorder — the new-arrival card gets a slowly-rotating golden conic ring
+     so a fresh ticket is unmissable from across the kitchen. Sits behind the card. */
+  .order-card.new-arrival.new-badge { position: relative; z-index: 0; }
+  .order-card.new-arrival.new-badge::before {
+    content: ''; position: absolute; inset: -2px; border-radius: 14px; z-index: -1;
+    background: conic-gradient(from 0deg,#e8c477,transparent 25%,#e8c477 50%,transparent 75%,#e8c477);
+    animation: nbspin 2.6s linear infinite;
+  }
+  @keyframes nbspin { to { transform: rotate(360deg); } }
+
+  /* B.1 CountUp — order total briefly flashes amber→green when the bill changes
+     (adjustment added/removed, combine). */
+  @keyframes totalFlash {
+    0%   { color: #e8c477; }
+    40%  { color: #4caf50; transform: scale(1.08); }
+    100% { color: #e8c477; transform: none; }
+  }
+  .order-total.flash { animation: totalFlash .6s ease; display: inline-block; }
+
+  /* MOTION-4(staff): while a card's mark-paid PATCH is in flight, dim it and show a
+     spinner so staff don't double-tap — it only fades out after the server confirms. */
+  .order-card { position: relative; }
+  .order-card.busy { pointer-events: none; }
+  .order-card.busy::after {
+    content: ''; position: absolute; inset: 0; z-index: 5;
+    background: rgba(20, 16, 11, 0.55);
+    border-radius: 12px;
+  }
+  .order-card .card-spinner {
+    position: absolute; top: 50%; left: 50%; z-index: 6;
+    width: 36px; height: 36px; margin: -18px 0 0 -18px;
+    border: 4px solid rgba(232, 196, 119, 0.3);
+    border-top-color: #e8c477; border-radius: 50%;
+    animation: cardSpin .8s linear infinite;
+  }
+  @keyframes cardSpin { to { transform: rotate(360deg); } }
+
+  /* MOTION-4(staff): the retry banner shown if mark-paid fails. */
+  .order-card .paid-fail-banner {
+    background: #f44336; color: #fff; padding: 10px 12px; text-align: center;
+    font-size: 13px; font-weight: 600; border-radius: 6px; margin: 6px 12px;
+    display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+  }
+  .order-card .paid-fail-banner button {
+    background: #fff; color: #b71c1c; border: none; border-radius: 7px;
+    padding: 8px 16px; min-height: 40px; font-weight: 700; cursor: pointer; font-size: 13px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .order-in,
+    .order-card.new-arrival.new-badge::before,
+    .order-card.print-failed,
+    .order-card .card-spinner,
+    .order-total.flash { animation: none !important; }
+  }
+
   .order-card.preparing {
     border-color: #ff9800;
     box-shadow: 0 0 12px rgba(255, 152, 0, 0.2);
@@ -210,6 +301,8 @@
 
   .order-card.preparing .status-badge {
     display: inline-block;
+    background: #ff9800;
+    color: #2a1a05;
   }
 
   .order-card.ready {
@@ -326,10 +419,14 @@
     white-space: nowrap;
   }
 
+  /* VD-4: always-visible text state badge (NEW / PREPARING / READY / PICKED UP) so
+     order state never rides on color alone. Default = NEW (amber-on-dark). The pulse
+     is reserved for the NEW state only — a steady badge for in-progress states keeps
+     the board calm under a rush. */
   .status-badge {
-    display: none;
-    background: #ff9800;
-    color: #fff;
+    display: inline-block;
+    background: #4a3d2e;
+    color: #f3e6c8;
     font-size: 11px;
     font-weight: 700;
     padding: 3px 10px;
@@ -337,6 +434,10 @@
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-left: 10px;
+  }
+  .status-badge.new {
+    background: #e8c477;
+    color: #2a1f10;
     animation: pulse 1.5s infinite;
   }
 
@@ -359,13 +460,20 @@
   }
   .printed-chip.warn { background: #b0832f; }   /* a station printer failed — see red bar */
 
+  /* VD-2: a subtle vertical rule visually separates the table badge / state from the
+     order metadata (id · time · elapsed). */
   .order-meta {
     text-align: right;
+    padding-left: 14px;
+    border-left: 1px solid #3d3428;
   }
 
+  /* VD-2 + A11Y-6: order-id is the primary identifier — bump to 13px bold and raise
+     contrast; elapsed time stays secondary (see .elapsed). */
   .order-id {
-    font-size: 11px;
-    color: #8a7a68;
+    font-size: 13px;
+    font-weight: 700;
+    color: #d8c9a8;
     font-family: monospace;
   }
 
@@ -394,7 +502,7 @@
 
   .elapsed {
     font-size: 12px;
-    color: #a09080;
+    color: #c9b89a;
     margin-top: 2px;
   }
 
@@ -402,18 +510,25 @@
     padding: 14px 18px;
   }
 
+  /* VD-5: stronger section dividers with a subtle tint zone per station
+     (kitchen = warm orange, barista = cool blue). */
   .section-label {
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 1px;
-    padding: 6px 0 4px;
-    margin-top: 4px;
+    letter-spacing: 1.5px;
+    padding: 6px 8px 4px;
+    margin: 4px -8px 0;
     border-top: 1px dashed #4a3d2e;
     color: #ff9800;
+    background: rgba(255, 152, 0, 0.08);
+    border-radius: 4px;
   }
   .section-label:first-child { border-top: none; margin-top: 0; }
-  .section-label.barista { color: #64b5f6; }
+  .section-label.barista {
+    color: #64b5f6;
+    background: rgba(100, 181, 246, 0.08);
+  }
 
   .item-row {
     display: flex;
@@ -425,12 +540,15 @@
 
   .item-row:last-child { border-bottom: none; }
 
+  /* VD-3: tappable (ready → tap to mark picked up) carries a persistent blue left
+     indicator so the affordance reads without hovering. */
   .item-row.tappable {
     cursor: pointer;
     transition: all 0.2s;
     border-radius: 6px;
-    padding: 8px 6px;
+    padding: 8px 6px 8px 12px;
     margin: 0 -6px;
+    border-left: 4px solid #2196f3;
   }
 
   .item-row.tappable:hover {
@@ -453,13 +571,15 @@
     color: #4caf50;
   }
 
-  /* Per-item ready (cooking) tracking */
+  /* Per-item ready (cooking) tracking — VD-3: cookable carries a persistent orange
+     left indicator, distinct from the blue tappable (picked-up) state. */
   .item-row.cookable {
     cursor: pointer;
     transition: all 0.2s;
     border-radius: 6px;
-    padding: 8px 6px;
+    padding: 8px 6px 8px 12px;
     margin: 0 -6px;
+    border-left: 4px solid #ff9800;
   }
 
   .item-row.cookable:hover {
@@ -509,13 +629,17 @@
     letter-spacing: 0.5px;
   }
 
+  /* FEEDBACK-6: the count span is updated in many JS spots with just "N/total";
+     prefix a static label here via CSS so the progress reads "Cooked: 3/8" /
+     "Picked up: 3/8" without touching every update site. */
   .cook-progress {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 12px;
-    color: #a09080;
+    color: #c9b89a;
   }
+  .cook-progress span::before { content: 'Cooked: '; opacity: .85; }
 
   .cook-progress .prog-bar {
     flex: 1;
@@ -546,8 +670,9 @@
     align-items: center;
     gap: 8px;
     font-size: 12px;
-    color: #a09080;
+    color: #c9b89a;
   }
+  .pickup-progress span::before { content: 'Picked up: '; opacity: .85; }
 
   .pickup-progress .prog-bar {
     flex: 1;
@@ -589,7 +714,7 @@
 
   .item-variant {
     font-weight: 400;
-    color: #a09080;
+    color: #c9b89a;
     font-size: 13px;
   }
 
@@ -617,11 +742,14 @@
     color: #e8a040;
   }
 
+  /* SPEED-4: keep the footer buttons off the screen edge and give the action group
+     a comfortable, consistent height (≥56px) for fast taps under pressure. */
   .card-footer {
     padding: 12px 18px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
     border-top: 1px solid #3d3428;
   }
 
@@ -634,7 +762,12 @@
   .btn-group {
     display: flex;
     gap: 8px;
+    min-height: 56px;
+    align-items: center;
   }
+
+  /* Section 0: every primary action button is a ≥44px touch target. */
+  .btn-prep, .btn-ready, .btn-done, .btn-pickup, .btn-paid { min-height: 44px; }
 
   .btn-prep {
     background: #ff9800;
@@ -747,8 +880,34 @@
   .empty-sub {
     font-size: 13px;
     margin-top: 6px;
-    color: #5a4a38;
+    color: #8a7558;
   }
+
+  /* FEEDBACK-5: live polling status + last-refresh + manual refresh in the empty state. */
+  .empty-poll {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 22px;
+    font-size: 13px;
+    color: #c9b89a;
+  }
+  .empty-poll .empty-dot-sep { color: #6a5a48; }
+  .empty-refresh {
+    background: #2a2318;
+    border: 1px solid #5a4f3a;
+    color: #e8c477;
+    border-radius: 8px;
+    padding: 10px 16px;
+    min-height: 44px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .empty-refresh:hover { border-color: #b5753a; background: #352c20; }
+  .empty-refresh:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
 
   /* ── Flash animation for new orders ─────────────── */
   @keyframes flashBorder {
@@ -883,11 +1042,14 @@
     background: #1a1510;
   }
 
+  /* A11Y-1/A11Y-2: readable inactive label + ≥44px touch target. */
   .filter-btn {
     background: #2a2318;
     border: 1px solid #3d3428;
-    color: #a09080;
-    padding: 8px 20px;
+    border-bottom: 3px solid transparent;
+    color: #d8c9a8;
+    padding: 12px 20px;
+    min-height: 44px;
     border-radius: 8px;
     font-size: 14px;
     font-weight: 600;
@@ -899,28 +1061,35 @@
 
   .filter-btn:hover {
     border-color: #8a7a68;
-    color: #c49a5c;
+    color: #e8c477;
   }
+  .filter-btn:focus-visible { outline: 2px solid #e8c477; outline-offset: 2px; }
 
+  /* SPEED-6: the active filter uses a saturated category color + a heavier
+     border-bottom indicator so the current view is unmistakable. */
   .filter-btn.active {
     background: #b5753a;
     border-color: #b5753a;
+    border-bottom-color: #f5d9a0;
     color: #fff;
   }
 
   .filter-btn.active[data-filter="kitchen"] {
     background: #ff9800;
     border-color: #ff9800;
+    border-bottom-color: #ffd699;
   }
 
   .filter-btn.active[data-filter="barista"] {
     background: #42a5f5;
     border-color: #42a5f5;
+    border-bottom-color: #b3d9ff;
   }
 
   .filter-btn.active[data-filter="pickup"] {
     background: #7a8362;
     border-color: #7a8362;
+    border-bottom-color: #c4cdaa;
   }
 
   /* Filter-based hiding */
@@ -1104,6 +1273,15 @@
     <div class="empty-icon">&#x1F373;</div>
     <div class="empty-text">No active orders</div>
     <div class="empty-sub">New orders will appear here automatically</div>
+    <!-- FEEDBACK-5: confirm the board is alive even when empty — polling dot,
+         last-refresh time, and a manual refresh. -->
+    <div class="empty-poll">
+      <span class="status-dot live" id="emptyPollDot"></span>
+      <span id="emptyPollState">Live</span>
+      <span class="empty-dot-sep">&middot;</span>
+      <span>Last refresh: <span id="emptyLastRefresh">just now</span></span>
+      <button type="button" class="empty-refresh" onclick="pollOrders()">Refresh now</button>
+    </div>
   </div>
 </main>
 
@@ -1216,6 +1394,7 @@
   var TENANT_GST_RATE = 0.15;  // overwritten from /menu gstRate (Crispy = 0.15)
   var TENANT_CURRENCY = '$';   // overwritten from /menu currency (Crispy = "$")
   var TENANT_RECEIPT = {};     // {restaurantName, legalName, gstNumber, address} from /menu
+  var TENANT_DEV_FEE_LABEL = 'Developer fee'; // overwritten from /menu developerFeeLabel
   function loadMenuCategories() {
     try {
       fetch(BACKEND + '/menu', { headers: authHeaders() }).then(function (r) { return r.json(); }).then(function (m) {
@@ -1238,6 +1417,7 @@
         TENANT_PRINTER_IPS = (m && m.printerStations) || {}; // staff-only; absent for non-printing tenants
         if (m && typeof m.gstRate === 'number') TENANT_GST_RATE = m.gstRate;
         if (m && m.currency) TENANT_CURRENCY = m.currency;
+        if (m && m.developerFeeLabel) TENANT_DEV_FEE_LABEL = m.developerFeeLabel;
         TENANT_RECEIPT = {
           name: (m && m.restaurantName) || '',
           legalName: (m && m.legalName) || '',
@@ -1306,6 +1486,9 @@
     const subtitles = { all: 'Kitchen', kitchen: 'Kitchen', barista: 'Barista', pickup: 'Pickup' };
     document.querySelector('.logo span').textContent = subtitles[filter] || 'Kitchen';
     updateStats();
+    // SPEED-6: brief confirmation of which view is now active.
+    const viewLabel = { all: 'All orders', kitchen: '🍳 Kitchen', barista: '☕ Barista', pickup: '☕ Pickup' };
+    toast('Showing ' + (viewLabel[filter] || 'All orders'));
   };
 
   // ── Audio ──
@@ -1340,6 +1523,28 @@
     } catch(e) {
       console.log('Audio not available');
     }
+  }
+
+  // B.1: a distinct low buzz for print FAILURES so staff register a missed ticket
+  // by ear (different from the pleasant new-order chime). Same WebAudio teardown.
+  function playError() {
+    try {
+      ensureAudio();
+      const now = audioCtx.currentTime;
+      [330, 247].forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.18, now + i * 0.18);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.18 + 0.32);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + i * 0.18);
+        osc.stop(now + i * 0.18 + 0.4);
+        osc.onended = function() { try { osc.disconnect(); gain.disconnect(); } catch (_) {} };
+      });
+    } catch (e) {}
   }
 
   // ── Elapsed time ──
@@ -1527,10 +1732,26 @@
   function recordPrintFail(e) {
     e.key = e.kind + ':' + e.refId + ':' + e.station;
     e.at = Date.now();
+    var existed = printFails.some(function (f) { return f.key === e.key; });
     printFails = printFails.filter(function (f) { return f.key !== e.key; });
     printFails.push(e);
     if (printFails.length > 20) printFails = printFails.slice(-20);
     pfPersist(); renderPrintFails();
+    // B.1: surface a missed ticket aggressively — buzz, scroll the persistent
+    // red bar into view, and flash the affected order card's border. Only the
+    // first time a given failure appears (a retry that re-fails won't re-buzz).
+    if (!existed) {
+      try { playError(); } catch (_) {}
+      var bar = document.getElementById('printFailBar');
+      if (bar && bar.style.display !== 'none') {
+        try { bar.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+      }
+      if (e.kind === 'order' || e.kind === 'receipt') {
+        var fc = document.getElementById('card-' + e.refId);
+        if (fc) { fc.classList.remove('print-failed'); void fc.offsetWidth; fc.classList.add('print-failed');
+          setTimeout(function () { fc.classList.remove('print-failed'); }, 1500); }
+      }
+    }
   }
   function resolvePrintFailKey(key) {
     var before = printFails.length;
@@ -2017,6 +2238,7 @@
       var amt = Number(a.amount) || 0;
       L.push(itemRow(a.label || 'Adjustment', (amt < 0 ? '-' : '') + money(Math.abs(amt))));
     });
+    if (Number(order.developerFee) > 0) L.push(itemRow(TENANT_DEV_FEE_LABEL, money(Number(order.developerFee))));
     L.push(P(rep('. ', Math.floor(W / 2)).replace(/ $/, ''), { align: 'left' }));
     // GST line from the tenant rate (Crispy 0.15 → "GST 15%"); hidden entirely at rate 0.
     var gstPct = Math.round((b.rate || 0) * 100);
@@ -2114,7 +2336,12 @@
     if (!isOrderPrinted(order)) return '';
     var info = getPrintedMap()[printedKeyFor(order)] || {};
     var warn = info.fail > 0 ? ' warn' : '';
-    return '<span class="printed-chip' + warn + '" title="Bills sent to printers (kitchen · barista · full · GST)">&#128424; Printed</span>';
+    // B.1: on a partial success surface the failed-station count right on the chip
+    // (e.g. "Printed (1 failed)") so the cook sees it without scanning the red bar.
+    var label = info.fail > 0
+      ? 'Printed (' + info.fail + ' failed)'
+      : 'Printed';
+    return '<span class="printed-chip' + warn + '" title="Bills sent to printers (kitchen · barista · full · GST)">&#128424; ' + label + '</span>';
   }
   // Inject/refresh the Printed chip on a LIVE card. markPreparing mutates the card
   // in place rather than re-rendering, so the chip is added to the DOM directly;
@@ -2303,6 +2530,10 @@
             '<span class="adj-amt' + (amt < 0 ? ' neg' : '') + '">' + (amt < 0 ? '-' : '+') + TENANT_CURRENCY + Math.abs(amt).toFixed(2) + '</span></div>';
         }).join('') + '</div>'
       : '';
+    const feeHtml = (Number(order.developerFee) > 0)
+      ? '<div class="order-adjustments"><div class="adj-row"><span class="adj-label">' + escHtml(TENANT_DEV_FEE_LABEL) + '</span>' +
+        '<span class="adj-amt">+' + TENANT_CURRENCY + Number(order.developerFee).toFixed(2) + '</span></div></div>'
+      : '';
 
     // Buttons based on status:
     const idJs = jsStr(order.id);
@@ -2320,22 +2551,24 @@
         : '<button class="btn-paid" onclick="markPaid(\'' + idJs + '\')">PAID BY CUSTOMER</button>';
     }
 
-    // Status badge text and visibility
+    // VD-4: the state badge is ALWAYS visible and carries text (never color alone).
+    // A brand-new (received) order reads NEW with the attention-pulse (.new);
+    // in-progress states are steady.
     let statusClass = '';
-    let badgeText = '';
-    let badgeVisible = false;
+    let badgeText = 'New';
+    let badgeClass = ' new';
     if (isPreparing) {
       statusClass = ' preparing';
       badgeText = 'Preparing';
-      badgeVisible = true;
+      badgeClass = '';
     } else if (isReady) {
       statusClass = ' ready';
       badgeText = 'Ready';
-      badgeVisible = true;
+      badgeClass = '';
     } else if (isPickedUp) {
       statusClass = ' picked_up';
       badgeText = 'Picked Up';
-      badgeVisible = true;
+      badgeClass = '';
     }
 
     const safeId = escAttr(order.id);
@@ -2354,7 +2587,7 @@
           (isPickup
             ? '<div class="table-badge pickup">&#9749; PICKUP</div>'
             : '<div class="table-badge">T' + escHtml(order.tableNumber) + '</div>') +
-          '<span class="status-badge"' + (badgeVisible ? ' style="display:inline-block"' : '') + '>' + escHtml(badgeText) + '</span>' +
+          '<span class="status-badge' + badgeClass + '">' + escHtml(badgeText) + '</span>' +
           printedChipHtml(order) +
           '<button class="btn-print" onclick="printTicket(\'' + idJs + '\')" title="Print kitchen ticket (no prices)" aria-label="Print kitchen ticket">&#128424;</button>' +
           '<button class="btn-print" onclick="printReceipt(\'' + idJs + '\')" title="Print GST receipt (with prices)" aria-label="Print GST receipt">&#129534;</button>' +
@@ -2367,7 +2600,7 @@
         '</div>' +
       '</div>' +
       pickupInfo +
-      '<div class="card-body">' + itemsHtml + adjHtml + orderNotes + cookHint + pickupHint + '</div>' +
+      '<div class="card-body">' + itemsHtml + adjHtml + feeHtml + orderNotes + cookHint + pickupHint + '</div>' +
       '<div class="card-footer">' +
         '<div class="footer-left">' +
           '<div class="order-total">' + TENANT_CURRENCY + (Number(order.total) || 0).toFixed(2) + '</div>' +
@@ -2429,9 +2662,9 @@
     const card = document.getElementById('card-' + orderId);
     if (card) {
       card.classList.add('preparing');
-      // Show status badge
+      // Move the state badge from NEW → PREPARING (drop the .new pulse).
       const badge = card.querySelector('.status-badge');
-      if (badge) badge.style.display = 'inline-block';
+      if (badge) { badge.classList.remove('new'); badge.textContent = 'Preparing'; }
       // Replace all buttons with READY (ALL) override
       const btnGroup = card.querySelector('.btn-group');
       if (btnGroup) {
@@ -2502,7 +2735,7 @@
       card.classList.add('ready');
       // Update status badge
       const badge = card.querySelector('.status-badge');
-      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+      if (badge) { badge.classList.remove('new'); badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
       // Remove cook state (cookable items, checkmarks, cook hint/progress)
       card.querySelectorAll('.item-row').forEach(function(row) {
         row.classList.remove('cookable', 'cooked');
@@ -2712,7 +2945,7 @@
       card.classList.add('picked_up');
       // Update status badge
       const badge = card.querySelector('.status-badge');
-      if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+      if (badge) { badge.classList.remove('new'); badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
       // Remove tappable state and pickup hint/progress
       card.querySelectorAll('.item-row').forEach(function(row) {
         row.classList.remove('tappable', 'picked');
@@ -2828,26 +3061,45 @@
     if (method === null) { paidInFlight.delete(orderId); return; }   // cancelled
 
     const card = document.getElementById('card-' + orderId);
-    // Visually disable both buttons in case there's a double-tap.
-    if (card) card.classList.add('done');
+    // MOTION-4(staff): show a spinner + dim the card while the PATCH is in flight
+    // (don't fade it out yet — only do that once the server confirms). The .busy
+    // overlay also blocks double-taps.
+    let spinner = null;
+    if (card) {
+      var oldBanner = card.querySelector('.paid-fail-banner');
+      if (oldBanner) oldBanner.remove();
+      card.classList.add('busy');
+      spinner = document.createElement('div');
+      spinner.className = 'card-spinner';
+      card.appendChild(spinner);
+    }
 
     // Record paid + done on the server — the source of truth for reports,
     // reloads and reprints. The customer just paid at the counter (cash/card).
     const resp = await syncOrder(orderId, { status: 'done', paymentStatus: 'paid', paymentMethod: method });
     if (!resp || !resp.ok) {
-      // Revert the optimistic fade and tell the cook.
+      // Re-enable the card and surface a prominent banner with a Retry button.
       paidInFlight.delete(orderId);
       if (card) {
-        card.classList.remove('done');
+        card.classList.remove('busy');
+        if (spinner) spinner.remove();
         const status = resp ? resp.status : 'network';
         const banner = document.createElement('div');
-        banner.style.cssText = 'background:#f44336;color:#fff;padding:8px;text-align:center;font-size:12px;border-radius:6px;margin:6px 12px';
-        banner.textContent = "Couldn't mark paid (HTTP " + status + "). Try again.";
+        banner.className = 'paid-fail-banner';
+        const msg = document.createElement('span');
+        msg.textContent = "Couldn't mark paid (HTTP " + status + ").";
+        const retry = document.createElement('button');
+        retry.textContent = 'Retry';
+        retry.onclick = function() { banner.remove(); markPaid(orderId); };
+        banner.appendChild(msg); banner.appendChild(retry);
         card.appendChild(banner);
-        setTimeout(function() { banner.remove(); }, 4000);
       }
       return;
     }
+
+    // Server confirmed — NOW fade the card out.
+    if (spinner) spinner.remove();
+    if (card) { card.classList.remove('busy'); card.classList.add('done'); }
 
     // Server confirmed. Mark paid locally so the receipt (and any reprint from
     // history) shows the PAID box with the chosen tender, then auto-print to .66.
@@ -2978,8 +3230,52 @@
     bar.innerHTML = '<span class="combine-label">Multiple orders</span>' + chips.join('');
   }
 
+  // SPEED-2: replace the blocking window.confirm with a two-step review modal — it
+  // shows exactly which orders + items will be folded into one bill before the
+  // irreversible merge, then calls the same /orders/merge endpoint on confirm.
+  function gatherTableOrders(table) {
+    var t = String(table);
+    return Object.keys(orderData).map(function (id) { return orderData[id]; }).filter(function (o) {
+      if (!o || o.status === 'done') return false;
+      if (isPickupOrder(o)) return false;
+      if (['paid', 'pending', 'refunded'].indexOf(o.paymentStatus) >= 0) return false;
+      return String(o.tableNumber) === t;
+    });
+  }
   window.combineTable = function (table) {
-    if (!confirm('Combine all open orders for table ' + table + ' into one order + bill?')) return;
+    var orders = gatherTableOrders(table);
+    var ov = document.getElementById('adjustOverlay');
+    if (!ov || orders.length < 2) { doCombine(table); return; }   // fallback: nothing to review
+    var grand = orders.reduce(function (s, o) { return s + (Number(o.total) || 0); }, 0);
+    var ordersHtml = orders.map(function (o) {
+      var items = (o.items || []).map(function (it) {
+        return '<div class="adj-row" style="padding:2px 0"><span class="adj-label" style="font-style:normal">' +
+          (Number(it.qty) || 1) + '&#215; ' + escHtml(it.name) + (it.size ? ' (' + escHtml(it.size) + ')' : '') + '</span></div>';
+      }).join('');
+      return '<div style="border-top:1px solid #3a3026;padding:8px 0">' +
+        '<div style="display:flex;justify-content:space-between;font-weight:700;color:#e8c477">' +
+          '<span>' + escHtml(o.id) + '</span><span>' + TENANT_CURRENCY + (Number(o.total) || 0).toFixed(2) + '</span></div>' +
+        items + '</div>';
+    }).join('');
+    ov.innerHTML = '<div class="adj-modal" onclick="event.stopPropagation()">' +
+      '<button class="adj-x" onclick="closeAdjust()" aria-label="Close">&times;</button>' +
+      '<h3>Combine table ' + escHtml(String(table)) + '?</h3>' +
+      '<div class="sub">' + orders.length + ' open orders &middot; will become ONE order + bill</div>' +
+      '<div class="cur-list" style="max-height:42vh;overflow:auto">' + ordersHtml + '</div>' +
+      '<div class="adj-row" style="border-top:2px solid #5a4f3a;padding-top:8px;font-size:15px">' +
+        '<span class="adj-label" style="font-style:normal;font-weight:700">Combined total</span>' +
+        '<span class="adj-amt" style="color:#e8c477">' + TENANT_CURRENCY + grand.toFixed(2) + '</span></div>' +
+      '<div style="font-size:11px;color:#a99a82;margin-top:6px">Re-print the ticket after combining. This can\'t be undone.</div>' +
+      '<div class="actions">' +
+        '<button class="btn-add" onclick="confirmCombine(\'' + jsStr(String(table)) + '\')">Combine into one bill</button>' +
+        '<button class="btn-close" onclick="closeAdjust()">Cancel</button>' +
+      '</div>' +
+    '</div>';
+    ov.onclick = function () { closeAdjust(); };
+    ov.style.display = 'flex';
+  };
+  window.confirmCombine = function (table) { closeAdjust(); doCombine(table); };
+  function doCombine(table) {
     fetch(BACKEND + '/orders/merge', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -2998,14 +3294,16 @@
         if (pc && pc.parentNode) {
           var tmp = document.createElement('div');
           tmp.innerHTML = renderCard(combined);
-          pc.parentNode.replaceChild(tmp.firstChild, pc);
+          var freshCombined = tmp.firstChild;
+          pc.parentNode.replaceChild(freshCombined, pc);
+          flashTotal(freshCombined);   // B.1 CountUp: combined bill total flashes
         }
         toast('Combined ' + res.d.mergedCount + ' orders → ' + combined.id + ' (re-print the ticket)', 'ok');
         renderCombineBar();
         updateStats();
       })
       .catch(function () { toast('Combine failed', 'err'); });
-  };
+  }
 
   // ── Manual bill adjustments (extra dish, decaf shot, discount…) ──
   var ADJ_PRESETS = [
@@ -3020,8 +3318,18 @@
     if (card && card.parentNode) {
       var t = document.createElement('div');
       t.innerHTML = renderCard(order);
-      card.parentNode.replaceChild(t.firstChild, card);
+      var fresh = t.firstChild;
+      card.parentNode.replaceChild(fresh, card);
+      flashTotal(fresh);   // B.1 CountUp: bill changed → flash the new total
     }
+  }
+  // B.1 CountUp port: briefly flash an order's total amber→green when it changes
+  // (adjustment added/removed, combine). Pure CSS animation, GPU-only.
+  function flashTotal(scope) {
+    var t = (scope || document).querySelector('.order-total');
+    if (!t) return;
+    t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash');
+    setTimeout(function () { t.classList.remove('flash'); }, 650);
   }
   window.openAdjust = function (orderId) {
     if (!orderData[orderId]) return;
@@ -3043,6 +3351,7 @@
     }).join('');
     var ov = document.getElementById('adjustOverlay');
     ov.innerHTML = '<div class="adj-modal" onclick="event.stopPropagation()">' +
+      '<button class="adj-x" onclick="closeAdjust()" aria-label="Close">&times;</button>' +
       '<h3>Adjust bill</h3>' +
       '<div class="sub">Order ' + escHtml(o.id) + ' &middot; Table ' + escHtml(o.tableNumber) + ' &middot; total ' + TENANT_CURRENCY + (Number(o.total) || 0).toFixed(2) + '</div>' +
       listHtml +
@@ -3109,6 +3418,7 @@
       if (resp.status === 401) {
         document.getElementById('statusDot').className = 'status-dot error';
         document.getElementById('statusText').textContent = 'Auth required (add ?token=… to URL)';
+        updateEmptyPollState('error');     // FEEDBACK-5
         return;
       }
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -3170,9 +3480,11 @@
           const card = temp.firstChild;
 
           if (!isFirstLoad) {
-            card.classList.add('new-arrival', 'flash');
+            // B.1 AnimatedList: slide the card in; StarBorder: golden ring while NEW.
+            card.classList.add('new-arrival', 'new-badge', 'flash', 'order-in');
             setTimeout(() => card.classList.remove('flash'), 1500);
-            setTimeout(() => card.classList.remove('new-arrival'), 5000);
+            setTimeout(() => card.classList.remove('order-in'), 320);
+            setTimeout(() => card.classList.remove('new-arrival', 'new-badge'), 5000);
           }
 
           grid.insertBefore(card, grid.firstChild === empty ? empty : grid.firstChild);
@@ -3215,7 +3527,7 @@
             if (order.status === 'preparing') {
               card.classList.add('preparing');
               var badge = card.querySelector('.status-badge');
-              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Preparing'; badge.style.background = '#ff9800'; }
+              if (badge) { badge.classList.remove('new'); badge.textContent = 'Preparing'; badge.style.background = '#ff9800'; }
               var btnGroup = card.querySelector('.btn-group');
               if (btnGroup) {
                 btnGroup.innerHTML = '';
@@ -3249,7 +3561,7 @@
             } else if (order.status === 'ready') {
               card.classList.add('ready');
               var badge = card.querySelector('.status-badge');
-              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
+              if (badge) { badge.classList.remove('new'); badge.textContent = 'Ready'; badge.style.background = '#2196f3'; }
               var btnGroup = card.querySelector('.btn-group');
               if (btnGroup) {
                 btnGroup.innerHTML = '';
@@ -3279,7 +3591,7 @@
             } else if (order.status === 'picked_up') {
               card.classList.add('picked_up');
               var badge = card.querySelector('.status-badge');
-              if (badge) { badge.style.display = 'inline-block'; badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
+              if (badge) { badge.classList.remove('new'); badge.textContent = 'Picked Up'; badge.style.background = '#9c27b0'; }
               var btnGroup = card.querySelector('.btn-group');
               if (btnGroup) {
                 btnGroup.innerHTML = '';
@@ -3411,6 +3723,8 @@
 
       document.getElementById('statusDot').className = 'status-dot live';
       document.getElementById('statusText').textContent = 'Live';
+      lastRefreshAt = Date.now();          // FEEDBACK-5
+      updateEmptyPollState('live');
 
       updateStats();
       renderCombineBar();
@@ -3419,10 +3733,33 @@
       console.error('Poll error:', e);
       document.getElementById('statusDot').className = 'status-dot error';
       document.getElementById('statusText').textContent = 'Offline';
+      updateEmptyPollState('error');       // FEEDBACK-5
     } finally {
       pollPending = false;
     }
   }
+  // FEEDBACK-5: keep the empty-state's polling dot, status word and "Last refresh"
+  // age in sync so an empty board still proves it's alive. Auth handled separately.
+  let lastRefreshAt = 0;
+  function refreshAgeText() {
+    if (!lastRefreshAt) return 'never';
+    var s = Math.floor((Date.now() - lastRefreshAt) / 1000);
+    if (s < 5) return 'just now';
+    if (s < 60) return s + 's ago';
+    var m = Math.floor(s / 60);
+    return m + ' min ago';
+  }
+  function updateEmptyPollState(state) {
+    var dot = document.getElementById('emptyPollDot');
+    var word = document.getElementById('emptyPollState');
+    var age = document.getElementById('emptyLastRefresh');
+    if (dot) dot.className = 'status-dot ' + (state === 'error' ? 'error' : 'live');
+    if (word) word.textContent = state === 'error' ? 'Offline' : 'Live';
+    if (age) age.textContent = refreshAgeText();
+  }
+
+  // FEEDBACK-5: expose for the empty-state "Refresh now" button.
+  window.pollOrders = pollOrders;
 
   function startPolling() {
     if (pollTimer) return;
@@ -3443,6 +3780,9 @@
     document.querySelectorAll('.elapsed[data-created]').forEach(el => {
       el.textContent = elapsed(el.dataset.created);
     });
+    // FEEDBACK-5: keep the empty-state "Last refresh" age fresh even if polling stalls.
+    var age = document.getElementById('emptyLastRefresh');
+    if (age) age.textContent = refreshAgeText();
   }
 
   // ── Init ──
