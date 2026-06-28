@@ -33,10 +33,15 @@
   .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
   .split-grid{display:grid;gap:18px;}
   @keyframes ringpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,90,60,.55);}50%{box-shadow:0 0 0 6px rgba(255,90,60,0);}}
-  /* Tablet / narrow desktop (e.g. iPad with the sidebar open): the bill preview +
-     staff actions stack into one column so they sit beside the open-bills list
-     instead of overflowing the 3-wide row and clipping. */
-  @media (max-width:1300px){ .bill-main{flex-direction:column !important;align-items:center;} }
+  /* Billing: three shrink-to-fit panes (open bills · the bill · staff actions) stay
+     visible side-by-side on a landscape tablet without clipping. The open-bills list
+     scrolls inside its own column, so picking a bill never jumps the page. Panes wrap
+     (never clip) only when the screen is genuinely narrow. */
+  .bill-split{display:flex;flex-wrap:wrap;gap:24px;justify-content:center;align-items:flex-start;}
+  .bill-list{flex:1 1 240px;min-width:208px;max-width:320px;display:flex;flex-direction:column;min-height:0;max-height:calc(100dvh - 168px);}
+  .bill-list-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .bill-card{flex:1 1 300px;min-width:276px;max-width:400px;}
+  .bill-actions{flex:1 1 200px;min-width:186px;max-width:280px;}
   @media (max-width:768px){
     .app-sidebar{display:none !important;}
     .app-header{padding:14px 16px;}
@@ -52,6 +57,7 @@
     .menu-grid{grid-template-columns:1fr !important;}
     .bill-split{flex-direction:column !important;align-items:stretch !important;gap:18px !important;padding:18px 16px 40px !important;}
     .bill-split > div{width:100% !important;max-width:480px;margin-left:auto;margin-right:auto;}
+    .bill-list{max-height:none !important;}   /* let the list flow on a phone */
   }
 </style>
 </head>
@@ -1454,7 +1460,7 @@ function billingHTML(){
   const adjLines = (b.adjustments||[]).map(function(a){ return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;font-size:13px;color:var(--muted);"><div>'+esc(a.label)+'</div><div style="font-family:\'Fraunces\',serif;">'+(a.amount<0?'-':'')+money(Math.abs(a.amount))+'</div></div>'; }).join('');
   const chip = paid ? ['Paid'+(b.paymentMethod?' · '+b.paymentMethod:''),'var(--pos)','rgba(90,99,64,.18)'] : ['Unpaid','var(--neg)','rgba(194,90,58,.16)'];
 
-  const phone = '<div style="width:380px;flex-shrink:0;background:var(--phone);border-radius:42px;padding:13px;box-shadow:0 40px 80px -30px rgba(0,0,0,.6);"><div style="background:var(--surface2);border-radius:31px;overflow:hidden;min-height:600px;padding:30px 26px 34px;"><div style="text-align:center;margin-bottom:24px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.4em;color:var(--accent);font-weight:600;margin-bottom:7px;">'+esc((state.cafe&&state.cafe.name)||'')+'</div><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:31px;color:var(--ink);">Your Bill</div></div>'
+  const phone = '<div class="bill-card" style="background:var(--phone);border-radius:42px;padding:13px;box-shadow:0 40px 80px -30px rgba(0,0,0,.6);"><div style="background:var(--surface2);border-radius:31px;overflow:hidden;min-height:600px;padding:30px 26px 34px;"><div style="text-align:center;margin-bottom:24px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.4em;color:var(--accent);font-weight:600;margin-bottom:7px;">'+esc((state.cafe&&state.cafe.name)||'')+'</div><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:31px;color:var(--ink);">Your Bill</div></div>'
     + '<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;"><div style="display:flex;justify-content:space-between;padding-bottom:14px;margin-bottom:4px;border-bottom:1px dotted var(--divider);"><div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.3em;color:var(--muted);">Order</div><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:20px;color:var(--ink);">'+esc(b.id)+'</div></div><div style="text-align:right;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.3em;color:var(--muted);">'+(isPickupOrder(b)?'Pickup':'Table')+'</div><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:20px;color:var(--ink);">'+esc(isPickupOrder(b)?(b.customerName||'—'):(b.tableNumber||'—'))+'</div></div></div>'
     + (billTime(b.createdAt)?'<div style="text-align:center;font-size:11.5px;color:var(--muted2);margin-bottom:10px;">'+esc(billDayLabel(b.createdAt))+' · '+esc(billTime(b.createdAt))+'</div>':'')
     + lines + adjLines
@@ -1484,14 +1490,15 @@ function billingHTML(){
   const markPaid = paid ? '<button disabled style="width:100%;padding:13px;border-radius:10px;border:none;font-family:inherit;font-size:13.5px;font-weight:600;background:rgba(90,99,64,.18);color:var(--pos);">Payment received ✓</button>'
     : '<button data-act="openTender" data-id="'+esc(b.id)+'" style="width:100%;padding:13px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;background:var(--btn-bg);color:var(--btn-fg);">Mark as paid</button>';
   const printRcpt = PRINTING_ENABLED ? actBtn('printReceipt','🧾 Print receipt') : '';
-  const staff = '<div style="width:260px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Staff actions</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;">'+markPaid+printRcpt+actBtn('emailBill','Email receipt')+actBtn('applyDiscount','Apply discount','var(--accent)')+__loyaltyBlock+'</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.6;margin-top:14px;">Mark as paid records the tender (cash/card) on the order.'+(PRINTING_ENABLED?' 🧾 prints the GST tax invoice.':'')+'</div></div>';
+  const staff = '<div class="bill-actions"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Staff actions</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;">'+markPaid+printRcpt+actBtn('emailBill','Email receipt')+actBtn('applyDiscount','Apply discount','var(--accent)')+__loyaltyBlock+'</div><div style="font-size:11.5px;color:var(--muted2);line-height:1.6;margin-top:14px;">Mark as paid records the tender (cash/card) on the order.'+(PRINTING_ENABLED?' 🧾 prints the GST tax invoice.':'')+'</div></div>';
 
-  // Three panes — open bills · the bill · staff actions. They wrap (never clip):
-  // on a roomy desktop all three sit in a row; once the sidebar squeezes the width
-  // (iPad/narrow laptop) the bill+actions pair drops below the list together.
-  return '<div class="bill-split" style="display:flex;flex-wrap:wrap;gap:28px;padding:34px 30px 60px;justify-content:center;align-items:flex-start;'+entAnim()+'">'
-    + '<div style="width:300px;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Open bills</div>'+openBills+'</div>'
-    + '<div class="bill-main" style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start;justify-content:center;">'+phone+staff+'</div>'
+  // Three panes — open bills · the bill · staff actions — shrink to fit one row on a
+  // landscape tablet (all stay visible). The list scrolls in its own column so picking
+  // a bill never jumps the page; panes wrap only when the screen is genuinely narrow.
+  return '<div class="bill-split" style="padding:24px 28px 48px;'+entAnim()+'">'
+    + '<div class="bill-list"><div style="flex-shrink:0;font-family:\'Fraunces\',serif;font-style:italic;font-size:18px;margin-bottom:14px;color:var(--ink);">Open bills</div><div class="bill-list-scroll" id="bill-list-scroll">'+openBills+'</div></div>'
+    + phone
+    + staff
     + '</div>';
 }
 
@@ -1816,7 +1823,7 @@ async function poll(){
   // Dashboard/billing do a full render() on the background poll, which rebuilds
   // .app-body from scratch (scrollTop → 0). Preserve the operator's position so
   // the screen doesn't jump to the top every 6s.
-  else { const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0; _noEntrance=true; render(); _noEntrance=false; const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top; }
+  else { const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0; const bl=document.getElementById('bill-list-scroll'); const blt=bl?bl.scrollTop:0; _noEntrance=true; render(); _noEntrance=false; const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top; const bl2=document.getElementById('bill-list-scroll'); if(bl2) bl2.scrollTop=blt; }
 }
 function handle(act, ds, ev){
   switch(act){
@@ -1837,7 +1844,7 @@ function handle(act, ds, ev){
     case 'openAddDish': state.addDishOpen=true; state.addDishMsg=''; render(); break;
     case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; render(); break;
     case 'submitAddDish': submitAddDish(); break;
-    case 'billSelect': state.billSel=+ds.idx; render(); break;
+    case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSel=+ds.idx; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'openTender': state.tender=ds.id; render(); break;
     case 'tenderClose': state.tender=null; render(); break;
     case 'tenderPay': tenderPay(ds.method); break;
