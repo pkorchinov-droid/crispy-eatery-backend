@@ -42,6 +42,12 @@
   .bill-list-scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   .bill-card{flex:1 1 300px;min-width:276px;max-width:400px;}
   .bill-actions{flex:1 1 200px;min-width:186px;max-width:280px;}
+  /* Menu manager: a responsive item grid + an editor that opens as a sheet (centred
+     card on desktop, bottom sheet on phone) so it can never be clipped. */
+  .menu-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:10px;}
+  .menu-sheet-wrap{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.5);}
+  .menu-sheet{position:relative;display:flex;flex-direction:column;width:100%;max-width:432px;max-height:88dvh;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -28px rgba(0,0,0,.6);animation:fadeUp .2s ease;}
+  .menu-sheet-body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   @media (max-width:768px){
     .app-sidebar{display:none !important;}
     .app-header{padding:14px 16px;}
@@ -52,9 +58,9 @@
     .bottom-nav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:40;
       background:#2b1f17;border-top:1px solid #3f3025;padding:6px 4px;
       padding-bottom:calc(6px + env(safe-area-inset-bottom));}
-    .menu-split{flex-direction:column !important;}
-    .menu-aside{width:100% !important;border-left:none !important;border-top:1px solid var(--border);}
-    .menu-grid{grid-template-columns:1fr !important;}
+    .menu-cards{grid-template-columns:1fr !important;}
+    .menu-sheet-wrap{align-items:flex-end !important;padding:0 !important;}
+    .menu-sheet{max-width:none !important;max-height:92dvh !important;border-radius:18px 18px 0 0 !important;}
     .bill-split{flex-direction:column !important;align-items:stretch !important;gap:18px !important;padding:18px 16px 40px !important;}
     .bill-split > div{width:100% !important;max-width:480px;margin-left:auto;margin-right:auto;}
     .bill-list{max-height:none !important;}   /* let the list flow on a phone */
@@ -160,6 +166,7 @@ const state = {
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   dayReport:null,       // end-of-shift items-sold report (lazy-init { date })
   active:'dashboard', sel:{cat:0,item:0}, billSel:0, alerting:false,
+  menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
   promos:null, promoMsg:'', addDishMsg:'', mealDealMsg:'',
@@ -647,7 +654,8 @@ function appHTML(){
     + (state.settingsOpen ? settingsHTML() : '')
     + (state.tender ? tenderHTML() : '')
     + (state.importOpen ? importHTML() : '')
-    + (state.addDishOpen ? addDishHTML() : '');
+    + (state.addDishOpen ? addDishHTML() : '')
+    + (state.menuEditId ? menuSheetHTML() : '');
 }
 
 function errBox(msg){
@@ -1380,44 +1388,95 @@ function dayReportPrint(){
   setTimeout(function(){ try{ w.print(); }catch(e){} }, 350);
 }
 
+// MENU MANAGER. A single scrolling page: a sticky search/toolbar, then collapsible
+// category cards (counts always visible so the whole menu reads as a map). Tapping a
+// dish opens the editor as an overlay sheet — see menuSheetHTML — which can never be
+// clipped. State: state.menuExpanded (open cats), state.menuSearch, state.menuEditId.
 function menuHTML(){
   if(!state.menu) return state.err.menu?errBox(state.err.menu):loadingBox('Loading menu…');
+  const inp = "flex:1;min-width:140px;height:40px;padding:0 13px;border:1px solid var(--border);border-radius:11px;background:var(--input);font-family:inherit;font-size:14px;color:var(--ink);outline:none;";
+  const toolbar = '<div style="position:sticky;top:0;z-index:6;background:var(--bg);padding:2px 0 13px;">'
+    + '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">'
+    + '<input id="menu-search" type="search" value="'+esc(state.menuSearch||'')+'" oninput="onMenuSearch(this.value)" placeholder="Search dishes…" autocapitalize="none" autocorrect="off" style="'+inp+'">'
+    + '<button data-act="openAddDish" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);cursor:pointer;">+ Add dish</button>'
+    + '<button data-act="openImport" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import</button>'
+    + '</div></div>';
+  return '<div style="padding:18px 24px 90px;animation:fadeUp .35s ease;">'+toolbar+'<div id="menu-list">'+menuListHTML()+'</div></div>';
+}
+// Just the category list — re-rendered in place on search/collapse so the search box
+// keeps focus + caret (a full render() would rebuild and blur it).
+function menuListHTML(){
   const cats = menuCategoriesOrdered();
-  const sel = state.sel;
-  if(sel.cat>=cats.length){ sel.cat=0; sel.item=0; }
-  const list = cats.map(function(cat,ci){
-    const cards = cat.items.map(function(it,ii){
-      const selected = sel.cat===ci && sel.item===ii;
-      const tag = hasTag(it,'new') ? ['New','var(--accent)'] : (it.tags||[]).indexOf('chef')>=0 ? ['Chef','var(--accent)'] : (it.tags||[]).indexOf('popular')>=0 ? ['Popular','var(--pos)'] : null;
-      const tagHTML = tag ? '<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;color:'+tag[1]+';border:1px solid '+tag[1]+';">'+tag[0]+'</span>' : '';
-      const cardStyle = "display:flex;gap:13px;align-items:center;padding:13px;border-radius:13px;cursor:pointer;transition:all .15s;border:1.5px solid "+(selected?'var(--accent)':'var(--border)')+";background:"+(selected?'var(--accent-tint)':'var(--surface)')+";"+(it.outOfStock?'opacity:.62;':'');
-      return '<div data-act="menuSelect" data-c="'+ci+'" data-i="'+ii+'" style="'+cardStyle+'"><div style="width:52px;height:52px;border-radius:9px;background:var(--track);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);overflow:hidden;position:relative;">'+icPlate(22,1.2)+imgOverlay(it)+'</div><div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:7px;"><span style="font-size:14px;font-weight:600;line-height:1.15;color:var(--ink);">'+esc(it.name)+'</span>'+tagHTML+'</div><div style="font-size:12px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">'+esc(it.desc||'')+'</div></div><div style="text-align:right;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+itemPriceLabel(it)+'</div><div style="font-size:11px;font-weight:600;margin-top:4px;color:'+(it.outOfStock?'var(--neg)':'var(--pos)')+';">'+(it.outOfStock?'86’d':'Available')+'</div></div></div>';
-    }).join('');
-    return '<div style="margin-bottom:30px;"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:20px;color:var(--ink);">'+esc(cat.label)+'</div><div style="font-size:12px;color:var(--muted2);">'+cat.items.length+' items</div></div><div class="menu-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'+cards+'</div></div>';
+  if(!cats.length) return '<div style="padding:46px 12px;text-align:center;color:var(--muted2);font-size:13.5px;">No menu items yet — use “Add dish” to create your first one.</div>';
+  const q = (state.menuSearch||'').trim().toLowerCase();
+  let any = false;
+  const html = cats.map(function(cat){
+    let items = cat.items || [];
+    if(q){ items = items.filter(function(it){ return String(it.name||'').toLowerCase().indexOf(q)>=0 || String(it.desc||'').toLowerCase().indexOf(q)>=0; }); if(!items.length) return ''; }
+    any = true;
+    const expanded = q ? true : !!state.menuExpanded[cat.key];
+    const total = (cat.items||[]).length;
+    const off = (cat.items||[]).filter(function(it){ return it.outOfStock; }).length;
+    const count = q ? (items.length+' of '+total+' match'+(items.length===1?'':'es'))
+                    : (total+' item'+(total===1?'':'s')+(off?' · '+off+' off':''));
+    const chev = '<span style="display:inline-flex;flex-shrink:0;transition:transform .18s;transform:rotate('+(expanded?'0':'-90')+'deg);color:var(--muted);">'+ic(ICON.chevron,1.9,18)+'</span>';
+    const header = '<div data-act="menuToggleCat" data-key="'+esc(cat.key)+'" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 15px;cursor:pointer;'+(expanded?'border-bottom:1px solid var(--border);':'')+'background:var(--surface);">'
+      + '<div style="display:flex;align-items:center;gap:11px;min-width:0;">'+chev+'<span style="font-family:\'Fraunces\',serif;font-style:italic;font-size:19px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(cat.label)+'</span></div>'
+      + '<span style="font-size:12px;color:var(--muted2);white-space:nowrap;flex-shrink:0;">'+count+'</span></div>';
+    const body = expanded ? '<div style="padding:11px;background:var(--surface2);"><div class="menu-cards">'+items.map(menuCardHTML).join('')+'</div></div>' : '';
+    return '<div style="border:1px solid var(--border);border-radius:13px;overflow:hidden;margin-bottom:12px;background:var(--surface);">'+header+body+'</div>';
   }).join('');
-
-  const cur = (cats[sel.cat] && cats[sel.cat].items[sel.item]) || null;
-  let editor;
-  if(!cur){ editor = '<div style="color:var(--muted2);font-size:13px;">Select an item to edit.</div>'; }
-  else {
-    const hasPrice = typeof cur.price==='number';
-    const sizesHtml = (!hasPrice && cur.sizes) ? '<div style="margin-top:18px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Sizes</div>'+Object.keys(cur.sizes).map(function(k){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px dotted var(--divider);color:var(--ink);"><span>'+esc(k)+'</span><span style="font-family:\'Fraunces\',serif;">'+money(cur.sizes[k])+'</span></div>'; }).join('')+'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Edit individual size prices in the full menu admin.</div>' : '';
-    const priceStepper = hasPrice ? '<div style="margin-top:22px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Price</div><div style="display:flex;align-items:center;gap:12px;"><button data-act="priceDown" style="width:38px;height:38px;border-radius:9px;border:1px solid var(--border);background:var(--input);font-size:20px;color:var(--accent);cursor:pointer;line-height:1;">−</button><div id="ed-price" style="font-family:\'Fraunces\',serif;font-size:30px;flex:1;text-align:center;color:var(--ink);">'+money(cur.price)+'</div><button data-act="priceUp" style="width:38px;height:38px;border-radius:9px;border:1px solid var(--border);background:var(--input);font-size:20px;color:var(--accent);cursor:pointer;line-height:1;">+</button></div>' : sizesHtml;
-    editor = '<div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted2);margin-bottom:14px;">Edit item</div>'
-      + '<div style="width:100%;height:140px;border-radius:12px;background:var(--track);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted2);margin-bottom:18px;overflow:hidden;position:relative;">'+icPlate(40,1.1)+'<span style="font-size:11.5px;letter-spacing:.04em;">No photo</span>'+imgOverlay(cur)+'</div>'
-      + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:23px;line-height:1.1;color:var(--ink);">'+esc(cur.name)+'</div>'
-      + '<div style="font-size:13px;color:var(--muted);line-height:1.5;margin-top:8px;">'+esc(cur.desc||'')+'</div>'
-      + priceStepper
-      + '<div style="margin-top:24px;display:flex;flex-direction:column;gap:10px;"><button data-act="toggleAvail" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(!cur.outOfStock?'rgba(90,99,64,.4);background:rgba(90,99,64,.12);color:var(--pos);':'rgba(168,74,46,.4);background:rgba(168,74,46,.12);color:var(--neg);')+'"><span>'+(!cur.outOfStock?'Available to order':'86’d — hidden from menu')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(!cur.outOfStock?'#5a6340':'var(--muted2)')+';justify-content:'+(!cur.outOfStock?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
-      + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(!cur.outOfStock?'Showing on the customer menu and bookable in orders.':'Hidden from the customer menu until you re-enable it.')+'</div>'
-      + '<button data-act="toggleNew" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(hasTag(cur,'new')?'rgba(194,90,58,.4);background:var(--accent-tint);color:var(--accent);':'var(--border);background:var(--input);color:var(--muted);')+'"><span>'+(hasTag(cur,'new')?'Featured in “New on the Menu”':'Mark as New')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(hasTag(cur,'new')?'var(--accent)':'var(--muted2)')+';justify-content:'+(hasTag(cur,'new')?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
-      + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(hasTag(cur,'new')?'Also shown first under “New on the Menu”.':'Adds a New badge and features it at the top of the menu.')+'</div></div>'
-      + '<button data-act="saveItem" style="width:100%;margin-top:24px;padding:13px;border-radius:50px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.26em;font-weight:600;cursor:pointer;">Save changes</button>';
-  }
-  const toolbar = '<div style="display:flex;justify-content:flex-end;gap:9px;margin-bottom:12px;">'
-    + '<button data-act="openAddDish" style="font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;border:none;background:var(--btn-bg);color:var(--btn-fg);cursor:pointer;">+ Add dish</button>'
-    + '<button data-act="openImport" style="font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:9px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import dishes</button></div>';
-  return '<div class="menu-split" style="display:flex;height:100%;animation:fadeUp .35s ease;"><div style="flex:1;min-width:0;overflow-y:auto;padding:24px 26px 60px;">'+toolbar+list+'</div><div class="menu-aside" style="width:340px;flex-shrink:0;border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:24px 24px 50px;">'+editor+'</div></div>';
+  if(q && !any) return '<div style="padding:46px 12px;text-align:center;color:var(--muted2);font-size:13.5px;">No dishes match “'+esc(state.menuSearch.trim())+'”.</div>';
+  return html;
+}
+function menuCardHTML(it){
+  const tag = hasTag(it,'new') ? ['New','var(--accent)'] : hasTag(it,'chef') ? ['Chef','var(--accent)'] : hasTag(it,'popular') ? ['Popular','var(--pos)'] : null;
+  const tagHTML = tag ? '<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;flex-shrink:0;color:'+tag[1]+';border:1px solid '+tag[1]+';">'+tag[0]+'</span>' : '';
+  return '<div data-act="menuOpen" data-id="'+esc(it.id)+'" style="display:flex;gap:12px;align-items:center;padding:11px;border-radius:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface);transition:border-color .15s;'+(it.outOfStock?'opacity:.6;':'')+'">'
+    + '<div style="width:46px;height:46px;border-radius:9px;background:var(--track);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);overflow:hidden;position:relative;">'+icPlate(20,1.2)+imgOverlay(it)+'</div>'
+    + '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:7px;min-width:0;"><span style="font-size:14px;font-weight:600;line-height:1.15;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(it.name)+'</span>'+tagHTML+'</div><div style="font-size:12px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">'+esc(it.desc||'')+'</div></div>'
+    + '<div style="text-align:right;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+itemPriceLabel(it)+'</div><div style="font-size:11px;font-weight:600;margin-top:3px;color:'+(it.outOfStock?'var(--neg)':'var(--pos)')+';">'+(it.outOfStock?'86’d':'Available')+'</div></div>'
+    + '<span style="flex-shrink:0;display:inline-flex;color:var(--muted2);transform:rotate(-90deg);">'+ic(ICON.chevron,1.7,15)+'</span>'
+    + '</div>';
+}
+// The item open in the editor sheet, found by id (stable when the virtual "New on the
+// Menu" section reshuffles indices, so toggling tags never loses the open item).
+function menuEditingItem(){
+  if(!state.menuEditId) return null;
+  const cats = menuCategoriesOrdered();
+  for(let c=0;c<cats.length;c++){ const it=(cats[c].items||[]).find(function(x){ return x.id===state.menuEditId; }); if(it) return it; }
+  return null;
+}
+function refreshMenuList(){ const el=document.getElementById('menu-list'); if(el) el.innerHTML=menuListHTML(); }
+function onMenuSearch(v){ state.menuSearch=v; refreshMenuList(); }
+// Editor as an overlay: centred card on desktop, bottom sheet on phone (.menu-sheet
+// CSS). Header + footer are pinned (flex-shrink:0); only the body scrolls — so Save is
+// always reachable at any screen height. Backdrop click closes; clicks on the sheet do
+// not (the backdrop is a separate sibling layer, not an ancestor of the panel).
+function menuSheetHTML(){
+  const cur = menuEditingItem();
+  if(!cur) return '';
+  const hasPrice = typeof cur.price==='number';
+  const sizesHtml = (!hasPrice && cur.sizes) ? '<div style="margin-top:18px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Sizes</div>'+Object.keys(cur.sizes).map(function(k){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px dotted var(--divider);color:var(--ink);"><span>'+esc(k)+'</span><span style="font-family:\'Fraunces\',serif;">'+money(cur.sizes[k])+'</span></div>'; }).join('')+'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Edit individual size prices in the full menu admin.</div>' : '';
+  const priceStepper = hasPrice ? '<div style="margin-top:22px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Price</div><div style="display:flex;align-items:center;gap:12px;"><button data-act="priceDown" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">−</button><div id="ed-price" style="font-family:\'Fraunces\',serif;font-size:30px;flex:1;text-align:center;color:var(--ink);">'+money(cur.price)+'</div><button data-act="priceUp" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">+</button></div>' : sizesHtml;
+  const head = '<div style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface);"><span style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted2);">Edit item</span><button data-act="menuClose" aria-label="Close editor" style="background:none;border:none;font-size:25px;line-height:1;color:var(--muted2);cursor:pointer;padding:0 4px;">×</button></div>';
+  const body = '<div class="menu-sheet-body" style="padding:18px 20px;">'
+    + '<div style="width:100%;height:140px;border-radius:12px;background:var(--track);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted2);margin-bottom:18px;overflow:hidden;position:relative;">'+icPlate(40,1.1)+'<span style="font-size:11.5px;letter-spacing:.04em;">No photo</span>'+imgOverlay(cur)+'</div>'
+    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:23px;line-height:1.1;color:var(--ink);">'+esc(cur.name)+'</div>'
+    + '<div style="font-size:13px;color:var(--muted);line-height:1.5;margin-top:8px;">'+esc(cur.desc||'')+'</div>'
+    + priceStepper
+    + '<div style="margin-top:24px;display:flex;flex-direction:column;gap:10px;"><button data-act="toggleAvail" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(!cur.outOfStock?'rgba(90,99,64,.4);background:rgba(90,99,64,.12);color:var(--pos);':'rgba(168,74,46,.4);background:rgba(168,74,46,.12);color:var(--neg);')+'"><span>'+(!cur.outOfStock?'Available to order':'86’d — hidden from menu')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(!cur.outOfStock?'#5a6340':'var(--muted2)')+';justify-content:'+(!cur.outOfStock?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
+    + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(!cur.outOfStock?'Showing on the customer menu and bookable in orders.':'Hidden from the customer menu until you re-enable it.')+'</div>'
+    + '<button data-act="toggleNew" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(hasTag(cur,'new')?'rgba(194,90,58,.4);background:var(--accent-tint);color:var(--accent);':'var(--border);background:var(--input);color:var(--muted);')+'"><span>'+(hasTag(cur,'new')?'Featured in “New on the Menu”':'Mark as New')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(hasTag(cur,'new')?'var(--accent)':'var(--muted2)')+';justify-content:'+(hasTag(cur,'new')?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
+    + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(hasTag(cur,'new')?'Also shown first under “New on the Menu”.':'Adds a New badge and features it at the top of the menu.')+'</div></div>'
+    + '</div>';
+  const foot = hasPrice
+    ? '<div style="flex-shrink:0;padding:13px 18px;border-top:1px solid var(--border);background:var(--surface);"><button data-act="saveItem" style="width:100%;padding:14px;border-radius:50px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.26em;font-weight:600;cursor:pointer;">Save changes</button></div>'
+    : '<div style="flex-shrink:0;padding:14px 18px;border-top:1px solid var(--border);background:var(--surface);font-size:11.5px;color:var(--muted2);text-align:center;">86 and New save instantly. Edit size prices in the full menu admin.</div>';
+  return '<div class="menu-sheet-wrap">'
+    + '<div data-act="menuClose" style="position:absolute;inset:0;"></div>'
+    + '<div class="menu-sheet">'+head+body+foot+'</div>'
+    + '</div>';
 }
 
 // ── billing date/time helpers (structured day-grouped bills) ──
@@ -1558,7 +1617,7 @@ function refreshKitchenInPlace(){
 
 let _localPrice = {};
 function bump(d){
-  const cats = menuCategoriesOrdered(); const it = cats[state.sel.cat] && cats[state.sel.cat].items[state.sel.item];
+  const it = menuEditingItem();
   if(!it || typeof it.price!=='number') return;
   it.price = Math.max(0, Math.round((it.price+d)*100)/100);
   const el=document.getElementById('ed-price'); if(el) el.textContent=money(it.price);
@@ -1566,44 +1625,31 @@ function bump(d){
 // 86 is a decisive, immediate action — PATCH it right away so the customer menu
 // reflects it now (no "looks 86'd but isn't" trap), and revert the toggle on failure.
 async function toggleAvail(){
-  const cats = menuCategoriesOrdered(); const it = cats[state.sel.cat] && cats[state.sel.cat].items[state.sel.item];
+  const it = menuEditingItem();
   if(!it) return;
   const next = !it.outOfStock;
   try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ outOfStock: next } }); it.outOfStock = next; render(); toast((next?'86’d · ':'Available · ')+it.name,'ok'); }
   catch(e){ toast('Couldn’t update — '+e.message,'err'); }
 }
-// Re-anchor state.sel to a given item id after the category list reshapes (e.g.
-// the virtual "New on the Menu" section appearing/disappearing shifts indices).
-// Prefer the item's real category over the virtual section so the editor stays on it.
-function selectItemById(id){
-  if(!id) return;
-  const cats = menuCategoriesOrdered();
-  let found = null;
-  for(let c=0;c<cats.length;c++){
-    if(cats[c].virtual) continue;
-    for(let i=0;i<cats[c].items.length;i++){ if(cats[c].items[i].id===id){ found={cat:c,item:i}; break; } }
-    if(found) break;
-  }
-  if(found) state.sel = found;
-}
 // "New on the Menu" — toggles the `new` tag and PATCHes immediately, like 86.
 async function toggleNew(){
-  const cats = menuCategoriesOrdered(); const it = cats[state.sel.cat] && cats[state.sel.cat].items[state.sel.item];
+  const it = menuEditingItem();
   if(!it) return;
-  const id = it.id;
   const tags = Array.isArray(it.tags) ? it.tags.slice() : [];
   const i = tags.indexOf('new');
   if(i>=0) tags.splice(i,1); else tags.push('new');
-  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ tags: tags } }); it.tags = tags; selectItemById(id); render(); toast((i>=0?'Removed from New · ':'Added to New · ')+it.name,'ok'); }
+  // menuEditingItem() re-finds by id, so the open sheet survives the virtual
+  // "New on the Menu" section appearing/disappearing — no re-anchoring needed.
+  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ tags: tags } }); it.tags = tags; render(); toast((i>=0?'Removed from New · ':'Added to New · ')+it.name,'ok'); }
   catch(e){ toast('Couldn’t update — '+e.message,'err'); }
 }
 // Save only commits the PRICE (86 is already live). On success OR failure we reload
 // the menu from the server, so a failed/partial save never leaves a stale local price.
 async function saveItem(){
-  const cats = menuCategoriesOrdered(); const it = cats[state.sel.cat] && cats[state.sel.cat].items[state.sel.item];
+  const it = menuEditingItem();
   if(!it) return;
   if(typeof it.price!=='number'){ toast('Edit size prices in the full menu admin','info'); return; }
-  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ price: it.price } }); toast('Saved '+it.name,'ok'); }
+  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ price: it.price } }); toast('Saved '+it.name,'ok'); state.menuEditId=null; }
   catch(e){ toast('Save failed — '+e.message,'err'); }
   await loadMenu(); render();
 }
@@ -1832,7 +1878,9 @@ function handle(act, ds, ev){
     case 'advance': advance(ds.id, ds.next); break;
     case 'printTicket': printTicket(ds.id); break;
     case 'printReceipt': printReceipt(ds.id); break;
-    case 'menuSelect': state.sel={cat:+ds.c,item:+ds.i}; render(); break;
+    case 'menuOpen': state.menuEditId=ds.id; render(); break;
+    case 'menuClose': state.menuEditId=null; render(); break;
+    case 'menuToggleCat': state.menuExpanded[ds.key]=!state.menuExpanded[ds.key]; refreshMenuList(); break;
     case 'priceUp': bump(0.5); break;
     case 'priceDown': bump(-0.5); break;
     case 'toggleAvail': toggleAvail(); break;
