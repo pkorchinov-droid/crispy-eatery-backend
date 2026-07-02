@@ -1867,13 +1867,16 @@ async function savePricing(){
 function goScreen(screen){ state.active=screen; state.switcherOpen=false; render(); refreshActive(); }
 // Nav tap: gate locked screens behind the manager PIN (once per session).
 function requestScreen(screen){
-  if(isLockedScreen(screen) && managerLocked()){ state.pinPrompt={ target:screen }; state.pinErr=''; state.switcherOpen=false; render(); return; }
+  if(isLockedScreen(screen) && managerLocked()){ state.pinPrompt={ target:screen }; state.pinErr=''; state.switcherOpen=false; render(); focusPin(); return; }
   goScreen(screen);
 }
+// `autofocus` on innerHTML-injected markup is unreliable (notably iPad Safari),
+// so focus the PIN field explicitly right after the prompt renders.
+function focusPin(){ const el=document.getElementById('pin-input'); if(el) el.focus(); }
 // Open Settings, gated the same way. No PIN set → opens freely (so the owner can set one).
 function openSettingsNow(){ state.settingsOpen=true; state.setMsg=''; state.promos=JSON.parse(JSON.stringify(cfg().promos||[])); state.promoMsg=''; state.mealDealMsg=''; state.pricingMsg=''; state.securityMsg=''; render(); }
 function requestSettings(){
-  if(managerLocked()){ state.pinPrompt={ action:'settings' }; state.pinErr=''; render(); return; }
+  if(managerLocked()){ state.pinPrompt={ action:'settings' }; state.pinErr=''; render(); focusPin(); return; }
   openSettingsNow();
 }
 // Verify the entered PIN server-side; on success unlock for the session + run the pending action.
@@ -1994,6 +1997,7 @@ function tick(){
   // innerHTML every second swallowed taps mid-press. Ticket ages ("Xm") are
   // minute-granular and refresh on the 6s data poll — plenty often.
 }
+let _lastPollSig='';
 async function poll(){
   if(!state.me) return;
   // Always refresh orders + ring the new-order alarm regardless of which screen
@@ -2003,14 +2007,24 @@ async function poll(){
   const A=state.active;
   if(A!=='kitchen'&&A!=='billing'&&A!=='reports') return;
   if(A==='reports') await loadReportsToday();
-  // Never tear down an open modal with live inputs (Settings / tender) via a
-  // background refresh — only the kitchen board (no inputs) is safe to patch.
-  if(state.settingsOpen||state.tender||state.importOpen){ if(A==='kitchen') refreshKitchenInPlace(); return; }
+  // Never tear down an open modal with live inputs (PIN prompt / Settings /
+  // tender / import) via a background refresh — only the kitchen board (no
+  // inputs) is safe to patch. Same while the operator is mid-keystroke in any
+  // field: a full render() destroys the focused input and eats the typing.
+  const ae=document.activeElement;
+  const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
+  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
   if(A==='kitchen') refreshKitchenInPlace();
   // Dashboard/billing do a full render() on the background poll, which rebuilds
-  // .app-body from scratch (scrollTop → 0). Preserve the operator's position so
-  // the screen doesn't jump to the top every 6s.
-  else { const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0; const bl=document.getElementById('bill-list-scroll'); const blt=bl?bl.scrollTop:0; _noEntrance=true; render(); _noEntrance=false; const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top; const bl2=document.getElementById('bill-list-scroll'); if(bl2) bl2.scrollTop=blt; }
+  // .app-body from scratch (scrollTop → 0). Even with scrollTop restored the
+  // rebuild makes the page visibly stutter, so only do it when the data
+  // actually changed (or on a minute rollover so "Xm" ages stay fresh).
+  else {
+    const sig=A+'|'+JSON.stringify(state.orders)+'|'+(A==='reports'?JSON.stringify(state.reportsToday):'')+'|'+Math.floor(Date.now()/60000);
+    if(sig===_lastPollSig) return;
+    _lastPollSig=sig;
+    const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0; const bl=document.getElementById('bill-list-scroll'); const blt=bl?bl.scrollTop:0; _noEntrance=true; render(); _noEntrance=false; const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top; const bl2=document.getElementById('bill-list-scroll'); if(bl2) bl2.scrollTop=blt;
+  }
 }
 function handle(act, ds, ev){
   switch(act){
