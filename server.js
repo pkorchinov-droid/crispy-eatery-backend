@@ -808,8 +808,10 @@ function backfillDefaultTenantConfig() {
   // would never deliberately pick the exact platform slate).
   if (c.themeColor === PLATFORM_DEFAULT_THEME) { c.themeColor = CRISPY_DEFAULTS.themeColor; changed = true; }
   // Bespoke flows Crispy already runs: enable unless explicitly turned off.
+  // (=== undefined, NOT !== true — an owner's explicit `false` must survive a
+  // restart instead of being flipped back on every boot.)
   for (const f of ["dessertNudge", "drinksPreorder", "i18n", "collectibleReceipt", "stationPrinting"]) {
-    if (c.features[f] !== true) { c.features[f] = true; changed = true; }
+    if (c.features[f] === undefined) { c.features[f] = true; changed = true; }
   }
   // Loyalty: feature on; FC track live now (+1%/visit, cap 15%); stamp track
   // stays inactive until the owner picks a reward item in settings.
@@ -1029,25 +1031,35 @@ async function sendMagicEmail(email, kind) {
 // (e.g. { ...configOverridesFromBody(b), name, slug, … }); the rest pattern
 // gathers them back into configOverrides, alongside an explicit configOverrides
 // key if one is passed directly.
-function createTenant({ name, slug, menu, categories, onConflict, configOverrides, ...rest }) {
+async function createTenant({ name, slug, menu, categories, onConflict, configOverrides, ...rest }) {
   configOverrides = Object.assign({}, rest, configOverrides || {});
   let s = normalizeSlug(slug || name);
   if (!s) { const e = new Error("A slug or name is required"); e.status = 400; throw e; }
-  if (getTenant(s)) {
-    if (onConflict === "suffix") {
-      let n = 2;
-      let cand = normalizeSlug(s + "-" + n);
-      while (getTenant(cand)) { n += 1; cand = normalizeSlug(s + "-" + n); }
-      s = cand;
-    } else {
-      const e = new Error("A restaurant with that slug already exists: " + s);
-      e.status = 409;
-      throw e;
-    }
-  }
   const cfg = mergeConfig(Object.assign({}, configOverrides || {}, { name }));
   const staffToken = crypto.randomBytes(24).toString("hex");
-  withWriteLock(() => {
+  // The conflict check, suffixing and save all run INSIDE the write lock, so two
+  // concurrent signups with the same name can't both pass the check and have the
+  // second silently overwrite the first tenant's record.
+  await withWriteLock(() => {
+    if (getTenant(s)) {
+      if (onConflict === "suffix") {
+        // Truncate the base FIRST so "-n" always survives normalizeSlug's 40-char
+        // cap — appending before the cap used to re-truncate the suffix away and
+        // spin forever on a 39/40-char base slug.
+        let n = 2;
+        let cand;
+        do {
+          const suffix = "-" + n;
+          cand = normalizeSlug(s.slice(0, 40 - suffix.length) + suffix);
+          n += 1;
+        } while (getTenant(cand));
+        s = cand;
+      } else {
+        const e = new Error("A restaurant with that slug already exists: " + s);
+        e.status = 409;
+        throw e;
+      }
+    }
     saveTenant({ slug: s, name, config: cfg, staffTokenHash: hashToken(staffToken), createdAt: new Date().toISOString() });
     // Seed the menu exactly as POST /admin/tenants does: a full supplied menu,
     // else a skeleton from a category list, else empty.
@@ -1314,20 +1326,26 @@ function findMenuItem(menu, line) {
 // Returns an error string on violation, or null if all items are acceptable.
 // When the menu is empty (not yet loaded) validation is skipped so we never
 // hard-fail ordering on a cold/missing menu.
-function priceViolation(items, menu) {
+function priceViolation(items, menu, opts) {
+  opts = opts || {};
   if (!menu || !(menu.categoryOrder || []).length) return null;
   for (const it of items) {
     const mi = findMenuItem(menu, it);
     if (!mi) {
       // A client that supplied an id we can't resolve is suspicious — reject.
       // Lines without an id (legacy /add-items) are left alone to avoid breaking
-      // the shared-tab flow on a renamed/removed dish.
+      // the shared-tab flow on a renamed/removed dish; primary entry points pass
+      // requireResolvable so a made-up item name can't be injected at any price.
       if (it.id) return `Unknown menu item: ${it.name || it.id}`;
+      if (opts.requireResolvable) return `Unknown menu item: ${it.name || "?"}`;
       continue;
     }
-    const min = itemMinPrice(mi);
-    if (min != null && it.price < min - 0.01) {
-      return `Price too low for "${mi.name}" (minimum $${min.toFixed(2)})`;
+    // Floor at the CHOSEN size's price when the line names a real size — the
+    // min-across-sizes floor let a Large be ordered at the Small price.
+    let floor = itemMinPrice(mi);
+    if (it.size && mi.sizes && typeof mi.sizes[it.size] === "number") floor = mi.sizes[it.size];
+    if (floor != null && it.price < floor - 0.01) {
+      return `Price too low for "${mi.name}" (minimum $${floor.toFixed(2)})`;
     }
   }
   return null;
@@ -1540,7 +1558,7 @@ app.get("/admin/tenants", requirePlatformAdmin, (_req, res) => {
 // Provision a new restaurant. Returns the staff token ONCE (only its hash is
 // stored). Seeds an empty menu (or an optional supplied menu) so the owner can
 // start editing in the existing /dashboard/menu-admin.html screen.
-app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
+app.post("/admin/tenants", requirePlatformAdmin, async (req, res) => {
   const b = req.body || {};
   // Preserve the legacy "name defaults to slug" behaviour: derive the slug the
   // same way createTenant will, then fall back to it for a missing name.
@@ -1548,7 +1566,7 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
   if (!preSlug) return res.status(400).json({ error: "A slug or name is required" });
   const name = sanitizeString(b.name, 80) || preSlug;
   try {
-    const { slug, staffToken } = createTenant({
+    const { slug, staffToken } = await createTenant({
       ...configOverridesFromBody(b),
       name,
       slug: b.slug,
@@ -1561,8 +1579,9 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
       slug,
       name,
       staffToken,                                  // SHOW ONCE — not recoverable
-      dashboardUrl: `/dashboard?token=${staffToken}`,
-      menuAdminUrl: `/dashboard/menu-admin.html?token=${staffToken}`,
+      // /dashboard is retired (302 → /console, query dropped) — hand out /console.
+      dashboardUrl: `/console`,
+      menuAdminUrl: `/console`,
       customerQuery: `?r=${slug}`,
       note: "Save the staffToken now — only its hash is stored.",
     });
@@ -1583,7 +1602,7 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
 // 30-day session (so the owner is signed in immediately) and emails a welcome
 // magic link. The owner's email is recorded on the tenant and the "powered by"
 // footer defaults on.
-app.post("/signup", (req, res) => {
+app.post("/signup", async (req, res) => {
   try {
     // No auth secret → magic-link login can't work (request-link 503s, verify rejects
     // all), so an account created now could never sign back in. Refuse rather than
@@ -1601,12 +1620,11 @@ app.post("/signup", (req, res) => {
     }
     const cfgOv = publicConfigOverridesFromBody(body);
     // ownerEmail + poweredBy are stamped via createTenant's config so they're
-    // saved atomically with the tenant. (createTenant's save runs under the
-    // write lock, which defers to a microtask, so a getTenant() right after the
-    // call would race and return null.) features.poweredBy defaults on; the
+    // saved atomically with the tenant (createTenant is awaited, so the tenant
+    // is durably saved before we continue). features.poweredBy defaults on; the
     // public override subset can't set it, so self-serve cafés are never
     // white-labelled for free.
-    const { slug } = createTenant({
+    const { slug } = await createTenant({
       ...cfgOv,
       ownerEmail: email,
       features: { poweredBy: true },
@@ -1633,8 +1651,9 @@ app.post("/signup", (req, res) => {
       session,
       slug,
       name,
-      dashboardUrl: "/dashboard?token=" + session,
-      menuAdminUrl: "/dashboard/menu-admin.html?token=" + session,
+      // /dashboard is retired (302 → /console, query dropped) — hand out /console.
+      dashboardUrl: "/console",
+      menuAdminUrl: "/console",
       qrPackUrl: "/qr-pack?token=" + session,
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + slug,
     });
@@ -1726,14 +1745,20 @@ app.get("/loyalty/verify", async (req, res) => {
   if (!t) return fail(v.slug);
   const store = tenantStore(v.slug);
   const token = crypto.randomBytes(32).toString("hex");   // known before the lock
+  let burned = false;
   await withWriteLock(() => {
+    // Re-check inside the lock: two concurrent clicks on the same link both pass
+    // verifyCustomerToken's synchronous check — only the first may burn it.
+    if (AUTH.usedMagic[v.jti]) return;
     AUTH.usedMagic[v.jti] = v.exp; persistAuth();          // burn the token (single-use)
+    burned = true;
     const customers = store.loadCustomers();
     upsertCustomerAccount(customers, v.email);
     store.persistCustomers(customers);
     const sessions = addLoyaltySession(pruneLoyaltySessions(store.loadLoyaltySessions()), token, v.email);
     store.persistLoyaltySessions(sessions);
   });
+  if (!burned) return fail(v.slug);
   return res.redirect(OWNER_CUSTOMER_ORIGIN + "/?r=" + encodeURIComponent(v.slug) + "#loyalty=" + token);
 });
 
@@ -1799,6 +1824,10 @@ app.get("/me", requireOwner, (req, res) => {
         gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
         features: c.features || {},
         loyalty: c.loyalty || {},
+        // Without these the console's Settings cards render defaults after a
+        // reload — and "Save meal deal" would then silently disable a live deal.
+        mealDeal: c.mealDeal && typeof c.mealDeal === "object" ? c.mealDeal : {},
+        drinkCategories: Array.isArray(c.drinkCategories) ? c.drinkCategories : [],
         promos: promosForTenant(t),
         // Pricing/fees the owner edits via PATCH /me/pricing (the Settings card).
         developerFee: typeof c.developerFee === "number" ? c.developerFee : 0,
@@ -1897,18 +1926,30 @@ app.patch("/me/printers", requireOwner, (req, res) => {
   const t = getTenant(req.ownerSlug);
   if (!t) return res.status(404).json({ error: "Café not found" });
   const b = req.body || {};
-  const existing = (t.config && t.config.printerStations) || {};
-  const out = {};
+  // Validate up-front (pure), but read `existing` and merge INSIDE the lock so
+  // two concurrent PATCHes can't lose each other's stations.
+  const patch = {};
   for (const key of STATION_KEYS) {
-    if (b[key] === undefined) { if (existing[key]) out[key] = existing[key]; continue; } // not sent → keep
+    if (b[key] === undefined) continue;                // not sent → keep
     const v = validStationHost(b[key]);
     if (v === null) return res.status(400).json({ error: `Invalid printer address for “${key}”.` });
-    if (v) out[key] = v;                               // non-empty → set; empty → drop (cleared)
+    patch[key] = v;                                    // non-empty → set; "" → clear
   }
-  withWriteLock(() => { t.config = t.config || {}; t.config.printerStations = out; saveTenant(t); });
-  // withWriteLock defers the write, so respond with the canonical value we just
-  // committed (out) rather than re-reading the tenant before the write lands.
-  res.json({ success: true, printerStations: out });
+  withWriteLock(() => {
+    t.config = t.config || {};
+    const existing = t.config.printerStations || {};
+    const out = {};
+    for (const key of STATION_KEYS) {
+      const v = patch[key] !== undefined ? patch[key] : (existing[key] || "");
+      if (v) out[key] = v;
+    }
+    t.config.printerStations = out;
+    saveTenant(t);
+    res.json({ success: true, printerStations: out });
+  }).catch((e) => {
+    console.error("[printers] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save printers" });
+  });
 });
 
 // PATCH /me/loyalty — owner/console session. The logged-in owner configures THEIR
@@ -1945,6 +1986,9 @@ app.patch("/me/loyalty", requireOwner, (req, res) => {
     t.config.loyalty = L;
     saveTenant(t);
     res.json({ success: true, loyalty: t.config.loyalty, enabled: !!t.config.features.loyalty });
+  }).catch((e) => {
+    console.error("[loyalty] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save loyalty settings" });
   });
 });
 
@@ -1969,6 +2013,9 @@ app.patch("/me/promos", requireOwner, (req, res) => {
     t.config.promos = cleaned;
     saveTenant(t);
     res.json({ success: true, promos: cleaned });
+  }).catch((e) => {
+    console.error("[promos] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save promos" });
   });
 });
 
@@ -1993,6 +2040,9 @@ app.patch("/me/mealdeal", requireOwner, (req, res) => {
     t.config.mealDeal = cleaned;
     saveTenant(t);
     res.json({ success: true, mealDeal: cleaned });
+  }).catch((e) => {
+    console.error("[mealdeal] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save meal deal" });
   });
 });
 
@@ -2009,9 +2059,16 @@ app.patch("/me/pricing", requireOwner, (req, res) => {
   if (!t) return res.status(404).json({ error: "Café not found" });
   const raw = req.body && typeof req.body === "object" ? req.body : null;
   if (!raw) return res.status(400).json({ error: "Send a pricing object." });
+  const pricingMenu = tenantStore(t.slug).loadMenu();
+  // normalizePricing filters surcharge slugs against the menu — on a cold/empty
+  // menu that would silently discard every entry while still reporting success.
+  const hasCategories = pricingMenu && Array.isArray(pricingMenu.categoryOrder) && pricingMenu.categoryOrder.length > 0;
+  if (!hasCategories && raw.surcharge && typeof raw.surcharge === "object" && Object.keys(raw.surcharge).length) {
+    return res.status(409).json({ error: "The menu hasn't loaded yet — per-category price rises can't be saved right now." });
+  }
   let cleaned;
   try {
-    cleaned = normalizePricing(raw, tenantStore(t.slug).loadMenu());
+    cleaned = normalizePricing(raw, pricingMenu);
   } catch (e) {
     return res.status(400).json({ error: (e && e.message) || "Invalid pricing." });
   }
@@ -2023,6 +2080,9 @@ app.patch("/me/pricing", requireOwner, (req, res) => {
     t.config.surchargeDefault = cleaned.surchargeDefault;
     saveTenant(t);
     res.json({ success: true, pricing: cleaned });
+  }).catch((e) => {
+    console.error("[pricing] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save pricing" });
   });
 });
 
@@ -2042,6 +2102,9 @@ app.patch("/me/security", requireOwner, (req, res) => {
     else delete t.config.managerPin;
     saveTenant(t);
     res.json({ success: true, managerPinSet: !!pin });
+  }).catch((e) => {
+    console.error("[security] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save PIN" });
   });
 });
 
@@ -2104,18 +2167,33 @@ app.patch("/admin/tenants/:slug", requirePlatformAdmin, (req, res) => {
   const out = { success: true, slug: t.slug };
   withWriteLock(() => {
     if (b.name != null) t.name = sanitizeString(b.name, 80) || t.name;
-    t.config = mergeConfig(Object.assign({}, t.config, configOverridesFromBody(b)));
+    // A partial deep-key payload (e.g. { hours: { display } }) must merge onto
+    // the tenant's CURRENT nested values — Object.assign replaces the object
+    // wholesale and mergeConfig then fills from platform defaults, silently
+    // wiping the tenant's other keys (open/close hours, feature flags, …).
+    const ov = configOverridesFromBody(b);
+    for (const k of CONFIG_DEEP_KEYS) {
+      if (ov[k] && typeof ov[k] === "object" && t.config && typeof t.config[k] === "object") {
+        ov[k] = Object.assign({}, t.config[k], ov[k]);
+      }
+    }
+    t.config = mergeConfig(Object.assign({}, t.config, ov));
     if (b.name != null) t.config.name = t.name;
     if (b.regenerateToken) {
       const staffToken = crypto.randomBytes(24).toString("hex");
       t.staffTokenHash = hashToken(staffToken);
       out.staffToken = staffToken;
-      out.dashboardUrl = `/dashboard?token=${staffToken}`;
+      out.consoleUrl = "/console";
     }
     saveTenant(t);
     console.log(`[tenant] updated '${t.slug}'${b.regenerateToken ? " (token rotated)" : ""}`);
+    // Respond inside the lock — responding outside raced the deferred lock fn,
+    // so a rotation response could be sent BEFORE out.staffToken was filled in.
+    res.json(out);
+  }).catch((e) => {
+    console.error("[tenant] update error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to update restaurant" });
   });
-  res.json(out);
 });
 
 // ── Printable QR pack for a restaurant (platform admin) ────
@@ -2244,6 +2322,12 @@ app.post("/order", resolveTenant, (req, res) => {
     try {
       const { tableNumber, items, notes, guestCount, phoneNumber, orderType, customerName, pickupTime } = req.body || {};
 
+      // normalizeItems caps at 100 lines — reject instead of silently truncating
+      // (a "success" that dropped lines never reaches the kitchen or the bill).
+      if (Array.isArray(items) && items.length > 100) {
+        res.status(400).json({ error: "Too many items in one order — please split it up." });
+        return;
+      }
       const normalizedItems = normalizeItems(items);
       if (normalizedItems.length === 0) {
         res.status(400).json({ error: "No items in order" });
@@ -2268,8 +2352,13 @@ app.post("/order", resolveTenant, (req, res) => {
         return /^(asap|(tomorrow\s+)?\d{1,2}:\d{2}\s?(am|pm))$/i.test(v) ? v : "ASAP";
       })() : undefined;
 
-      // Reject forged/underpriced items against the authoritative menu.
+      // Reject forged/underpriced items against the authoritative menu. The
+      // customer buys at SURCHARGED prices (GET /menu bakes them in), so the
+      // price floor AND every discount below must use the same surcharged basis
+      // — validating against the raw base menu let a crafted client skip the
+      // surcharge, and made discounts under-pay against what was charged.
       const menu = loadMenu();
+      const pricedMenu = withOnlineSurcharge(menu, req.tenant.config);
       if (isPickup) {
         const dv = pickupDrinksViolation(normalizedItems, menu, req.tenant.config);
         if (dv) {
@@ -2277,7 +2366,7 @@ app.post("/order", resolveTenant, (req, res) => {
           return;
         }
       }
-      const pv = priceViolation(normalizedItems, menu);
+      const pv = priceViolation(normalizedItems, pricedMenu, { requireResolvable: true });
       if (pv) {
         res.status(400).json({ error: pv });
         return;
@@ -2332,7 +2421,7 @@ app.post("/order", resolveTenant, (req, res) => {
       if (req.body && req.body.promoCode) {
         const wanted = String(req.body.promoCode).trim().toUpperCase();
         const promo = promosForTenant(req.tenant).find((p) => p && p.enabled !== false && String(p.code || "").toUpperCase() === wanted);
-        const disc = promo ? computePromoDiscount(promo, normalizedItems, menu) : null;
+        const disc = promo ? computePromoDiscount(promo, normalizedItems, pricedMenu) : null;
         if (disc) {
           order.promoCode = disc.code;
           adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: disc.label, amount: disc.amount, promo: disc.code, addedAt: now });
@@ -2358,12 +2447,12 @@ app.post("/order", resolveTenant, (req, res) => {
       // reprices an eligible drink to $1. Time + prices are server-authoritative,
       // re-checked here at order time in the tenant's timezone.
       {
-        const md = computeMealDeal(req.tenant.config && req.tenant.config.mealDeal, normalizedItems, menu, { timezone: req.tenant.config && req.tenant.config.timezone });
+        const md = computeMealDeal(req.tenant.config && req.tenant.config.mealDeal, normalizedItems, pricedMenu, { timezone: req.tenant.config && req.tenant.config.timezone });
         if (md) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: md.label, amount: md.amount, mealDeal: true, addedAt: now });
       }
       // Stamp-card reward redemption (opt-in: needs a redeemable reward + item in cart).
       if (loyaltyCustomer && req.body && req.body.redeemReward) {
-        const rd = computeRewardDiscount(req.tenant.config, menu, normalizedItems);
+        const rd = computeRewardDiscount(req.tenant.config, pricedMenu, normalizedItems);
         const avail = (loyaltyCustomer.loyalty && loyaltyCustomer.loyalty.rewardsAvailable) || 0;
         if (rd && avail >= 1) {
           adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: rd.label, amount: rd.amount, loyaltyReward: true, addedAt: now });
@@ -3286,6 +3375,11 @@ app.get("/orders/:id", resolveTenant, (req, res) => {
       notes: i.notes,
     })),
     adjustments: (Array.isArray(order.adjustments) ? order.adjustments : []).map((a) => ({ label: a.label, amount: a.amount })),
+    // The bill page must show the fee/adjustments or the line items won't sum
+    // to the total (an "undisclosed" fee on a customer-facing bill).
+    developerFee: Number(order.developerFee) || 0,
+    developerFeeLabel: oc.developerFeeLabel || "Developer fee",
+    gstRate: typeof oc.gstRate === "number" ? oc.gstRate : 0.15,
     total: order.total,
     status: order.status,
     createdAt: order.createdAt,
@@ -3354,9 +3448,10 @@ app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
       }
 
       // Reject forged/underpriced additions against the menu (best-effort:
-      // /add-items lines carry no id, so this matches by name).
+      // /add-items lines carry no id, so this matches by name). Floor at the
+      // SURCHARGED prices the customer actually buys at.
       const addMenu = loadMenu();
-      const pv = priceViolation(newItems, addMenu);
+      const pv = priceViolation(newItems, withOnlineSurcharge(addMenu, req.tenant.config));
       if (pv) {
         res.status(400).json({ error: pv });
         return;
@@ -3648,7 +3743,11 @@ function adjustmentsTotal(order) {
 }
 function recomputeOrderTotal(order) {
   const itemsSum = (order.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
-  order.total = clampMoney(itemsSum + adjustmentsTotal(order) + (Number(order.developerFee) || 0));
+  // Stacked discounts (promo + frequent + meal deal + reward) can exceed the
+  // items themselves; cap the net adjustment at -itemsSum so discounts zero out
+  // the food but never eat the developer fee or drive the total below it.
+  const adj = Math.max(adjustmentsTotal(order), -itemsSum);
+  order.total = clampMoney(itemsSum + adj + (Number(order.developerFee) || 0));
   return order.total;
 }
 
@@ -3661,8 +3760,12 @@ function awardLoyaltyOnPaid(store, order, cfg) {
     if (order.loyaltyRedemption && !order.loyaltyRedemption.consumed) order.loyaltyRedemption.consumed = true;
     if (order.loyaltyStampAwarded) return;
     const L = loyaltyConfig(cfg);
-    order.loyaltyStampAwarded = true;                  // set first so it can't double-award
+    // Check eligibility BEFORE setting the idempotency flag — flagging a
+    // sub-minimum order blocked it from ever earning a stamp after items were
+    // added and it was re-confirmed paid. (All callers run under the write
+    // lock, so flag-after-check can't double-award.)
     if (itemsSubtotal(order.items) < L.minOrder) return;
+    order.loyaltyStampAwarded = true;
     const customers = store.loadCustomers();
     const c = customers.find((x) => x.email === order.loyaltyEmail);
     if (!c) return;
@@ -3767,7 +3870,9 @@ app.post("/orders/:id/redeem-loyalty", requireStaff, (req, res) => {
       }
       if (!o.loyaltyEmail) return res.status(400).json({ error: "This order is not linked to a loyalty account." });
       if (o.loyaltyRedemption && !o.loyaltyRedemption.consumed) return res.status(409).json({ error: "A reward is already applied to this order." });
-      const rd = computeRewardDiscount(cfg, loadMenu(), o.items);
+      // Surcharged basis — the order's line prices include the online surcharge,
+      // so a "free" reward must discount the surcharged price, not the base one.
+      const rd = computeRewardDiscount(cfg, withOnlineSurcharge(loadMenu(), cfg), o.items);
       if (!rd) return res.status(400).json({ error: "The reward item isn't on this order." });
       const customers = loadCustomers();
       const c = customers.find((x) => x.email === o.loyaltyEmail);
@@ -4043,7 +4148,6 @@ app.post("/orders/:id/charge", resolveTenant, async (req, res) => {
 // express.json so the raw bytes are available for HMAC (configured at the top
 // of this file via app.use("/webhooks", express.raw(...))).
 app.post("/webhooks/:provider", resolveTenant, (req, res) => {
-  const { loadOrders, persistOrders } = req.store;
   const providerName = req.params.provider;
   let event;
   try {
@@ -4078,8 +4182,28 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
 
   withWriteLock(() => {
     try {
-      const all = loadOrders();
-      const j = all.findIndex((o) => o.id === event.orderId);
+      // A PSP webhook is server-to-server: it carries no staff token / ?r= /
+      // x-tenant header, so resolveTenant lands on the DEFAULT tenant. If the
+      // order isn't there, find it across all tenants — the metadata billToken
+      // echo (set at createIntent) makes the match unambiguous, so a non-default
+      // café's payments settle instead of being dropped as "unknown order".
+      let store = req.store;
+      let cfg = req.tenant.config;
+      let all = store.loadOrders();
+      let j = all.findIndex((o) => o.id === event.orderId);
+      if (j === -1 && event.billToken) {
+        for (const slug of TENANTS.keys()) {
+          const st = tenantStore(slug);
+          const list = st.loadOrders();
+          const k = list.findIndex((o) => o.id === event.orderId && o.billToken && safeEqual(String(event.billToken), String(o.billToken)));
+          if (k !== -1) {
+            store = st; all = list; j = k;
+            const t = getTenant(slug);
+            if (t && t.config) cfg = t.config;
+            break;
+          }
+        }
+      }
       if (j === -1) {
         console.warn(`[pay] webhook for unknown order ${event.orderId}`);
         return res.status(200).json({ received: true, note: "unknown order" });
@@ -4119,8 +4243,8 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
           provider: providerName,
           capturedAt: new Date().toISOString(),
         };
-        awardLoyaltyOnPaid(req.store, o, req.tenant.config);
-        persistOrders(all);
+        awardLoyaltyOnPaid(store, o, cfg);
+        store.persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → paid (${event.scheme || "card"} •••${event.last4 || "????"})`);
         return res.status(200).json({ received: true, processed: true });
       }
@@ -4133,8 +4257,8 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
         }
         o.paymentStatus = "failed";
         if (o.paymentIntent) o.paymentIntent.failedAt = new Date().toISOString();
-        restoreReservedReward(req.store, o);
-        persistOrders(all);
+        restoreReservedReward(store, o);
+        store.persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → failed`);
         return res.status(200).json({ received: true, processed: true });
       }
@@ -4146,7 +4270,7 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
         }
         o.paymentStatus = "refunded";
         if (o.payment) o.payment.refundedAt = new Date().toISOString();
-        persistOrders(all);
+        store.persistOrders(all);
         return res.status(200).json({ received: true, processed: true });
       }
 
@@ -4513,10 +4637,16 @@ app.post("/groups/:code/join", resolveTenant, (req, res) => {
       const b = req.body || {};
       const name = sanitizeString(b.name, 40);
       if (!name) { res.status(400).json({ error: "Your name is required" }); return; }
+      if (Array.isArray(b.items) && b.items.length > 100) {
+        res.status(400).json({ error: "Too many items in one order — please split it up." });
+        return;
+      }
       const items = normalizeItems(b.items);
       if (items.length === 0) { res.status(400).json({ error: "No items in your order" }); return; }
       const menu = loadMenu();
-      const pv = priceViolation(items, menu);
+      // Same surcharged floor + strict resolution as POST /order — group members
+      // order from the same surcharged GET /menu.
+      const pv = priceViolation(items, withOnlineSurcharge(menu, req.tenant.config), { requireResolvable: true });
       if (pv) { res.status(400).json({ error: pv }); return; }
       const memberFee = developerFeeFor(req.tenant.config); // per-person developer fee
       const member = {
