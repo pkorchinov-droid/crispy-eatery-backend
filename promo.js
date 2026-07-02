@@ -162,7 +162,9 @@ function computePromoDiscount(promo, items, menu) {
   }
   if (base == null || base <= 0) return null;
 
-  const amount = round2(mode === "amount" ? Math.min(value, base) : base * (value / 100));
+  // Defense-in-depth: normalizePromos enforces percent ≤ 100, but a hand-edited
+  // config could bypass it — never discount more than the base itself.
+  const amount = round2(mode === "amount" ? Math.min(value, base) : base * (Math.min(value, 100) / 100));
   if (amount <= 0) return null;
   return { code, label: promo.label || code, amount: -amount, promo: code };
 }
@@ -231,6 +233,12 @@ function normalizePromos(list, menu) {
     };
     p.label = String(raw.label || "").trim().slice(0, 120) || summaryLabel(p);
     out.push(p);
+  }
+  // ids must be unique too (console edits/deletes address promos by id).
+  const seenIds = new Set();
+  for (const p of out) {
+    if (seenIds.has(p.id)) throw new Error("Duplicate promo id: " + p.id + ".");
+    seenIds.add(p.id);
   }
   return out;
 }

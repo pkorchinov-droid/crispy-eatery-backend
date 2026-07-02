@@ -46,12 +46,18 @@ function computeRewardDiscount(cfg, menu, items) {
   if (!L.rewardItemId) return null;
   const rewardItem = resolveMenuItem(menu, { id: L.rewardItemId });
   if (!rewardItem) return null;
-  const inCart = (Array.isArray(items) ? items : []).some((line) => {
+  // Price the reward at the size actually in the cart (priciest matching unit —
+  // "free" must cover what they ordered), not the item's cheapest size.
+  let p = null;
+  for (const line of (Array.isArray(items) ? items : [])) {
     const mi = resolveMenuItem(menu, line);
-    return mi && mi.id === rewardItem.id;
-  });
-  if (!inCart) return null;
-  const p = unitPrice(rewardItem);
+    if (!mi || mi.id !== rewardItem.id) continue;
+    let u = unitPrice(rewardItem);
+    if (line && line.size && rewardItem.sizes && typeof rewardItem.sizes[line.size] === "number") {
+      u = rewardItem.sizes[line.size];
+    }
+    if (typeof u === "number" && (p == null || u > p)) p = u;
+  }
   if (typeof p !== "number" || p <= 0) return null;
   return { rewardItemId: rewardItem.id, label: "Loyalty reward · free " + (rewardItem.name || "item"), amount: -round2(p) };
 }

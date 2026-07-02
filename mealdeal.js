@@ -52,10 +52,16 @@ function nowMinutes(opts) {
 }
 
 // Is the deal live right now? Enabled AND inside its daily window. Reuses the
-// menu-availability window logic (fails open on a missing/unparseable window).
+// menu-availability window logic, but unlike category display (which fails
+// open), a money-giving promo fails CLOSED on a supplied-but-unparseable bound.
 function mealDealActive(config, opts) {
   if (!config || !config.enabled) return false;
-  return categoryVisibleAt(config.window, nowMinutes(opts));
+  const win = config.window;
+  if (win && typeof win === "object") {
+    if (win.from != null && win.from !== "" && parseHHMM(win.from) == null) return false;
+    if (win.to != null && win.to !== "" && parseHHMM(win.to) == null) return false;
+  }
+  return categoryVisibleAt(win, nowMinutes(opts));
 }
 
 // Compute the meal-deal adjustment for a set of order lines, or null if nothing
@@ -77,7 +83,8 @@ function computeMealDeal(config, items, menu, opts) {
     const it = resolveMenuItem(menu, line);
     if (!it || !it.id) continue;
     const qty = lineQty(line);
-    if (qualifyIds.has(it.id)) mealUnits += qty;
+    // An item that is also an eligible drink can't qualify itself for the deal.
+    if (qualifyIds.has(it.id) && !drinkIds.has(it.id)) mealUnits += qty;
     if (drinkIds.has(it.id)) {
       const u = lineUnit(it, line);
       if (typeof u === "number" && u > price) {
@@ -119,6 +126,9 @@ function normalizeMealDeal(raw, menu) {
   if (win.to != null && win.to !== "") {
     if (parseHHMM(win.to) == null) throw new Error("Meal deal: invalid cutoff time (use HH:MM).");
     window.to = String(win.to).trim();
+  }
+  if (window.from && window.to && parseHHMM(window.from) === parseHHMM(window.to)) {
+    throw new Error("Meal deal: start and cutoff times must differ.");
   }
 
   // Categories are required only for an ENABLED deal — a disabled deal can be

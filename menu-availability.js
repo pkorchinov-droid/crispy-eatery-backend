@@ -14,6 +14,7 @@ function parseHHMM(s) {
   if (!m) return null;
   const h = parseInt(m[1], 10);
   const min = parseInt(m[2], 10);
+  if (h === 24 && min === 0) return 1440; // "24:00" = end of day
   if (h > 23 || min > 59) return null;
   return h * 60 + min;
 }
@@ -26,7 +27,8 @@ function categoryVisibleAt(avail, nowMin) {
   let fromM = avail.from == null ? 0 : parseHHMM(avail.from);
   let toM = avail.to == null ? 1440 : parseHHMM(avail.to);
   if (fromM == null || toM == null) return true; // unparseable -> always show
-  if (fromM <= toM) return nowMin >= fromM && nowMin < toM;
+  if (fromM === toM) return true; // equal bounds read as "all day", not "never"
+  if (fromM < toM) return nowMin >= fromM && nowMin < toM;
   // Overnight window (e.g. 22:00 -> 02:00): visible across the midnight wrap.
   return nowMin >= fromM || nowMin < toM;
 }
