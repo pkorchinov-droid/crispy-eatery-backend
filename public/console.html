@@ -700,7 +700,7 @@ function sidebarHTML(){
     + '<div style="width:34px;height:34px;border-radius:50%;background:#4a3a2c;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;color:#e8c477;flex-shrink:0;">'+esc(initialsOf(accountName))+'</div>'
     + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">'+esc(accountName)+'</div>'
     + '<div style="font-size:11px;color:#a99176;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc((state.me&&state.me.login)?('@'+state.me.login):'')+'</div></div>'
-    + '<button data-act="openSettings" title="Settings" style="background:none;border:none;color:#a99176;cursor:pointer;padding:4px;display:flex;">'+ic(ICON.gear,1.4)+'</button></div></aside>';
+    + '<button data-act="openSettings" title="Settings'+(managerPinSet()?' (manager PIN)':'')+'" style="background:none;border:none;color:#a99176;cursor:pointer;padding:4px;display:flex;align-items:center;gap:3px;">'+ic(ICON.gear,1.4)+(managerPinSet()?'<span style="opacity:.7;font-size:11px;">🔒</span>':'')+'</button></div></aside>';
 }
 
 function bottomNavHTML(){
@@ -1876,7 +1876,10 @@ function focusPin(){ const el=document.getElementById('pin-input'); if(el) el.fo
 // Open Settings, gated the same way. No PIN set → opens freely (so the owner can set one).
 function openSettingsNow(){ state.settingsOpen=true; state.setMsg=''; state.promos=JSON.parse(JSON.stringify(cfg().promos||[])); state.promoMsg=''; state.mealDealMsg=''; state.pricingMsg=''; state.securityMsg=''; render(); }
 function requestSettings(){
-  if(managerLocked()){ state.pinPrompt={ action:'settings' }; state.pinErr=''; render(); focusPin(); return; }
+  // Settings always re-prompts when a PIN is set (it holds the PIN itself,
+  // pricing and promos) — an earlier Reports unlock this session must not
+  // carry over. No PIN set → opens freely so the owner can set one.
+  if(managerPinSet()){ state.pinPrompt={ action:'settings' }; state.pinErr=''; render(); focusPin(); return; }
   openSettingsNow();
 }
 // Verify the entered PIN server-side; on success unlock for the session + run the pending action.
