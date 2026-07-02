@@ -140,10 +140,12 @@ function startAlert(){
     _alertTimer = setTimeout(loop, 1800);
   })();
   // Reflect the ringing state without tearing down a modal that has live inputs
-  // (Settings / tender / Import) — a background poll must not wipe what the user
-  // is typing. The chime/loop above is unaffected; only the repaint is gated.
+  // (PIN prompt / Settings / tender / Import / Add-dish / menu editor) — and
+  // never mid-keystroke. Same guard as poll(); only the repaint is gated.
+  const ae=document.activeElement;
+  const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
   if(state.active==='kitchen') refreshKitchenInPlace();
-  else if(!(state.settingsOpen||state.tender||state.importOpen)) render();
+  else if(!(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.menuEditId||typing)) render();
 }
 function stopAlert(){
   state.alerting = false;
@@ -165,7 +167,7 @@ const state = {
   customers: [], custByEmail: {},
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   dayReport:null,       // end-of-shift items-sold report (lazy-init { date })
-  active:'kitchen', sel:{cat:0,item:0}, billSel:0, alerting:false,
+  active:'kitchen', sel:{cat:0,item:0}, billSelId:null, alerting:false,
   unlocked:false, pinPrompt:null, pinErr:'', securityMsg:'',
   menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
@@ -222,7 +224,7 @@ function cafeAddress(){ return (state.menu && state.menu.address) || cfg().addre
 function gstRate(){ const r = cfg().gstRate; return typeof r==='number' ? r : 0.15; }
 function cur(){ return cfg().currency || '$'; }
 function money(n){ return cur() + (Number(n)||0).toFixed(2); }
-function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function val(id){ const el=document.getElementById(id); return el?el.value:''; }
 function clockStr(){ return new Date().toLocaleTimeString('en-NZ',{hour:'2-digit',minute:'2-digit',hour12:false}); }
 function initialsOf(name){ return String(name||'?').split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
@@ -1107,7 +1109,7 @@ function kitchenContentHTML(){
         : ps==='failed' ? '<span style="font-size:11px;font-weight:700;color:#ff6b4a;display:inline-flex;align-items:center;gap:5px;">⚠ Print failed</span>'
         : '';
       const printIcon = printBtn ? '<button data-act="printTicket" data-id="'+esc(o.id)+'" title="'+(ps==='printed'?'Reprint':'Print kitchen ticket')+'" style="background:none;border:1px solid var(--kds-line);color:'+(ps==='failed'?'#ff6b4a':'var(--kds-muted)')+';border-radius:8px;width:30px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;'+(ps==='printed'?'opacity:.6;':'')+'">'+ic(ICON.print,1.5,15)+'</button>' : '';
-      return '<div style="background:var(--kds-panel);border:1px solid var(--kds-line);border-left:4px solid '+col.accent+';border-radius:12px;padding:14px 15px;"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:11px;"><span style="font-family:\'Fraunces\',serif;font-size:17px;color:var(--kds-ink);">'+esc(o.id)+'</span><span style="font-size:13px;color:var(--kds-muted);font-weight:500;white-space:nowrap;">'+esc(orderWhere(o))+'</span><span style="margin-left:auto;font-family:\'Fraunces\',serif;font-size:15px;color:'+tc+';'+(urgent?'animation:blink 1s infinite;':'')+'">'+em+'m</span></div>'+(o.phoneNumber?'<div style="margin:-4px 0 10px;">'+phoneLine(o,'var(--kds-muted)')+'</div>':'')+'<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:13px;">'+items+'</div>'+(psBadge?'<div style="margin-bottom:9px;">'+psBadge+'</div>':'')+'<div style="display:flex;gap:8px;align-items:center;"><button data-act="advance" data-id="'+esc(o.id)+'" data-next="'+col.next+'" style="flex:1;padding:11px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.04em;background:'+btnStyle[0]+';color:'+btnStyle[1]+';">'+col.btn+'</button>'+printIcon+'</div></div>';
+      return '<div style="background:var(--kds-panel);border:1px solid var(--kds-line);border-left:4px solid '+col.accent+';border-radius:12px;padding:14px 15px;"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:11px;"><span style="font-family:\'Fraunces\',serif;font-size:17px;color:var(--kds-ink);">'+esc(o.id)+'</span><span style="font-size:13px;color:var(--kds-muted);font-weight:500;white-space:nowrap;">'+esc(orderWhere(o))+'</span><span style="margin-left:auto;font-family:\'Fraunces\',serif;font-size:15px;color:'+tc+';'+(urgent?'animation:blink 1s infinite;':'')+'">'+em+'m</span></div>'+(o.phoneNumber?'<div style="margin:-4px 0 10px;">'+phoneLine(o,'var(--kds-muted)')+'</div>':'')+'<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:13px;">'+items+'</div>'+(o.notes?'<div style="font-size:12px;color:#d9774e;font-style:italic;margin:-5px 0 13px;">Order note: '+esc(o.notes)+'</div>':'')+(psBadge?'<div style="margin-bottom:9px;">'+psBadge+'</div>':'')+'<div style="display:flex;gap:8px;align-items:center;"><button data-act="advance" data-id="'+esc(o.id)+'" data-next="'+col.next+'" style="flex:1;padding:11px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.04em;background:'+btnStyle[0]+';color:'+btnStyle[1]+';">'+col.btn+'</button>'+printIcon+'</div></div>';
     }).join('');
     const empty = list.length===0 ? '<div style="border:1.5px dashed var(--kds-line);border-radius:12px;padding:26px;text-align:center;color:var(--kds-muted);font-size:13px;">All clear</div>' : '';
     return '<div><div style="display:flex;align-items:center;gap:9px;padding:0 4px 12px;"><span style="width:10px;height:10px;border-radius:50%;background:'+col.accent+';"></span><span style="font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--kds-ink);">'+col.title+'</span><span style="font-size:12px;color:var(--kds-muted);">'+list.length+'</span></div><div style="display:flex;flex-direction:column;gap:13px;">'+cards+empty+'</div></div>';
@@ -1278,7 +1280,11 @@ function loadingBox(msg){ return '<div style="padding:60px 30px;text-align:cente
    Computed client-side from state.orders (the full history); no backend call. */
 function dayReportEnsure(){ if(!state.dayReport || !state.dayReport.date) state.dayReport = { date: rIsoDate(new Date()) }; }
 function dayReportDrinkSlugs(){
-  const out = {}; const list = Array.isArray(cfg().drinkCategories) ? cfg().drinkCategories : [];
+  // Tenant's configured drink categories: /me config first, then the menu
+  // payload (GET /menu carries it too), then the legacy hardcoded slugs.
+  const out = {};
+  let list = Array.isArray(cfg().drinkCategories) ? cfg().drinkCategories : [];
+  if(!list.length && state.menu && Array.isArray(state.menu.drinkCategories)) list = state.menu.drinkCategories;
   if(list.length) list.forEach(function(s){ out[s]=1; });
   else Object.keys(DRINK_CATEGORIES).forEach(function(s){ out[s]=1; });
   return out;
@@ -1518,7 +1524,7 @@ function menuSheetHTML(){
   if(!cur) return '';
   const hasPrice = typeof cur.price==='number';
   const sizesHtml = (!hasPrice && cur.sizes) ? '<div style="margin-top:18px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Sizes</div>'+Object.keys(cur.sizes).map(function(k){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px dotted var(--divider);color:var(--ink);"><span>'+esc(k)+'</span><span style="font-family:\'Fraunces\',serif;">'+money(cur.sizes[k])+'</span></div>'; }).join('')+'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Edit individual size prices in the full menu admin.</div>' : '';
-  const priceStepper = hasPrice ? '<div style="margin-top:22px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Price</div><div style="display:flex;align-items:center;gap:12px;"><button data-act="priceDown" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">−</button><div id="ed-price" style="font-family:\'Fraunces\',serif;font-size:30px;flex:1;text-align:center;color:var(--ink);">'+money(cur.price)+'</div><button data-act="priceUp" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">+</button></div>' : sizesHtml;
+  const priceStepper = hasPrice ? '<div style="margin-top:22px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Price</div><div style="display:flex;align-items:center;gap:12px;"><button data-act="priceDown" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">−</button><div id="ed-price" style="font-family:\'Fraunces\',serif;font-size:30px;flex:1;text-align:center;color:var(--ink);">'+money(typeof _draftPrice==='number'?_draftPrice:cur.price)+'</div><button data-act="priceUp" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">+</button></div>' : sizesHtml;
   const head = '<div style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface);"><span style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted2);">Edit item</span><button data-act="menuClose" aria-label="Close editor" style="background:none;border:none;font-size:25px;line-height:1;color:var(--muted2);cursor:pointer;padding:0 4px;">×</button></div>';
   const body = '<div class="menu-sheet-body" style="padding:18px 20px;">'
     + '<div style="width:100%;height:140px;border-radius:12px;background:var(--track);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted2);margin-bottom:18px;overflow:hidden;position:relative;">'+icPlate(40,1.1)+'<span style="font-size:11.5px;letter-spacing:.04em;">No photo</span>'+imgOverlay(cur)+'</div>'
@@ -1554,8 +1560,12 @@ function billDayCount(bills,key){ return bills.filter(function(x){ return billDa
 function billingHTML(){
   const bills = (state.orders||[]).slice().sort(function(a,b){ return new Date(b.createdAt)-new Date(a.createdAt); });
   if(!bills.length) return emptyBox('No orders yet today.');
-  if(state.billSel>=bills.length) state.billSel=0;
-  const b = bills[state.billSel];
+  // Select by order ID, not flat index — a new order arriving on the 6s poll
+  // shifts every index by one, silently switching the bill staff are about to
+  // mark paid. Fall back to the newest when the selected order is gone.
+  let selIdx = bills.findIndex(function(x){ return x.id===state.billSelId; });
+  if(selIdx===-1) selIdx=0;
+  const b = bills[selIdx];
   const paid = b.paymentStatus==='paid';
   const gst = gstBreakdown(b.total).gst;
 
@@ -1564,14 +1574,14 @@ function billingHTML(){
   // is unaffected by the grouping.
   let lastKey = null;
   const openBills = bills.map(function(bb,i){
-    const on = i===state.billSel;
+    const on = i===selIdx;
     const isPaid = bb.paymentStatus==='paid';
     const chip = isPaid ? ['Paid','var(--pos)','rgba(90,99,64,.18)'] : ['Unpaid','var(--neg)','rgba(194,90,58,.16)'];
     const key = billDayKey(bb.createdAt);
     let header = '';
     if(key!==lastKey){ const first=lastKey===null; lastKey=key; header='<div style="display:flex;align-items:baseline;justify-content:space-between;'+(first?'':'margin-top:18px;')+'margin-bottom:8px;padding:0 2px;"><span style="font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted2);font-weight:600;">'+esc(billDayLabel(bb.createdAt))+'</span><span style="font-size:11px;color:var(--muted2);">'+billDayCount(bills,key)+' order'+(billDayCount(bills,key)===1?'':'s')+'</span></div>'; }
     const tm = billTime(bb.createdAt);
-    const card = '<div data-act="billSelect" data-idx="'+i+'" style="display:flex;gap:12px;align-items:center;padding:14px;border-radius:12px;cursor:pointer;margin-bottom:9px;border:1.5px solid '+(on?'var(--accent)':'var(--border)')+';background:'+(on?'var(--accent-tint)':'var(--surface)')+';"><div style="flex:1;min-width:0;"><div style="display:flex;align-items:baseline;gap:8px;"><span style="font-size:14px;font-weight:600;color:var(--ink);">'+esc(orderWhere(bb))+'</span>'+(tm?'<span style="font-size:11.5px;color:var(--muted);white-space:nowrap;">'+esc(tm)+'</span>':'')+'</div><div style="font-size:12px;color:var(--muted2);">'+esc(bb.id)+' · '+((bb.items||[]).length)+' items</div>'+(bb.phoneNumber?'<div style="margin-top:2px;">'+phoneLine(bb)+'</div>':'')+'</div><div style="text-align:right;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+money(bb.total)+'</div><span style="display:inline-block;margin-top:4px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;color:'+chip[1]+';background:'+chip[2]+';">'+chip[0]+'</span></div></div>';
+    const card = '<div data-act="billSelect" data-id="'+esc(bb.id)+'" style="display:flex;gap:12px;align-items:center;padding:14px;border-radius:12px;cursor:pointer;margin-bottom:9px;border:1.5px solid '+(on?'var(--accent)':'var(--border)')+';background:'+(on?'var(--accent-tint)':'var(--surface)')+';"><div style="flex:1;min-width:0;"><div style="display:flex;align-items:baseline;gap:8px;"><span style="font-size:14px;font-weight:600;color:var(--ink);">'+esc(orderWhere(bb))+'</span>'+(tm?'<span style="font-size:11.5px;color:var(--muted);white-space:nowrap;">'+esc(tm)+'</span>':'')+'</div><div style="font-size:12px;color:var(--muted2);">'+esc(bb.id)+' · '+((bb.items||[]).length)+' items</div>'+(bb.phoneNumber?'<div style="margin-top:2px;">'+phoneLine(bb)+'</div>':'')+'</div><div style="text-align:right;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+money(bb.total)+'</div><span style="display:inline-block;margin-top:4px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;color:'+chip[1]+';background:'+chip[2]+';">'+chip[0]+'</span></div></div>';
     return header + card;
   }).join('');
 
@@ -1675,12 +1685,16 @@ function refreshKitchenInPlace(){
   if(sb) sb.scrollTop=top;
 }
 
-let _localPrice = {};
+// Unsaved price draft for the open editor sheet. The stepper must NOT mutate
+// state.menu directly — closing without Save would leave a phantom price in
+// the list (and promo labels) until the next menu reload.
+let _draftPrice = null;
 function bump(d){
   const it = menuEditingItem();
   if(!it || typeof it.price!=='number') return;
-  it.price = Math.max(0, Math.round((it.price+d)*100)/100);
-  const el=document.getElementById('ed-price'); if(el) el.textContent=money(it.price);
+  const base = typeof _draftPrice==='number' ? _draftPrice : it.price;
+  _draftPrice = Math.max(0, Math.round((base+d)*100)/100);
+  const el=document.getElementById('ed-price'); if(el) el.textContent=money(_draftPrice);
 }
 // 86 is a decisive, immediate action — PATCH it right away so the customer menu
 // reflects it now (no "looks 86'd but isn't" trap), and revert the toggle on failure.
@@ -1709,7 +1723,8 @@ async function saveItem(){
   const it = menuEditingItem();
   if(!it) return;
   if(typeof it.price!=='number'){ toast('Edit size prices in the full menu admin','info'); return; }
-  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ price: it.price } }); toast('Saved '+it.name,'ok'); state.menuEditId=null; }
+  const newPrice = typeof _draftPrice==='number' ? _draftPrice : it.price;
+  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ price: newPrice } }); toast('Saved '+it.name,'ok'); state.menuEditId=null; _draftPrice=null; }
   catch(e){ toast('Save failed — '+e.message,'err'); }
   await loadMenu(); render();
 }
@@ -1786,7 +1801,8 @@ async function submitAddDish(){
   }
   state.addDishOpen=false; state.addDishMsg='';
   await loadMenu();
-  if(created && created.item) selectItemById(created.item.id);
+  // Highlight the new dish: expand its category and open its editor sheet.
+  if(created && created.item){ state.menuEditId=created.item.id; state.menuExpanded[categorySlug]=true; }
   render();
   toast(photoWarn ? ('Added '+name+' · '+photoWarn) : ('Added '+name), photoWarn?'info':'ok');
 }
@@ -1885,12 +1901,12 @@ function requestSettings(){
 // Verify the entered PIN server-side; on success unlock for the session + run the pending action.
 async function pinSubmit(){
   const el=document.getElementById('pin-input'); const pin=el?el.value.trim():'';
-  if(!pin){ state.pinErr='Enter your PIN.'; render(); return; }
+  if(!pin){ state.pinErr='Enter your PIN.'; render(); focusPin(); return; }
   try {
     const d=await api('/me/verify-pin', { method:'POST', body:{ pin } });
     if(d && d.success){ state.unlocked=true; const p=state.pinPrompt||{}; state.pinPrompt=null; state.pinErr=''; if(p.action==='settings') openSettingsNow(); else if(p.target) goScreen(p.target); else render(); }
     else { state.pinErr='Wrong PIN. Try again.'; render(); const e2=document.getElementById('pin-input'); if(e2){ e2.value=''; e2.focus(); } }
-  } catch(e){ state.pinErr=(e&&e.message)||'Could not verify.'; render(); }
+  } catch(e){ state.pinErr=(e&&e.message)||'Could not verify.'; render(); focusPin(); }
 }
 function pinPromptHTML(){
   const inp="width:100%;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--input);font-size:22px;letter-spacing:.4em;text-align:center;color:var(--ink);outline:none;box-sizing:border-box;";
@@ -1909,6 +1925,9 @@ function pinPromptHTML(){
 // Settings → Manager lock: set/change the PIN.
 async function saveSecurity(){
   const el=document.getElementById('sec-pin'); const pin=el?el.value.trim():'';
+  // Blank with a PIN already set = keep current (matches the placeholder text);
+  // use "Turn off" to clear. Never send "" — the server treats it as a clear.
+  if(!pin && managerPinSet()){ state.securityMsg='PIN unchanged — type a new PIN to change it.'; setSecurityMsg(state.securityMsg); return; }
   if(!/^\d{4,8}$/.test(pin)){ state.securityMsg='PIN must be 4–8 digits.'; setSecurityMsg(state.securityMsg); return; }
   try {
     const d=await api('/me/security', { method:'PATCH', body:{ pin } });
@@ -2016,7 +2035,7 @@ async function poll(){
   // field: a full render() destroys the focused input and eats the typing.
   const ae=document.activeElement;
   const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
-  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
+  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
   if(A==='kitchen') refreshKitchenInPlace();
   // Dashboard/billing do a full render() on the background poll, which rebuilds
   // .app-body from scratch (scrollTop → 0). Even with scrollTop restored the
@@ -2038,8 +2057,8 @@ function handle(act, ds, ev){
     case 'advance': advance(ds.id, ds.next); break;
     case 'printTicket': printTicket(ds.id); break;
     case 'printReceipt': printReceipt(ds.id); break;
-    case 'menuOpen': state.menuEditId=ds.id; render(); break;
-    case 'menuClose': state.menuEditId=null; render(); break;
+    case 'menuOpen': state.menuEditId=ds.id; _draftPrice=null; render(); break;
+    case 'menuClose': state.menuEditId=null; _draftPrice=null; render(); break;
     case 'menuToggleCat': state.menuExpanded[ds.key]=!state.menuExpanded[ds.key]; refreshMenuList(); break;
     case 'priceUp': bump(0.5); break;
     case 'priceDown': bump(-0.5); break;
@@ -2052,7 +2071,7 @@ function handle(act, ds, ev){
     case 'openAddDish': state.addDishOpen=true; state.addDishMsg=''; render(); break;
     case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; render(); break;
     case 'submitAddDish': submitAddDish(); break;
-    case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSel=+ds.idx; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
+    case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSelId=ds.id; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'openTender': state.tender=ds.id; render(); break;
     case 'tenderClose': state.tender=null; render(); break;
     case 'tenderPay': tenderPay(ds.method); break;
@@ -2105,13 +2124,17 @@ function boot(){
     unlockAudio();
     const el=e.target.closest('[data-act]'); if(!el) return;
     const act=el.getAttribute('data-act');
-    if(act==='login') return;
+    // Form-level acts fire on SUBMIT only — the click delegate would otherwise
+    // treat any tap inside the form (e.g. focusing the PIN input) as a submit.
+    if(act==='login'||act==='pinSubmit') return;
     handle(act, el.dataset, e);
   });
   root.addEventListener('submit', function(e){
     const f=e.target.closest('form[data-act]'); if(!f) return;
     e.preventDefault();
-    if(f.getAttribute('data-act')==='login') doLoginFromForm();
+    const fact=f.getAttribute('data-act');
+    if(fact==='login') doLoginFromForm();
+    else if(fact==='pinSubmit') pinSubmit();
   });
   root.addEventListener('change', function(e){
     const el=e.target.closest('[data-input]'); if(!el) return;

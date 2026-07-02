@@ -510,7 +510,12 @@
 
   // ── Restaurants list ──
   function loadList(){
-    fetch("/admin/tenants", { headers: headers() }).then(function(r){ return r.json(); }).then(function(list){
+    fetch("/admin/tenants", { headers: headers() }).then(function(r){
+      // A 401 (rotated token) / 500 returns error JSON, not an array — surface
+      // it instead of rendering the misleading "No restaurants yet."
+      if(!r.ok){ return r.json().catch(function(){ return {}; }).then(function(j){ throw new Error(j.error || ("Request failed ("+r.status+")")); }); }
+      return r.json();
+    }).then(function(list){
       var tb = $("tlist");
       var opts = (Array.isArray(list)?list:[]).map(function(t){ return '<option value="'+esc(t.slug)+'">'+esc(t.name)+' ('+esc(t.slug)+')</option>'; }).join("");
       ["qr_slug","cl_slug"].forEach(function(id){ var sel=$(id); if(sel){ var prev=sel.value; sel.innerHTML=opts; if(prev) sel.value=prev; } });
@@ -518,8 +523,11 @@
       tb.innerHTML = list.map(function(t){
         var c = t.config||{};
         var cust = origin()+"/?r="+t.slug;
+        // themeColor is stored unvalidated on the admin path — only render it
+        // when it looks like a colour so a stray quote can't break the attribute.
+        var sw = /^#[0-9a-fA-F]{3,8}$/.test(String(c.themeColor||"")) ? c.themeColor : "#888";
         return '<tr>'+
-          '<td><span class="swatch" style="background:'+(c.themeColor||"#888")+'"></span></td>'+
+          '<td><span class="swatch" style="background:'+sw+'"></span></td>'+
           '<td>'+esc(t.name)+'</td>'+
           '<td><code style="font-size:11px">'+esc(t.slug)+'</code></td>'+
           '<td>'+esc(c.currencyCode||"")+'</td>'+
@@ -527,6 +535,9 @@
           '<td><a href="'+cust+'" target="_blank">customer</a></td>'+
           '</tr>';
       }).join("");
+    }).catch(function(e){
+      var tb = $("tlist");
+      if(tb) tb.innerHTML='<tr><td colspan="6" style="color:var(--red)">'+esc(e.message||"Could not load restaurants")+'</td></tr>';
     });
   }
   $("refresh").onclick = loadList;
