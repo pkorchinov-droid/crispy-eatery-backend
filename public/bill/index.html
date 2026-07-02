@@ -405,24 +405,45 @@
         '</div>';
       }).join('');
 
+      // Adjustments (promos, discounts, staff charges) + the disclosed developer
+      // fee — without these rows the line items don't sum to the printed total.
+      var adjHtml = (order.adjustments || []).map(function(a) {
+        var amt = Number(a.amount) || 0;
+        return '<div class="item-row">' +
+          '<div class="item-name" style="color:#8a7558">' + escHtml(String(a.label || 'Adjustment')) + '</div>' +
+          '<div class="item-price">' + (amt < 0 ? '−' + fmt(Math.abs(amt)) : fmt(amt)) + '</div>' +
+        '</div>';
+      }).join('');
+      var feeAmt = Number(order.developerFee) || 0;
+      if (feeAmt > 0) {
+        adjHtml += '<div class="item-row">' +
+          '<div class="item-name" style="color:#8a7558">' + escHtml(String(order.developerFeeLabel || 'Developer fee')) + '</div>' +
+          '<div class="item-price">' + fmt(feeAmt) + '</div>' +
+        '</div>';
+      }
+
       var orderTime = new Date(order.createdAt).toLocaleString('en-NZ', {
         dateStyle: 'medium',
         timeStyle: 'short'
       });
 
-      // GST-inclusive amount = total * 3/23 (online prices already include GST + surcharge)
+      // GST-inclusive amount from the served per-tenant rate (falls back to NZ 15%):
+      // inclusive GST = total × r/(1+r).
+      var gstR = (typeof order.gstRate === 'number' && order.gstRate > 0) ? order.gstRate : 0.15;
       var gstHtml =
         '<div class="gst-row">' +
           '<span>GST (incl.)</span>' +
-          '<span class="gst-amount">' + fmt(order.total * 3 / 23) + '</span>' +
+          '<span class="gst-amount">' + fmt(order.total * gstR / (1 + gstR)) + '</span>' +
         '</div>' +
-        '<div class="gst-note">Online prices include GST and a small service surcharge.</div>';
+        '<div class="gst-note">Prices include GST.</div>';
 
-      // Payment status chip
+      // Payment status chip. Branch on paymentStatus ONLY — the server keeps
+      // the `payment` (card) object on refund, so `|| pay` made a refunded
+      // order render as "Paid · Visa ····1234" and the refunded branch dead.
       var pStatus = order.paymentStatus || 'unpaid';
       var pay = order.payment;
       var chipClass, chipText;
-      if (pStatus === 'paid' || pay) {
+      if (pStatus === 'paid') {
         chipClass = 'paid';
         var scheme = (pay && pay.scheme) ? pay.scheme : 'Card';
         var last4 = (pay && pay.last4) ? (' ····' + escHtml(String(pay.last4))) : '';
@@ -491,7 +512,7 @@
                 : '<div class="label">Table</div><div class="value">' + escHtml(String(order.tableNumber)) + '</div>') +
             '</div></div></div>' +
           '</div>' +
-          '<div>' + itemsHtml + '</div>' +
+          '<div>' + itemsHtml + adjHtml + '</div>' +
           '<div class="total-row">' +
             '<span class="total-label">Total</span>' +
             '<span class="total-amount">' + fmt(order.total) + '</span>' +
