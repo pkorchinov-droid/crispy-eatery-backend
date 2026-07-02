@@ -49,6 +49,12 @@ let computeMealDeal, mealDealActive, normalizeMealDeal;
 try { ({ computeMealDeal, mealDealActive, normalizeMealDeal } = require("./mealdeal")); }
 catch (e) { console.warn("[mealdeal] module unavailable — meal deal disabled:", e && e.message); computeMealDeal = () => null; mealDealActive = () => false; normalizeMealDeal = () => { throw new Error("Meal deal unavailable."); }; }
 
+// Pricing/fees normaliser (config.developerFee + config.surcharge/default) for the
+// owner Settings editor. Defensive load — a missing module disables PATCH /me/pricing.
+let normalizePricing;
+try { ({ normalizePricing } = require("./pricing")); }
+catch (e) { console.warn("[pricing] module unavailable — pricing editor disabled:", e && e.message); normalizePricing = () => { throw new Error("Pricing editor unavailable."); }; }
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
@@ -1794,6 +1800,14 @@ app.get("/me", requireOwner, (req, res) => {
         features: c.features || {},
         loyalty: c.loyalty || {},
         promos: promosForTenant(t),
+        // Pricing/fees the owner edits via PATCH /me/pricing (the Settings card).
+        developerFee: typeof c.developerFee === "number" ? c.developerFee : 0,
+        developerFeeLabel: c.developerFeeLabel || "Developer fee",
+        surcharge: c.surcharge && typeof c.surcharge === "object" ? c.surcharge : {},
+        surchargeDefault: typeof c.surchargeDefault === "number" ? c.surchargeDefault : 0,
+        // Manager lock: whether a PIN is set (never expose the hash). The console
+        // uses this to gate the Reports + Settings screens on a shared device.
+        managerPinSet: !!(c.managerPin && c.managerPin.hash),
       },
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
     },
@@ -1980,6 +1994,69 @@ app.patch("/me/mealdeal", requireOwner, (req, res) => {
     saveTenant(t);
     res.json({ success: true, mealDeal: cleaned });
   });
+});
+
+// PATCH /me/pricing — owner/console session. Set THIS café's two independent
+// online-order charging models: a flat per-order developer fee and a per-category
+// menu price rise (surcharge). Body:
+//   { developerFee, developerFeeLabel, surcharge:{slug:$}, surchargeDefault }.
+// normalizePricing clamps all money to >= 0 (0 = off), drops surcharge slugs that
+// aren't real menu categories, and falls the label back to "Developer fee". The
+// downstream logic (withOnlineSurcharge in GET /menu, developerFeeFor in POST
+// /order, receipts, reports) already consumes these config fields unchanged.
+app.patch("/me/pricing", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const raw = req.body && typeof req.body === "object" ? req.body : null;
+  if (!raw) return res.status(400).json({ error: "Send a pricing object." });
+  let cleaned;
+  try {
+    cleaned = normalizePricing(raw, tenantStore(t.slug).loadMenu());
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid pricing." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.developerFee = cleaned.developerFee;
+    t.config.developerFeeLabel = cleaned.developerFeeLabel;
+    t.config.surcharge = cleaned.surcharge;
+    t.config.surchargeDefault = cleaned.surchargeDefault;
+    saveTenant(t);
+    res.json({ success: true, pricing: cleaned });
+  });
+});
+
+// PATCH /me/security — owner/console session. Set/change/clear THIS café's manager
+// PIN (config.managerPin). Body { pin }: 4–8 digits sets it (stored as a scrypt
+// hash, never plaintext); "" clears it (lock off). The PIN gates the Reports +
+// Settings screens in the console on a shared device — a UI deterrent, since the
+// device is already authenticated as the owner (see the /me/verify-pin note).
+app.patch("/me/security", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const pin = String((req.body && req.body.pin) != null ? req.body.pin : "").trim();
+  if (pin && !/^\d{4,8}$/.test(pin)) return res.status(400).json({ error: "PIN must be 4–8 digits." });
+  withWriteLock(() => {
+    t.config = t.config || {};
+    if (pin) t.config.managerPin = hashPassword(pin);
+    else delete t.config.managerPin;
+    saveTenant(t);
+    res.json({ success: true, managerPinSet: !!pin });
+  });
+});
+
+// POST /me/verify-pin — owner/console session. Check a manager PIN against this
+// café's stored hash → { success }. NOTE: this gates the console UI only; the
+// caller is already an authenticated owner, so the underlying data endpoints
+// remain reachable with the existing session. It stops casual shared-device
+// snooping, not a determined operator.
+app.post("/me/verify-pin", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const mp = t.config && t.config.managerPin;
+  if (!mp || !mp.hash) return res.json({ success: true }); // no PIN set → nothing to unlock
+  const pin = String((req.body && req.body.pin) || "");
+  res.json({ success: verifyPassword(pin, mp.salt, mp.hash) });
 });
 
 // POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
