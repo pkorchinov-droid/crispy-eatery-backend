@@ -470,6 +470,8 @@ function printTicket(orderId){
 function autoPrintOrder(order){
   if(!PRINTING_ENABLED || !order) return;
   var jobs=buildPrintJobs(order);
+  var rIp=getStation('receipt');
+  if(rIp) jobs.push({label:'receipt',ip:rIp,xml:buildReceiptXml(order)});
   if(!jobs.length) return;                 // no printers configured → no status shown
   printStatusById[order.id]='printing';
   if(state.active==='kitchen') refreshKitchenInPlace();
