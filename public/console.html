@@ -1524,23 +1524,49 @@ function onMenuSearch(v){ state.menuSearch=v; refreshMenuList(); }
 function menuSheetHTML(){
   const cur = menuEditingItem();
   if(!cur) return '';
-  const hasPrice = typeof cur.price==='number';
-  const sizesHtml = (!hasPrice && cur.sizes) ? '<div style="margin-top:18px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Sizes</div>'+Object.keys(cur.sizes).map(function(k){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px dotted var(--divider);color:var(--ink);"><span>'+esc(k)+'</span><span style="font-family:\'Fraunces\',serif;">'+money(cur.sizes[k])+'</span></div>'; }).join('')+'<div style="font-size:11px;color:var(--muted2);margin-top:8px;">Edit individual size prices in the full menu admin.</div>' : '';
-  const priceStepper = hasPrice ? '<div style="margin-top:22px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;">Price</div><div style="display:flex;align-items:center;gap:12px;"><button data-act="priceDown" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">−</button><div id="ed-price" style="font-family:\'Fraunces\',serif;font-size:30px;flex:1;text-align:center;color:var(--ink);">'+money(typeof _draftPrice==='number'?_draftPrice:cur.price)+'</div><button data-act="priceUp" style="width:42px;height:42px;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;">+</button></div>' : sizesHtml;
+  if(!_menuDraft) menuDraftInit(cur);           // fallback (e.g. sheet opened via Add-a-dish)
+  const d = _menuDraft;
+  const inpS = 'width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--border);background:var(--input);color:var(--ink);font-family:inherit;font-size:14px;box-sizing:border-box;';
+  const labS = 'font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:7px;margin-top:20px;';
+  const stepBtn = 'width:42px;height:42px;flex-shrink:0;border-radius:10px;border:1px solid var(--border);background:var(--input);font-size:22px;color:var(--accent);cursor:pointer;line-height:1;';
+  // Price OR sizes — both are now editable inline (server accepts either).
+  const priceBlock = (d.price!=null)
+    ? '<div style="'+labS+'">Price</div><div style="display:flex;align-items:center;gap:10px;"><button data-act="priceDown" style="'+stepBtn+'">−</button><div style="flex:1;position:relative;"><span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted2);font-family:\'Fraunces\',serif;">$</span><input id="ed-price" type="number" step="0.5" min="0" inputmode="decimal" value="'+Number(d.price).toFixed(2)+'" oninput="menuDraftPrice(this.value)" style="'+inpS+'padding-left:26px;font-family:\'Fraunces\',serif;font-size:20px;text-align:center;"></div><button data-act="priceUp" style="'+stepBtn+'">+</button></div>'
+    : (d.sizes ? '<div style="'+labS+'">Size prices</div>'+Object.keys(d.sizes).map(function(k){ return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><span style="flex:1;font-size:13.5px;color:var(--ink);">'+esc(k)+'</span><div style="position:relative;width:130px;"><span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted2);">$</span><input type="number" step="0.5" min="0" inputmode="decimal" data-k="'+esc(k)+'" value="'+Number(d.sizes[k]).toFixed(2)+'" oninput="menuDraftSize(this.dataset.k,this.value)" style="'+inpS+'padding-left:22px;text-align:right;font-family:\'Fraunces\',serif;"></div></div>'; }).join('') : '');
+  // Photo preview: when the dish has a photo, render a faithful replica of the customer
+  // card (image floats on the right, positioned by CSS `right: imgRight`, left-fading mask)
+  // + an alignment slider that moves it live. No photo → the plain placeholder tile.
+  const imgSrc = imageFor(cur);
+  const ir = menuDraftImgRightNum();
+  const mask = 'linear-gradient(to left,#000 55%,rgba(0,0,0,.75) 75%,transparent 100%)';
+  const photoBlock = imgSrc
+    ? '<div style="position:relative;overflow:hidden;min-height:118px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);padding:15px 18px;display:flex;flex-direction:column;justify-content:center;">'
+        + '<div style="position:relative;z-index:1;max-width:58%;font-family:\'Fraunces\',serif;font-style:italic;font-size:16px;color:var(--ink);line-height:1.15;">'+esc(cur.name)+'</div>'
+        + (cur.desc?'<div style="position:relative;z-index:1;max-width:55%;font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4;">'+esc(cur.desc)+'</div>':'')
+        + '<img id="ed-photo-img" src="'+esc(imgSrc)+'" alt="" onerror="this.style.display=\'none\'" style="position:absolute;top:50%;transform:translateY(-50%);right:'+ir+'%;left:auto;height:150px;width:auto;opacity:.95;pointer-events:none;-webkit-mask-image:'+mask+';mask-image:'+mask+';">'
+      + '</div>'
+      + '<div style="'+labS+'">Photo alignment</div>'
+      + '<input type="range" min="-60" max="40" step="1" value="'+ir+'" oninput="menuDraftImgRight(this.value)" style="width:100%;accent-color:var(--accent);">'
+      + '<div style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.5;">Slide to move the dish photo left ↔ right — this is exactly how the customer card looks.</div>'
+    : '<div style="width:100%;height:140px;border-radius:12px;background:var(--track);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted2);overflow:hidden;position:relative;">'+icPlate(40,1.1)+'<span style="font-size:11.5px;letter-spacing:.04em;">No photo</span></div>';
   const head = '<div style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface);"><span style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted2);">Edit item</span><button data-act="menuClose" aria-label="Close editor" style="background:none;border:none;font-size:25px;line-height:1;color:var(--muted2);cursor:pointer;padding:0 4px;">×</button></div>';
   const body = '<div class="menu-sheet-body" style="padding:18px 20px;">'
-    + '<div style="width:100%;height:140px;border-radius:12px;background:var(--track);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted2);margin-bottom:18px;overflow:hidden;position:relative;">'+icPlate(40,1.1)+'<span style="font-size:11.5px;letter-spacing:.04em;">No photo</span>'+imgOverlay(cur)+'</div>'
-    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:23px;line-height:1.1;color:var(--ink);">'+esc(cur.name)+'</div>'
-    + '<div style="font-size:13px;color:var(--muted);line-height:1.5;margin-top:8px;">'+esc(cur.desc||'')+'</div>'
-    + priceStepper
+    + photoBlock
+    + '<div style="'+labS+'margin-top:20px;">Name</div>'
+    + '<input id="ed-name" type="text" maxlength="80" value="'+esc(d.name)+'" oninput="menuDraftSet(\'name\',this.value)" style="'+inpS+'font-family:\'Fraunces\',serif;font-size:18px;">'
+    + '<div style="'+labS+'">Description</div>'
+    + '<textarea id="ed-desc" rows="2" maxlength="500" oninput="menuDraftSet(\'desc\',this.value)" placeholder="Optional" style="'+inpS+'resize:vertical;line-height:1.5;">'+esc(d.desc)+'</textarea>'
+    + priceBlock
     + '<div style="margin-top:24px;display:flex;flex-direction:column;gap:10px;"><button data-act="toggleAvail" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(!cur.outOfStock?'rgba(90,99,64,.4);background:rgba(90,99,64,.12);color:var(--pos);':'rgba(168,74,46,.4);background:rgba(168,74,46,.12);color:var(--neg);')+'"><span>'+(!cur.outOfStock?'Available to order':'86’d — hidden from menu')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(!cur.outOfStock?'#5a6340':'var(--muted2)')+';justify-content:'+(!cur.outOfStock?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
     + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(!cur.outOfStock?'Showing on the customer menu and bookable in orders.':'Hidden from the customer menu until you re-enable it.')+'</div>'
     + '<button data-act="toggleNew" style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:12px 14px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;border:1px solid '+(hasTag(cur,'new')?'rgba(194,90,58,.4);background:var(--accent-tint);color:var(--accent);':'var(--border);background:var(--input);color:var(--muted);')+'"><span>'+(hasTag(cur,'new')?'Featured in “New on the Menu”':'Mark as New')+'</span><span style="width:40px;height:23px;border-radius:20px;padding:2px;display:flex;transition:all .2s;background:'+(hasTag(cur,'new')?'var(--accent)':'var(--muted2)')+';justify-content:'+(hasTag(cur,'new')?'flex-end':'flex-start')+';"><span style="width:19px;height:19px;border-radius:50%;background:#fff;"></span></span></button>'
     + '<div style="font-size:11.5px;color:var(--muted2);line-height:1.5;">'+(hasTag(cur,'new')?'Also shown first under “New on the Menu”.':'Adds a New badge and features it at the top of the menu.')+'</div></div>'
     + '</div>';
-  const foot = hasPrice
-    ? '<div style="flex-shrink:0;padding:13px 18px;border-top:1px solid var(--border);background:var(--surface);"><button data-act="saveItem" style="width:100%;padding:14px;border-radius:50px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.26em;font-weight:600;cursor:pointer;">Save changes</button></div>'
-    : '<div style="flex-shrink:0;padding:14px 18px;border-top:1px solid var(--border);background:var(--surface);font-size:11.5px;color:var(--muted2);text-align:center;">86 and New save instantly. Edit size prices in the full menu admin.</div>';
+  const foot = '<div style="flex-shrink:0;padding:13px 18px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:9px;">'
+    + '<button data-act="saveItem" style="width:100%;padding:14px;border-radius:50px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.26em;font-weight:600;cursor:pointer;">Save changes</button>'
+    + '<button data-act="deleteItem" style="width:100%;padding:11px;border-radius:50px;border:1px solid var(--neg);background:none;color:var(--neg);font-family:inherit;font-size:10.5px;text-transform:uppercase;letter-spacing:.2em;font-weight:600;cursor:pointer;">Delete dish</button>'
+    + '<div style="font-size:11px;color:var(--muted2);text-align:center;line-height:1.5;">86 and New apply instantly. Save commits name, description &amp; price.</div>'
+    + '</div>';
   return '<div class="menu-sheet-wrap">'
     + '<div data-act="menuClose" style="position:absolute;inset:0;"></div>'
     + '<div class="menu-sheet">'+head+body+foot+'</div>'
@@ -1687,16 +1713,36 @@ function refreshKitchenInPlace(){
   if(sb) sb.scrollTop=top;
 }
 
-// Unsaved price draft for the open editor sheet. The stepper must NOT mutate
-// state.menu directly — closing without Save would leave a phantom price in
-// the list (and promo labels) until the next menu reload.
-let _draftPrice = null;
+// Unsaved edit draft for the open editor sheet (name/desc/price/sizes). The sheet
+// must NOT mutate state.menu directly — closing without Save would leave phantom
+// edits in the list (and promo labels) until the next menu reload. Menu screen
+// never re-renders on the 6s poll, so these inputs survive between keystrokes.
+let _menuDraft = null;
+function menuDraftInit(it){
+  _menuDraft = it ? {
+    name: it.name || '',
+    desc: it.desc || '',
+    price: (typeof it.price==='number') ? it.price : null,
+    sizes: (it.sizes && typeof it.sizes==='object') ? Object.assign({}, it.sizes) : null,
+    imgRight: (it.imgRight!=null) ? String(it.imgRight) : null   // horizontal photo offset (CSS `right:`), null = untouched
+  } : null;
+}
+function menuDraftSet(k,v){ if(_menuDraft) _menuDraft[k]=v; }
+// Photo alignment slider — mirrors the customer card exactly (dish photo floats on the
+// right, positioned by CSS `right: imgRight`). Nudge the draft + move the preview live.
+function menuDraftImgRight(v){
+  if(!_menuDraft) return;
+  _menuDraft.imgRight = v + '%';
+  const img=document.getElementById('ed-photo-img'); if(img) img.style.right = v + '%';
+}
+function menuDraftImgRightNum(){ const d=_menuDraft; const n=(d && d.imgRight!=null)?parseFloat(d.imgRight):-22; return isNaN(n)?-22:n; }
+function menuDraftPrice(v){ if(_menuDraft) _menuDraft.price = (v===''?0:Number(v)); }
+function menuDraftSize(k,v){ if(_menuDraft && _menuDraft.sizes) _menuDraft.sizes[k] = (v===''?0:Number(v)); }
+// +/− stepper for single-price items — nudges the draft and reflects it in the field.
 function bump(d){
-  const it = menuEditingItem();
-  if(!it || typeof it.price!=='number') return;
-  const base = typeof _draftPrice==='number' ? _draftPrice : it.price;
-  _draftPrice = Math.max(0, Math.round((base+d)*100)/100);
-  const el=document.getElementById('ed-price'); if(el) el.textContent=money(_draftPrice);
+  if(!_menuDraft || _menuDraft.price==null) return;
+  _menuDraft.price = Math.max(0, Math.round((Number(_menuDraft.price)+d)*100)/100);
+  const el=document.getElementById('ed-price'); if(el) el.value=_menuDraft.price.toFixed(2);
 }
 // 86 is a decisive, immediate action — PATCH it right away so the customer menu
 // reflects it now (no "looks 86'd but isn't" trap), and revert the toggle on failure.
@@ -1719,15 +1765,42 @@ async function toggleNew(){
   try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ tags: tags } }); it.tags = tags; render(); toast((i>=0?'Removed from New · ':'Added to New · ')+it.name,'ok'); }
   catch(e){ toast('Couldn’t update — '+e.message,'err'); }
 }
-// Save only commits the PRICE (86 is already live). On success OR failure we reload
-// the menu from the server, so a failed/partial save never leaves a stale local price.
+// Save commits name + description + price (or size prices) together. 86 and New are
+// already live from their toggles. On success OR failure we reload the menu from the
+// server, so a failed/partial save never leaves a stale local copy.
 async function saveItem(){
   const it = menuEditingItem();
-  if(!it) return;
-  if(typeof it.price!=='number'){ toast('Edit size prices in the full menu admin','info'); return; }
-  const newPrice = typeof _draftPrice==='number' ? _draftPrice : it.price;
-  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:{ price: newPrice } }); toast('Saved '+it.name,'ok'); state.menuEditId=null; _draftPrice=null; }
+  if(!it || !_menuDraft) return;
+  const d = _menuDraft;
+  const body = {};
+  const name = (d.name||'').trim();
+  if(!name){ toast('Name can’t be empty','err'); return; }
+  if(name !== it.name) body.name = name;
+  const desc = (d.desc||'').trim();
+  if(desc !== (it.desc||'')) body.desc = desc;          // '' → server drops the field
+  if(d.imgRight!=null && d.imgRight !== (it.imgRight!=null?String(it.imgRight):null)) body.imgRight = d.imgRight;
+  if(d.price!=null){
+    const p = Number(d.price);
+    if(!Number.isFinite(p) || p<0 || p>9999){ toast('Enter a valid price','err'); return; }
+    body.price = Math.round(p*100)/100;
+  } else if(d.sizes){
+    const sizes = {};
+    for(const k in d.sizes){ const n=Number(d.sizes[k]); if(!Number.isFinite(n)||n<0||n>9999){ toast('Enter a valid price for '+k,'err'); return; } sizes[k]=Math.round(n*100)/100; }
+    body.sizes = sizes;
+  }
+  if(!Object.keys(body).length){ toast('No changes to save','info'); state.menuEditId=null; _menuDraft=null; render(); return; }
+  try { await api('/menu/items/'+enc(it.id), { method:'PATCH', body:body }); toast('Saved '+name,'ok'); state.menuEditId=null; _menuDraft=null; }
   catch(e){ toast('Save failed — '+e.message,'err'); }
+  await loadMenu(); render();
+}
+// Delete removes the dish from the menu entirely (DELETE /menu/items/:id). Confirm
+// first — it can't be undone (short of re-adding). Reload the menu either way.
+async function deleteItem(){
+  const it = menuEditingItem();
+  if(!it) return;
+  if(!confirm('Delete “'+it.name+'” from the menu?\n\nThis removes it for customers and can’t be undone.')) return;
+  try { await api('/menu/items/'+enc(it.id), { method:'DELETE' }); toast('Deleted '+it.name,'ok'); state.menuEditId=null; _menuDraft=null; }
+  catch(e){ toast('Delete failed — '+e.message,'err'); }
   await loadMenu(); render();
 }
 async function runImport(){
@@ -2059,14 +2132,15 @@ function handle(act, ds, ev){
     case 'advance': advance(ds.id, ds.next); break;
     case 'printTicket': printTicket(ds.id); break;
     case 'printReceipt': printReceipt(ds.id); break;
-    case 'menuOpen': state.menuEditId=ds.id; _draftPrice=null; render(); break;
-    case 'menuClose': state.menuEditId=null; _draftPrice=null; render(); break;
+    case 'menuOpen': state.menuEditId=ds.id; menuDraftInit(menuEditingItem()); render(); break;
+    case 'menuClose': state.menuEditId=null; _menuDraft=null; render(); break;
     case 'menuToggleCat': state.menuExpanded[ds.key]=!state.menuExpanded[ds.key]; refreshMenuList(); break;
     case 'priceUp': bump(0.5); break;
     case 'priceDown': bump(-0.5); break;
     case 'toggleAvail': toggleAvail(); break;
     case 'toggleNew': toggleNew(); break;
     case 'saveItem': saveItem(); break;
+    case 'deleteItem': deleteItem(); break;
     case 'openImport': state.importOpen=true; render(); break;
     case 'closeImport': state.importOpen=false; render(); break;
     case 'runImport': runImport(); break;
