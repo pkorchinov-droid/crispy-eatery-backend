@@ -55,7 +55,13 @@ let normalizePricing;
 try { ({ normalizePricing } = require("./pricing")); }
 catch (e) { console.warn("[pricing] module unavailable — pricing editor disabled:", e && e.message); normalizePricing = () => { throw new Error("Pricing editor unavailable."); }; }
 
+const compression = require("compression");
+
 const app = express();
+// gzip every compressible response. The console polls the full order history
+// every 6 seconds; uncompressed, that JSON payload grows with the data set and
+// repetitive order objects compress ~10x.
+app.use(compression());
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || ""; // comma-separated allowlist; empty = same-origin only
@@ -93,6 +99,8 @@ try {
 } catch (e) {
   console.warn("[pay] Stripe SDK unavailable:", e && e.message);
 }
+const { isActive: billingIsActive } = require("./entitlement");
+const { planSpec, buildBilling } = require("./billing");
 
 // ── Self-serve onboarding (Phase 1) ────────────────────────
 // Public signup + magic-link sign-in + photo-to-menu import. ANTHROPIC_API_KEY
@@ -108,6 +116,7 @@ const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "IT Logistics <login@eate
 const BILL_EMAIL_FROM = process.env.BILL_EMAIL_FROM || "IT Logistics <bills@eatery.crispycatering.com>";
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://crispy-eatery-backend-1.onrender.com";
 const OWNER_CUSTOMER_ORIGIN = process.env.OWNER_CUSTOMER_ORIGIN || "https://sparkling-lokum-4e28b8.netlify.app";
+const STOREFRONT_URL = process.env.STOREFRONT_URL || "https://itlogisticsnz.com";
 const MENU_IMPORT_MODEL = process.env.MENU_IMPORT_MODEL || "claude-sonnet-4-6";
 
 // Secret for signing magic-link tokens. Prefer an explicit AUTH_SECRET; else
@@ -361,6 +370,61 @@ const jsonStd = express.json({ limit: "64kb" });
 const jsonSignup = express.json({ limit: "512kb" });
 app.use((req, res, next) => (req.path === "/signup" ? jsonSignup : jsonStd)(req, res, next));
 
+// Stripe webhook (billing/checkout) — RAW body required for signature
+// verification, so this route is registered here, above the global JSON
+// parser selector (Express 5 consumes the body stream in the first matching
+// body parser). req.body is already a raw Buffer by the time this runs, via
+// the app.use("/webhooks", express.raw(...)) mounted just above; the
+// route-level express.raw() below is a no-op in that case (body-parser skips
+// re-parsing once req._body is set) and is kept only for defensiveness.
+// NOTE: this literal path is registered BEFORE the generic
+// app.post("/webhooks/:provider", ...) handler further down (used for the
+// coffee "skip the queue" PSP payment-confirmation webhook), so it takes
+// precedence for exactly "/webhooks/stripe". If that coffee-prepay Stripe
+// webhook (WEBHOOK_SECRET_STRIPE) is ever pointed at the SAME URL in Stripe's
+// dashboard, its events would be swallowed here instead — give it a distinct
+// webhook path/URL in Stripe when wiring that flow up.
+app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!stripeClient || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).end();
+  let event;
+  try {
+    event = stripeClient.webhooks.constructEvent(
+      req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (e) {
+    console.warn("[webhook] bad signature:", e && e.message);
+    return res.status(400).send("bad signature");
+  }
+  if (stripeEventSeen(event.id)) return res.json({ received: true, duplicate: true });
+  // Reserve the event id SYNCHRONOUSLY, before any await, so a concurrent
+  // duplicate delivery of the SAME event (Stripe retries / at-least-once
+  // delivery can overlap) sees it as seen and returns early instead of
+  // double-processing. Since checkout.session.completed carries one event.id
+  // per session, this also prevents a concurrent double-provision. On error we
+  // release it below so Stripe's later retry reprocesses. markStripeEvent()
+  // then persists the (already-present) id to disk on success.
+  seenStripeEvents.add(event.id);
+  try {
+    if (event.type === "checkout.session.completed") {
+      await provisionFromSession(event.data.object);
+    } else if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted" ||
+      event.type === "invoice.payment_failed"
+    ) {
+      syncSubscriptionStatus(event);
+    }
+    markStripeEvent(event.id);
+    return res.json({ received: true });
+  } catch (e) {
+    // Release the reservation so Stripe's retry reprocesses this event
+    // (createTenant is also idempotent on session id via findTenantByCheckoutSession).
+    seenStripeEvents.delete(event.id);
+    console.error("[webhook] handler error:", (e && e.stack) || e);
+    return res.status(500).end();
+  }
+});
+
 // ── Security headers (lightweight, dependency-free) ────────
 // Render and most hosts terminate TLS upstream; trust the first proxy hop so
 // req.ip reflects the real client (X-Forwarded-For). This is required for
@@ -406,6 +470,7 @@ function rateRule(req) {
   if (m === "POST" && /^\/groups\/[^/]+\/join$/.test(p)) return ["gjoin", 30];
   if (m === "GET" && /^\/groups\/[^/]+$/.test(p)) return ["gget", 40];
   if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
+  if (m === "GET" && p === "/buy/checkout") return ["buycheckout", 20];
   if (m === "POST" && p === "/signup") return ["signup", 5];
   if (m === "POST" && p === "/auth/request-link") return ["authlink", 5];
   if (m === "POST" && p === "/loyalty/request-link") return ["loyaltylink", 5];
@@ -746,6 +811,31 @@ function findTenantByToken(token) {
   }
   return null;
 }
+// ── Stripe webhook idempotency + subscription lookup ───────
+// Persist processed Stripe event ids so a retried webhook never double-provisions.
+const STRIPE_EVENTS_FILE = require("path").join(DATA_DIR, "stripe-events.json");
+const seenStripeEvents = new Set(readJson(STRIPE_EVENTS_FILE, []));
+function stripeEventSeen(id) { return seenStripeEvents.has(id); }
+function markStripeEvent(id) {
+  seenStripeEvents.add(id);
+  const arr = [...seenStripeEvents].slice(-500); // bound the file
+  seenStripeEvents.clear(); for (const x of arr) seenStripeEvents.add(x);
+  writeJson(STRIPE_EVENTS_FILE, arr);
+}
+function findTenantBySubscription(subId) {
+  if (!subId) return null;
+  for (const t of allTenants()) {
+    if (t.config && t.config.billing && t.config.billing.subscriptionId === subId) return t;
+  }
+  return null;
+}
+function findTenantByCheckoutSession(sessionId) {
+  if (!sessionId) return null;
+  for (const t of allTenants()) {
+    if (t.config && t.config.billing && t.config.billing.checkoutSessionId === sessionId) return t;
+  }
+  return null;
+}
 // Boot fallback: if no tenants exist yet (fresh checkout, migration not run),
 // materialize the default café from the legacy STAFF_TOKEN + menu-seed so the
 // app works out of the box. The migration script is only needed to carry over
@@ -1019,6 +1109,92 @@ async function sendMagicEmail(email, kind) {
   } catch (e) {
     console.error(`[auth] magic link send failed for ${maskPII(email)}:`, e && e.message);
   }
+}
+
+// The "package" email: a magic sign-in link into /console + the setup guide.
+// (The printable QR pack lives inside the console — added in Plan 2.)
+async function sendPackageEmail(email) {
+  if (!resend) return;
+  const link = buildMagicLink(email);
+  const text = [
+    "Your venue is set up and ready. Sign in to your console with the link below:",
+    "",
+    link,
+    "",
+    "Inside the console you can build your menu (or send us photos to build it for you),",
+    "print your QR codes, and manage your subscription.",
+    "",
+    "Setup guide: " + STOREFRONT_URL + "/guide",
+    "",
+    "This link works once and expires in 15 minutes; request a fresh one anytime from the sign-in page.",
+  ].join("\n");
+  try {
+    await resend.emails.send({ from: AUTH_EMAIL_FROM, to: [email], subject: "Welcome — your QR ordering is ready", text });
+    console.log(`[buy] package email sent → ${maskPII(email)}`);
+  } catch (e) {
+    console.error(`[buy] package email failed for ${maskPII(email)}:`, e && e.message);
+  }
+}
+
+function venueNameFromSession(session) {
+  const cf = (session && session.custom_fields) || [];
+  const f = cf.find((x) => x && x.key === "venue_name");
+  return (f && f.text && f.text.value && sanitizeString(f.text.value, 80)) || "";
+}
+
+// Provision a paid tenant from a completed Checkout Session. Idempotent on the
+// session id. Mirrors POST /signup (createTenant → AUTH.owners → welcome email)
+// but stamps a billing block + menuBuild.status:'choosing' (drives the Plan-2
+// setup chooser). NEW paid tenants only — never touches existing tenants.
+async function provisionFromSession(session) {
+  const plan = session && session.metadata && session.metadata.plan;
+  const spec = planSpec(plan);
+  if (!spec) throw new Error("checkout session has no valid plan metadata");
+  if (findTenantByCheckoutSession(session.id)) return; // already provisioned
+  const email = String(
+    (session.customer_details && session.customer_details.email) || session.customer_email || ""
+  ).trim().toLowerCase();
+  const venueName = venueNameFromSession(session) || (email ? email.split("@")[0] : "My venue");
+  const billing = buildBilling({
+    plan,
+    customerId: session.customer || null,
+    subscriptionId: session.subscription || null,
+    status: "active",
+  });
+  billing.checkoutSessionId = session.id;
+  const { slug } = await createTenant({
+    name: venueName,
+    onConflict: "suffix",
+    ownerEmail: email || undefined,
+    features: { poweredBy: true },
+    billing,
+    menuBuild: { mode: null, status: "choosing" },
+  });
+  // Open (or extend) the owner account so the magic link signs them into THIS café.
+  if (email && EMAIL_RE.test(email)) {
+    if (AUTH.owners[email]) {
+      if (!AUTH.owners[email].tenants.includes(slug)) AUTH.owners[email].tenants.push(slug);
+    } else {
+      AUTH.owners[email] = { email, name: venueName, tenants: [slug], createdAt: new Date().toISOString(), lastLoginAt: null };
+    }
+    persistAuth();
+    await sendPackageEmail(email);
+  }
+  console.log(`[buy] provisioned paid café '${slug}' plan=${plan}`);
+}
+
+// Reflect a subscription's Stripe status onto its tenant (hard-cut on non-active).
+function syncSubscriptionStatus(event) {
+  const obj = event.data && event.data.object;
+  let subId = null, status = null;
+  if (event.type === "invoice.payment_failed") { subId = obj.subscription; status = "past_due"; }
+  else if (event.type === "customer.subscription.deleted") { subId = obj.id; status = "canceled"; }
+  else { subId = obj.id; status = obj.status; } // customer.subscription.updated
+  const t = findTenantBySubscription(subId);
+  if (!t) return;
+  t.config.billing = Object.assign({}, t.config.billing, { status });
+  saveTenant(t);
+  console.log(`[buy] subscription ${subId} → status=${status} (tenant ${t.slug})`);
 }
 
 // ── Shared provisioning helper ─────────────────────────────
@@ -1473,11 +1649,14 @@ app.get("/tenant/:slug", (req, res) => {
 // for the platform token and uses it for the API calls below).
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin-console.html")));
 
-// The public self-serve owner console — the signup + sign-in + post-login home
-// screen. Served by the backend itself (same-origin) so the owner-session calls
-// to /me, /dashboard, /qr-pack, /menu/extract need no extra CORS entries. /start
-// is the marketing-friendly alias; /owner is where /auth/verify lands.
-app.get("/start", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
+// The public self-serve owner console — the sign-in + post-login home screen.
+// Served by the backend itself (same-origin) so the owner-session calls to
+// /me, /dashboard, /qr-pack, /menu/extract need no extra CORS entries.
+// /owner is where /auth/verify lands. The free /start signup wizard is retired
+// (billing spine, plan 1 of 4) — /start now points buyers at the storefront's
+// paid plans instead. Route kept registered so old links/QR codes 302 rather
+// than 404.
+app.get("/start", (req, res) => res.redirect(302, STOREFRONT_URL + "#pricing"));
 app.get("/owner", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
 
 // The unified staff/back-office Operations Console (Dashboard, Kitchen KDS, Reports,
@@ -1591,6 +1770,46 @@ app.post("/admin/tenants", requirePlatformAdmin, async (req, res) => {
     console.error("[tenant] provision error:", e && e.message);
     res.status(500).json({ error: "Failed to provision restaurant" });
   }
+});
+
+// ── Storefront checkout (public) ───────────────────────────
+// A plan button on the IT Logistics site links to GET /buy/checkout?plan=<slug>.
+// We open a Stripe Checkout Session (Stripe collects email + venue name) and
+// 303-redirect the buyer to Stripe. Provisioning happens later in the webhook,
+// so a closed success tab never loses a paid signup.
+// Rate-limited via the shared per-path limiter (rateRule() → "buycheckout").
+app.get("/buy/checkout", async (req, res) => {
+  const plan = String((req.query && req.query.plan) || "");
+  const spec = planSpec(plan);
+  if (!spec) return res.redirect(302, STOREFRONT_URL + "#pricing");
+  if (!stripeClient) return res.status(503).send("Payments are temporarily unavailable.");
+  const priceId = process.env[spec.priceEnv];
+  if (!priceId) { console.error("[buy] missing price env " + spec.priceEnv); return res.status(503).send("This plan isn't configured yet."); }
+  try {
+    const session = await stripeClient.checkout.sessions.create({
+      mode: spec.mode,
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: { plan },
+      ...(spec.mode === "subscription" ? { subscription_data: { metadata: { plan } } } : {}),
+      custom_fields: [{
+        key: "venue_name",
+        label: { type: "custom", custom: "Venue / business name" },
+        type: "text",
+      }],
+      success_url: PUBLIC_BASE_URL + "/buy/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: STOREFRONT_URL + "#pricing",
+    });
+    return res.redirect(303, session.url);
+  } catch (e) {
+    console.error("[buy] checkout create failed:", e && e.message);
+    return res.status(502).send("Could not start checkout. Please go back and try again.");
+  }
+});
+
+// ── Storefront success page (public) ────────────────────────
+app.get("/buy/success", (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment received</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.25rem;color:#2b1f17}h1{font-size:1.6rem}a{color:#c25a3a}</style></head><body><h1>Payment received &#10003;</h1><p>Thanks! We're setting up your venue now. In the next minute you'll get an email with your <strong>sign-in link</strong> and setup guide.</p><p>No email in 5 minutes? Check spam, or email <a href="mailto:support@itlogistics.nz">support@itlogistics.nz</a>.</p></body></html>`);
 });
 
 // ══════════════════════════════════════════════════════════
@@ -1806,11 +2025,32 @@ app.get("/me", requireOwner, (req, res) => {
     return { slug: tt.slug, name: cc.name || tt.name, themeColor: cc.themeColor || "#c25a3a", logoUrl: cc.logoUrl || null };
   });
   const c = t.config || {};
+  // Billing summary for the console's self-serve home (Plan 2). Legacy tenants
+  // (Crispy, Bodrum, admin-provisioned — no config.billing) report
+  // { active:true, legacy:true } so the console renders NO billing UI for them.
+  // Paid tenants expose plan/status + the reactivation flag (active:false ⇒ access
+  // paused ⇒ banner + portal nudge). Read-only: never mutates config.billing.
+  const bl = c.billing;
+  const billing = bl
+    ? {
+        plan: bl.plan || null,
+        status: bl.status || null,
+        purchaseType: bl.purchaseType || null,
+        entitlementExpiresAt: bl.entitlementExpiresAt || null,
+        currentPeriodEnd: bl.currentPeriodEnd || null,
+        active: billingIsActive(bl),
+      }
+    : { active: true, legacy: true };
   res.json({
     email: req.ownerEmail,
     login: acc ? acc.login : undefined,
     name: acc ? acc.name : ((AUTH.owners[req.ownerEmail] && AUTH.owners[req.ownerEmail].name) || undefined),
     cafes,
+    billing,
+    // Menu setup state (Plan 3). Only new paid tenants ever have config.menuBuild
+    // (stamped at provision as {mode:null,status:'choosing'}); legacy tenants
+    // (Crispy/Bodrum) report null → the console never shows the setup-path chooser.
+    menuBuild: (c.menuBuild && typeof c.menuBuild === "object") ? c.menuBuild : null,
     cafe: {
       slug: t.slug,
       name: t.name,
@@ -2120,6 +2360,32 @@ app.post("/me/verify-pin", requireOwner, (req, res) => {
   if (!mp || !mp.hash) return res.json({ success: true }); // no PIN set → nothing to unlock
   const pin = String((req.body && req.body.pin) || "");
   res.json({ success: verifyPassword(pin, mp.salt, mp.hash) });
+});
+
+// POST /me/billing-portal — owner/console session (Plan 2 self-serve home). Route the
+// owner to manage their subscription. If the tenant has a Stripe customerId (a paid
+// subscription/one-time that created a customer) AND Stripe is configured → mint a
+// Stripe Billing Portal session and return { url }. Otherwise (trial / one-time with
+// no customer / legacy) → return { upgradeUrl } to the storefront pricing so the
+// console can send them to pick or upgrade a plan. Read-only: never touches config.
+app.post("/me/billing-portal", requireOwner, async (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const billing = (t.config && t.config.billing) || null;
+  const customerId = billing && billing.customerId;
+  if (!customerId || !stripeClient) {
+    return res.json({ upgradeUrl: STOREFRONT_URL + "#pricing" });
+  }
+  try {
+    const session = await stripeClient.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: PUBLIC_BASE_URL + "/console",
+    });
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error("[billing] portal error:", e && e.message);
+    res.status(502).json({ error: "Couldn't open the billing portal — please try again." });
+  }
 });
 
 // POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
@@ -2514,7 +2780,39 @@ app.use("/dashboard", (_req, res) => res.redirect(302, "/console"));
 app.use("/bill", express.static(path.join(__dirname, "public", "bill")));
 
 // ── GET /orders — staff ────────────────────────────────────
+// The console polls unfiltered /orders every 6 seconds; re-parsing and
+// re-serialising the whole order history per poll stalls the event loop as the
+// file grows. Cache the finished response body per tenant, keyed on the orders
+// file's inode+mtime+size, so EVERY write path (persist, Supabase restore,
+// manual edit) rotates the key — no invalidation hooks to keep coherent. The
+// precomputed ETag + Cache-Control:no-cache lets the browser revalidate each
+// poll and skip the transfer entirely (304) when nothing changed. serverTime
+// moved to the X-Server-Time header so the body stays byte-stable for the ETag.
+const ordersRespCache = new Map(); // slug → { key, body, etag }
 app.get("/orders", requireStaff, (req, res) => {
+  if (!req.query.status && !req.query.table && !req.query.since) {
+    const slug = req.store.slug;
+    let st = null;
+    try { st = fs.statSync(path.join(DATA_DIR, slug, "orders.json")); } catch {}
+    const key = st ? st.ino + ":" + st.mtimeMs + ":" + st.size : "empty";
+    let hit = ordersRespCache.get(slug);
+    if (!hit || hit.key !== key) {
+      const orders = req.store.loadOrders();
+      const body = JSON.stringify({ count: orders.length, orders: orders.slice().reverse() });
+      hit = { key, body, etag: '"' + crypto.createHash("sha1").update(body).digest("base64") + '"' };
+      // Bound memory: one cached body per tenant is fine for a handful of
+      // active cafés, but evict the oldest entry past a sane ceiling.
+      if (!ordersRespCache.has(slug) && ordersRespCache.size >= 16) {
+        ordersRespCache.delete(ordersRespCache.keys().next().value);
+      }
+      ordersRespCache.set(slug, hit);
+    }
+    res.set("ETag", hit.etag);
+    res.set("Cache-Control", "no-cache");
+    res.set("X-Server-Time", new Date().toISOString());
+    if (req.fresh) return res.status(304).end();
+    return res.type("application/json").send(hit.body);
+  }
   let orders = req.store.loadOrders();
   const status = req.query.status;
   if (status) {
@@ -2658,6 +2956,23 @@ function developerFeeFor(cfg) {
 // response has the online surcharge baked into each price.
 app.get("/menu", resolveTenant, (req, res) => {
   const menu = req.store.loadMenu();
+  // Resolve an authed staff/owner of THIS café up front (reused below for
+  // printer-IP exposure + time-of-day filtering).
+  const authTenant = tenantFromToken(getReqToken(req));
+  const ownerViewing = !!(authTenant && authTenant.slug === req.tenant.slug);
+  // Entitlement gate (opt-in by data): a paid tenant whose access has lapsed is
+  // hidden from the PUBLIC customer view. Legacy tenants (no config.billing)
+  // pass isActive() automatically, so this never affects Crispy/Bodrum. Owners
+  // still see their menu so the console works.
+  if (!ownerViewing && !billingIsActive(req.tenant.config && req.tenant.config.billing)) {
+    res.set("Cache-Control", "no-cache");
+    return res.json({
+      active: false,
+      slug: req.tenant.slug,
+      restaurantName: (req.tenant.config && req.tenant.config.name) || req.tenant.name,
+      themeColor: (req.tenant.config && req.tenant.config.themeColor) || PLATFORM_DEFAULT_THEME,
+    });
+  }
   res.set("Cache-Control", "no-cache");
   const raw = req.query && (req.query.raw === "1" || req.query.raw === "true");
   const out = raw ? Object.assign({}, menu) : withOnlineSurcharge(menu, req.tenant.config);
@@ -2684,6 +2999,7 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.i18n = c.i18n || {};
   out.receipt = c.receipt || {};
   out.features = c.features || {};
+  out.active = true;   // paired with the { active:false } early return above
   out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
   out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
   // Promo codes the customer SPA may offer at checkout — built from THIS café's
@@ -2735,7 +3051,6 @@ app.get("/menu", resolveTenant, (req, res) => {
   // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
   // (tenantFromToken resolves both) — and never on the public customer fetch or
   // to another tenant's token.
-  const authTenant = tenantFromToken(getReqToken(req));
   if (authTenant && authTenant.slug === req.tenant.slug) out.printerStations = c.printerStations || {};
   // Time-of-day menu: drop categories outside their daily `avail` window from the
   // PUBLIC customer view only (e.g. lunch until 3pm, dinner after). Staff of this
@@ -2947,6 +3262,115 @@ const imageUpload = multer({
 const menuImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+// ── Menu setup path (Plan 3) ────────────────────────────────────────────────
+// New paid tenants are provisioned with config.menuBuild={mode:null,status:'choosing'}.
+// The owner console reads it (GET /me → menuBuild) to show a setup-path chooser, then
+// calls one of these two routes. Legacy tenants (Crispy/Bodrum) have menuBuild:null →
+// the console never renders the chooser, so these routes stay inert for them unless
+// the owner explicitly opts in.
+
+// requestedAt + N working days (skips Sat/Sun) — the DFY "live by" promise.
+function addWorkingDays(date, n) {
+  const d = new Date(date.getTime());
+  let added = 0;
+  while (added < n) {
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) added += 1; // 0=Sun, 6=Sat
+  }
+  return d;
+}
+
+// PATCH /me/menu-build — owner picks a setup path. { mode:'diy'|'dfy' }. DIY is
+// considered self-serve-complete the moment they start (status:'live'), which
+// replaces the chooser with the live builder on the next /me. Never touches an
+// existing tenant's menuBuild unless one is already present (paid tenants only).
+app.patch("/me/menu-build", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const mode = String((req.body && req.body.mode) || "").trim();
+  if (mode !== "diy" && mode !== "dfy") return res.status(400).json({ error: "mode must be 'diy' or 'dfy'." });
+  withWriteLock(() => {
+    t.config = t.config || {};
+    const mb = (t.config.menuBuild && typeof t.config.menuBuild === "object") ? t.config.menuBuild : {};
+    mb.mode = mode;
+    if (mode === "diy") mb.status = "live";
+    t.config.menuBuild = mb;
+    saveTenant(t);
+    res.json({ success: true, menuBuild: mb });
+  }).catch((e) => {
+    console.error("[menu-build] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save menu setup choice" });
+  });
+});
+
+// POST /me/menu-build/dfy — owner requests a done-for-you build. Multipart:
+// venue/cuisine/notes text fields + up to 8 menu photos (field "photos"). Photos
+// are stored in Supabase Storage exactly like menu-item images (resized JPEG); the
+// request is emailed to the build team. Sets config.menuBuild = { mode:'dfy',
+// status:'building', requestedAt, photos:[urls], notes, liveBy }. Returns { ok, liveBy }
+// where liveBy = requestedAt + 2 working days.
+app.post("/me/menu-build/dfy", requireOwner, imageUpload.array("photos", 8), async (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  const venue = sanitizeString(b.venue, 120) || (t.config && t.config.name) || t.name;
+  const cuisine = sanitizeString(b.cuisine, 80);
+  const notes = sanitizeString(b.notes, 2000);
+  // Store photos the same way menu-item images are stored (Supabase bucket
+  // "menu-images", sharp-resized JPEG). Best-effort: a storage hiccup must not lose
+  // the build request — we still record + email whatever uploaded.
+  const photoUrls = [];
+  const files = Array.isArray(req.files) ? req.files.slice(0, 8) : [];
+  if (files.length && supabase) {
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const resized = await sharp(files[i].buffer)
+          .rotate()
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 82, progressive: true })
+          .toBuffer();
+        const fileName = `${t.slug}/dfy/${Date.now()}-${i}.jpg`;
+        const { error: upErr } = await supabase.storage.from("menu-images").upload(fileName, resized, { contentType: "image/jpeg", upsert: false });
+        if (upErr) { console.error("[menu-build] dfy photo upload:", upErr.message); continue; }
+        photoUrls.push(supabase.storage.from("menu-images").getPublicUrl(fileName).data.publicUrl);
+      } catch (e) { console.error("[menu-build] dfy photo error:", e && e.message); }
+    }
+  }
+  const requestedAt = new Date();
+  const requestedAtIso = requestedAt.toISOString();
+  const liveBy = addWorkingDays(requestedAt, 2).toISOString();
+  const mb = { mode: "dfy", status: "building", requestedAt: requestedAtIso, photos: photoUrls, notes, liveBy };
+  await new Promise((resolve, reject) => withWriteLock(() => {
+    try { t.config = t.config || {}; t.config.menuBuild = mb; saveTenant(t); resolve(); }
+    catch (e) { reject(e); }
+  })).catch((e) => { console.error("[menu-build] dfy save:", e && e.message); });
+  // Email the request to the build team (no-op if Resend isn't configured).
+  if (resend) {
+    const to = process.env.BUILD_REQUEST_EMAIL || "support@itlogistics.nz";
+    const text = [
+      "New done-for-you menu build request.",
+      "",
+      "Tenant slug: " + t.slug,
+      "Owner: " + (req.ownerEmail || "(unknown)"),
+      "Venue: " + venue,
+      "Cuisine: " + (cuisine || "(not given)"),
+      "Notes: " + (notes || "(none)"),
+      "",
+      "Photos (" + photoUrls.length + "):",
+      photoUrls.length ? photoUrls.join("\n") : "(none uploaded)",
+      "",
+      "Requested at: " + requestedAtIso,
+      "Target live-by: " + liveBy,
+    ].join("\n");
+    try {
+      await resend.emails.send({ from: AUTH_EMAIL_FROM, to: [to], subject: "[DFY build] " + venue, text });
+      console.log(`[menu-build] dfy request emailed for '${t.slug}' (${photoUrls.length} photos)`);
+    } catch (e) { console.error("[menu-build] dfy email failed:", e && e.message); }
+  }
+  res.json({ ok: true, liveBy, menuBuild: mb });
 });
 
 // POST /menu/extract — public, rate-limited. Reads a menu photo/PDF with Claude
