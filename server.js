@@ -55,6 +55,12 @@ let normalizePricing;
 try { ({ normalizePricing } = require("./pricing")); }
 catch (e) { console.warn("[pricing] module unavailable — pricing editor disabled:", e && e.message); normalizePricing = () => { throw new Error("Pricing editor unavailable."); }; }
 
+// Order archival (bound the live orders.json working set). Defensive load —
+// a missing module disables the job + archive endpoints, never crashes boot.
+let orderArchive = null;
+try { orderArchive = require("./archive"); }
+catch (e) { console.warn("[archive] module unavailable — order archival disabled:", e && e.message); }
+
 const compression = require("compression");
 
 const app = express();
@@ -658,6 +664,92 @@ function pruneLoyaltySessions(sessions) {
     if (!sessions[k] || !(sessions[k].exp > now)) delete sessions[k];
   }
   return sessions;
+}
+
+// ── Order archival (logic in archive.js) ───────────────────
+// Finished orders older than the previous calendar month move from the live
+// orders.json into per-month blobs (orders-archive-YYYY-MM.json + Supabase
+// mirror) with a small forever-summary per month for the console's charts.
+function archiveFilePath(slug, month) { return path.join(DATA_DIR, slug, "orders-archive-" + month + ".json"); }
+function archiveSummariesPath(slug) { return path.join(DATA_DIR, slug, "archive-summaries.json"); }
+function localArchiveMonths(slug) {
+  try {
+    return fs.readdirSync(path.join(DATA_DIR, slug))
+      .map((f) => { const m = f.match(/^orders-archive-(\d{4}-\d{2})\.json$/); return m ? m[1] : null; })
+      .filter(Boolean);
+  } catch { return []; }
+}
+async function remoteArchiveMonths(slug) {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase.from("state").select("key").like("key", tKey(slug, "orders-archive-") + "%");
+    if (error || !Array.isArray(data)) return [];
+    return data.map((r) => { const m = String(r.key).match(/orders-archive-(\d{4}-(?:0[1-9]|1[0-2]))$/); return m ? m[1] : null; }).filter(Boolean);
+  } catch { return []; }
+}
+const validArchiveBlob = (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string");
+// Load one archived month: local file first, else lazy-restore from the
+// Supabase mirror (survives Render's disk wipe with no boot-time cost).
+async function loadArchiveMonth(slug, month) {
+  const file = archiveFilePath(slug, month);
+  const local = readJson(file, null);
+  if (validArchiveBlob(local)) return local;
+  const remote = await pullFromSupabase(tKey(slug, "orders-archive-" + month));
+  if (validArchiveBlob(remote)) { writeJson(file, remote); return remote; }
+  return [];
+}
+// Sorted per-month summaries [{month,count,revenue,fee}] across local + mirror.
+async function archiveMonthsIndex(slug) {
+  const months = [...new Set([...localArchiveMonths(slug), ...(await remoteArchiveMonths(slug))])].sort();
+  const sums = readJson(archiveSummariesPath(slug), {});
+  const out = [];
+  let dirty = false;
+  for (const m of months) {
+    if (!sums[m] || typeof sums[m].count !== "number") { // summary lost → rebuild from the blob
+      sums[m] = orderArchive.summarizeMonth(m, await loadArchiveMonth(slug, m));
+      dirty = true;
+    }
+    out.push(sums[m]);
+  }
+  if (dirty) { writeJson(archiveSummariesPath(slug), sums); mirrorToSupabase(tKey(slug, "archive-summaries"), sums); }
+  return out;
+}
+// The async prefetch of existing archive blobs happens FIRST; the re-load →
+// partition → merge → write sequence after it is fully synchronous, so request
+// handlers (same thread) can never interleave with it and lose an order.
+// Archives are written before the live file shrinks: a crash in between just
+// re-sends the same orders next run (mergeArchive dedups by id).
+async function runArchiveJobForTenant(slug) {
+  if (!orderArchive) return;
+  const store = tenantStore(slug);
+  const probe = orderArchive.partitionOrders(store.loadOrders());
+  const probeMonths = Object.keys(probe.archiveByMonth);
+  if (!probeMonths.length) return;
+  const existing = {};
+  for (const m of probeMonths) existing[m] = await loadArchiveMonth(slug, m);
+  // Sync critical section — no awaits below.
+  const { keep, archiveByMonth } = orderArchive.partitionOrders(store.loadOrders());
+  const sums = readJson(archiveSummariesPath(slug), {});
+  const stayLive = keep.slice();
+  let moved = 0;
+  for (const m of Object.keys(archiveByMonth)) {
+    if (!(m in existing)) { stayLive.push(...archiveByMonth[m]); continue; } // month appeared mid-await → next run
+    const merged = orderArchive.mergeArchive(existing[m], archiveByMonth[m]);
+    writeJson(archiveFilePath(slug, m), merged);
+    mirrorToSupabase(tKey(slug, "orders-archive-" + m), merged);
+    sums[m] = orderArchive.summarizeMonth(m, merged);
+    moved += archiveByMonth[m].length;
+  }
+  writeJson(archiveSummariesPath(slug), sums);
+  mirrorToSupabase(tKey(slug, "archive-summaries"), sums);
+  store.persistOrders(stayLive);
+  console.log(`[archive] ${slug}: archived ${moved} order(s) into ${Object.keys(existing).length} month blob(s); ${stayLive.length} stay live`);
+}
+async function runArchiveJob() {
+  for (const t of TENANTS.values()) {
+    try { await runArchiveJobForTenant(t.slug); }
+    catch (e) { console.warn(`[archive] ${t.slug} failed:`, e && e.message); }
+  }
 }
 
 // ── Tenant registry ────────────────────────────────────────
@@ -2838,6 +2930,31 @@ app.get("/orders", requireStaff, (req, res) => {
     orders: orders.slice().reverse(),
     serverTime: new Date().toISOString(),
   });
+});
+
+// ── Archived order history (staff) ──────────────────────────
+// Months older than the live window live in per-month blobs. The console reads
+// the index (tiny summaries) for the monthly chart, and fetches a month's blob
+// only when the operator opens a day/range that old. Registered before
+// GET /orders/:id so "archive" can never be captured as an order id.
+app.get("/orders/archive", requireStaff, async (req, res) => {
+  if (!orderArchive) return res.status(503).json({ error: "Archival unavailable" });
+  try { res.json({ months: await archiveMonthsIndex(req.store.slug) }); }
+  catch (e) {
+    console.warn("[archive] index failed:", e && e.message);
+    res.status(500).json({ error: "Archive index failed" });
+  }
+});
+app.get("/orders/archive/:month", requireStaff, async (req, res) => {
+  if (!orderArchive) return res.status(503).json({ error: "Archival unavailable" });
+  if (!orderArchive.isMonthKey(req.params.month)) return res.status(400).json({ error: "Invalid month (YYYY-MM)" });
+  try {
+    const orders = await loadArchiveMonth(req.store.slug, req.params.month);
+    res.json({ month: req.params.month, count: orders.length, orders });
+  } catch (e) {
+    console.warn("[archive] month fetch failed:", e && e.message);
+    res.status(500).json({ error: "Archive fetch failed" });
+  }
 });
 
 // ── GET /orders/by-table/:table — public, for QR "add to tab" ─
@@ -5277,6 +5394,14 @@ async function boot() {
   await restoreFromSupabase(); // supabase-mode: pull registry + per-tenant blobs, reload cache
   ensureDefaultTenant();       // fresh install fallback: materialize the default café
   backfillDefaultTenantConfig(); // production migration: fill Crispy's new config keys if missing
+  // Order archival: shrink the live orders files shortly after boot (post-
+  // restore, off the startup path), then twice a day. unref() so the timers
+  // never hold a shutting-down process open.
+  if (orderArchive) {
+    const runArchive = () => runArchiveJob().catch((e) => console.warn("[archive] run failed:", e && e.message));
+    setTimeout(runArchive, 30 * 1000).unref();
+    setInterval(runArchive, 12 * 3600 * 1000).unref();
+  }
   server = app.listen(PORT, () => {
   console.log(`\n🍽  Multi-tenant ordering backend running on http://localhost:${PORT}`);
   console.log(`   Mode    : Per-tenant storage (data/<slug>/) ${supabase ? "+ Supabase mirror" : "(file-only)"}`);

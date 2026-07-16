@@ -48,6 +48,32 @@
   .menu-sheet-wrap{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.5);}
   .menu-sheet{position:relative;display:flex;flex-direction:column;width:100%;max-width:432px;max-height:88dvh;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -28px rgba(0,0,0,.6);animation:fadeUp .2s ease;}
   .menu-sheet-body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  /* DIY builder (Plan 3): the menu editor on the left, a live phone preview of the
+     customer menu on the right. Desktop = side-by-side (preview sticky). Narrow =
+     preview is a full-screen overlay toggled by a floating button. */
+  .diy-wrap{display:flex;align-items:flex-start;}
+  .diy-editor{flex:1;min-width:0;}
+  .diy-preview{flex-shrink:0;width:360px;box-sizing:border-box;position:sticky;top:0;align-self:flex-start;padding:20px 20px 30px;border-left:1px solid var(--border);background:var(--surface2);}
+  .diy-fab{display:none;}
+  .pv-label{font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted2);margin-bottom:12px;text-align:center;}
+  .phone-frame{margin:0 auto;width:300px;max-width:100%;border-radius:34px;border:10px solid #14110d;background:#14110d;box-shadow:0 24px 50px -24px rgba(0,0,0,.7);overflow:hidden;}
+  .phone-top{height:22px;background:#14110d;position:relative;}
+  .phone-top:after{content:'';position:absolute;top:7px;left:50%;transform:translateX(-50%);width:78px;height:6px;border-radius:6px;background:#000;}
+  .phone-screen{height:560px;max-height:64dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;background:var(--surface);}
+  .pv-head{position:sticky;top:0;z-index:1;background:var(--surface);padding:14px 16px 10px;font-family:'Fraunces',serif;font-style:italic;font-size:20px;color:var(--ink);border-bottom:1px solid var(--border);}
+  .pv-body{padding:8px 14px 26px;}
+  .pv-cat-t{font-family:'Fraunces',serif;font-style:italic;font-size:16px;color:var(--accent);margin:16px 0 8px;}
+  .pv-card{position:relative;overflow:hidden;min-height:92px;border-radius:14px;background:var(--surface2);border:1px solid var(--border);padding:13px 15px;margin-bottom:9px;display:flex;flex-direction:column;justify-content:center;}
+  .pv-card-txt{position:relative;z-index:1;max-width:60%;}
+  .pv-name{font-family:'Fraunces',serif;font-style:italic;font-size:15px;color:var(--ink);line-height:1.15;}
+  .pv-desc{font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.4;}
+  .pv-price{font-family:'Fraunces',serif;font-size:14px;color:var(--accent);margin-top:6px;}
+  .pv-empty{padding:40px 16px;text-align:center;color:var(--muted2);font-size:12.5px;line-height:1.5;}
+  @media (max-width:1024px){
+    .diy-preview{position:fixed;inset:0;z-index:57;width:auto;border-left:none;display:none;padding:20px;overflow-y:auto;}
+    .diy-wrap.preview-open .diy-preview{display:block;}
+    .diy-fab{display:inline-flex;align-items:center;gap:7px;position:fixed;right:16px;bottom:78px;z-index:58;padding:12px 18px;border-radius:50px;border:none;background:var(--accent);color:#fbf6ec;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 14px 30px -12px rgba(0,0,0,.6);}
+  }
   @media (max-width:768px){
     .app-sidebar{display:none !important;}
     .app-header{padding:14px 16px;}
@@ -145,7 +171,7 @@ function startAlert(){
   const ae=document.activeElement;
   const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
   if(state.active==='kitchen') refreshKitchenInPlace();
-  else if(!(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.menuEditId||typing)) render();
+  else if(!(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.dfyOpen||state.photoMenuOpen||state.menuEditId||typing)) render();
 }
 function stopAlert(){
   state.alerting = false;
@@ -172,6 +198,7 @@ const state = {
   menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
+  dfyOpen:false, dfyBusy:false, dfyMsg:'', photoMenuOpen:false, previewOpen:false,   // Plan 3: menu-setup chooser / DFY intake / photo import / live preview toggle
   promos:null, promoMsg:'', addDishMsg:'', mealDealMsg:'', pricingMsg:'',
   loginErr:'', lastLogin:'', setMsg:'',
   loading:{ orders:false, menu:false, reports:false },
@@ -265,6 +292,8 @@ const NAV = [
   { id:'menu', label:'Menu', d:['M6 3v18','M6 8c2.4 0 2.4-5 0-5','M18 3c-1.8 0-3 2-3 5s1.2 4 3 4','M18 12v9'] },
   { id:'billing', label:'Billing', d:['M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z','M9 8h6','M9 12h6','M9 16h4'] },
   { id:'customers', label:'Regulars', d:['M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z','M3 20a6 6 0 0 1 12 0','M16 3.5a3 3 0 0 1 0 5.8','M21 20a6 6 0 0 0-4-5.6'] },
+  // Plan 2 self-serve home: getting-started checklist + QR codes + (paid tenants) billing.
+  { id:'setup', label:'Setup', d:['M4 4h6v6H4z','M14 4h6v6h-6z','M4 14h6v6H4z','M14 14h6v6h-6z'] },
 ];
 
 /* ───────── theme application ───────── */
@@ -574,6 +603,8 @@ async function refreshActive(initial){
   else if (A==='reports'){ jobs.push(loadReportsToday(), loadReportsYesterday(), loadReportsWeek(), loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='dayreport'){ jobs.push(loadOrders()); if(!state.menu) jobs.push(loadMenu()); }
   else if (A==='menu'){ jobs.push(loadMenu()); } // reload each entry → unsaved local edits discarded
+  // Setup home needs the menu (checklist "menu has items") + orders ("test an order").
+  else if (A==='setup'){ if(!state.menu) jobs.push(loadMenu()); jobs.push(loadOrders()); }
   await Promise.all(jobs);
   render();
 }
@@ -595,6 +626,7 @@ function logout(){
   SESSION=''; lsSet(LS.session,'');
   stopAlert();
   state.me=null; state.cafe=null; state.cafes=[]; state.orders=[]; state.menu=null;
+  state.archIndex=undefined; state.archOrders=null; state.archLoading=null;
   state.reportsToday=null; state.reportsWeek=null; state.settingsOpen=false; state.switcherOpen=false;
   state.unlocked=false; state.pinPrompt=null;
   render();
@@ -604,6 +636,7 @@ async function switchCafe(slug){
     const d = await api('/auth/switch', { method:'POST', body:{ slug } });
     SESSION = d.session; lsSet(LS.session, SESSION);
     state.switcherOpen=false; state.menu=null;
+    state.archIndex=undefined; state.archOrders=null; state.archLoading=null; // per-café archives
     await loadMe(); await loadMenu();
     state.active='kitchen';
     state.unlocked=false;       // each café has its own PIN → re-lock on switch
@@ -649,8 +682,9 @@ function appHTML(){
     menu:['Menu', menuItemCount()+' items · tap to edit'],
     billing:['Billing','Take payment & print receipts'],
     customers:['Regulars', (state.customers||[]).length+' loyalty members'],
+    setup:['Get set up', 'Getting started · QR codes'+(billingLegacy()?'':' · billing')],
   };
-  const screens = { kitchen:kitchenHTML, reports:reportsHTML, dayreport:dayReportHTML, menu:menuHTML, billing:billingHTML, customers:customersHTML };
+  const screens = { kitchen:kitchenHTML, reports:reportsHTML, dayreport:dayReportHTML, menu:menuHTML, billing:billingHTML, customers:customersHTML, setup:setupHTML };
   if(!screens[A]){ state.active='kitchen'; return appHTML(); } // Dashboard removed → fall back to Kitchen
   let body;
   try { body = screens[A](); } catch(e){ body = errBox('Something went wrong rendering this screen: '+e.message); }
@@ -661,12 +695,14 @@ function appHTML(){
     + '<div style="flex:1;min-width:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:25px;line-height:1;">'+esc(titles[A][0])+'</div>'
     + '<div style="font-size:12.5px;color:var(--muted);margin-top:4px;">'+esc(titles[A][1])+'</div></div>'
     + '<div style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:50%;background:#5fb87a;animation:pulse 2s infinite;"></span>Live · <span id="clock">'+clockStr()+'</span></div></header>'
-    + '<div class="app-body" style="flex:1;min-height:0;overflow-y:auto;zoom:var(--density,1);">'+body+'</div></main>'
+    + '<div class="app-body" style="flex:1;min-height:0;overflow-y:auto;zoom:var(--density,1);">'+reactivationBannerHTML()+body+'</div></main>'
     + bottomNavHTML() + '</div>'
     + (state.settingsOpen ? settingsHTML() : '')
     + (state.tender ? tenderHTML() : '')
     + (state.importOpen ? importHTML() : '')
     + (state.addDishOpen ? addDishHTML() : '')
+    + (state.dfyOpen ? dfyFormHTML() : '')
+    + (state.photoMenuOpen ? photoMenuHTML() : '')
     + (state.menuEditId ? menuSheetHTML() : '')
     + (state.pinPrompt ? pinPromptHTML() : '');
 }
@@ -1133,10 +1169,47 @@ function ensureRanges(){
   if(!state.rep){ var n=new Date(); state.rep={ from:rIsoDT(rMonday(n)), to:rIsoDT(n), quick:'this-week' }; }
   if(!state.fee){ var m=new Date(); state.fee={ from:rIsoDate(new Date(m.getFullYear(),m.getMonth()-5,1)), to:rIsoDate(m), quick:6 }; }
 }
+/* Archived months: the server moves finished orders older than the previous
+   calendar month out of the live /orders payload into per-month blobs.
+   /orders/archive returns tiny per-month summaries ({month,count,revenue,fee})
+   for the charts; a month's full orders are fetched only when a report
+   actually opens a date that old. Both fetches re-render on arrival. */
+function archIdx(){
+  if(state.archIndex===undefined && state.me){
+    state.archIndex=null; // request in flight
+    api('/orders/archive').then(function(d){ state.archIndex=(d&&d.months)||[]; render(); })
+      .catch(function(){ state.archIndex=[]; });
+  }
+  return state.archIndex||[];
+}
+function archMonthOrders(m){
+  var idx=archIdx();
+  if(!idx.some(function(s){ return s.month===m; })) return [];
+  var c=state.archOrders||(state.archOrders={});
+  if(c[m]) return c[m];
+  var l=state.archLoading||(state.archLoading={});
+  if(!l[m]){
+    l[m]=1;
+    api('/orders/archive/'+m).then(function(d){ c[m]=(d&&d.orders)||[]; delete l[m]; render(); })
+      .catch(function(){ delete l[m]; });
+  }
+  return [];
+}
+function archOrdersInWindow(f,t){
+  var out=[];
+  archIdx().forEach(function(s){
+    var p=String(s.month).split('-'), y=Number(p[0]), mo=Number(p[1]);
+    var mS=new Date(y,mo-1,1).getTime(), mE=new Date(y,mo,1).getTime()-1;
+    if(mE>=f && mS<=t) out=out.concat(archMonthOrders(s.month));
+  });
+  return out;
+}
 function ordersInRange(fromStr,toStr){
   var f=fromStr?new Date(fromStr).getTime():-Infinity, t=toStr?new Date(toStr).getTime():Infinity;
   if(isNaN(f))f=-Infinity; if(isNaN(t))t=Infinity;
-  return (state.orders||[]).filter(function(o){ var x=new Date(o.createdAt).getTime(); return !isNaN(x)&&x>=f&&x<=t; });
+  // Live window plus any archived months the range touches (fetched on demand).
+  var list=(state.orders||[]).concat(archOrdersInWindow(f,t));
+  return list.filter(function(o){ var x=new Date(o.createdAt).getTime(); return !isNaN(x)&&x>=f&&x<=t; });
 }
 function rangeStats(list){
   var rev=0,fee=0,paid=0;
@@ -1165,6 +1238,9 @@ function feeMonths(){
   var fT=(from&&!isNaN(new Date(from+'T00:00')))?new Date(from+'T00:00').getTime():-Infinity;
   var tT=(to&&!isNaN(new Date(to+'T00:00')))?rEod(new Date(to+'T00:00')).getTime():Infinity;
   (state.orders||[]).forEach(function(o){ var d=new Date(o.createdAt),x=d.getTime(); if(isNaN(x)||x<fT||x>tT)return; var k=d.getFullYear()+'-'+rPad2(d.getMonth()+1); if(byKey[k]){byKey[k].fee+=Number(o.developerFee)||0;byKey[k].count++;} });
+  // Archived months aren't in state.orders — overlay their stored summaries
+  // (disjoint from the live set, so no double counting).
+  archIdx().forEach(function(s){ var b=byKey[s.month]; if(b){ b.fee+=Number(s.fee)||0; b.count+=Number(s.count)||0; } });
   return months;
 }
 function rQuickBtn(act,val,label,curv){
@@ -1323,7 +1399,9 @@ function dayReportItems(dateStr){
   let altMilkQty = 0, altMilkRevenue = 0;
   const map = {};
   let orderCount = 0;
-  (state.orders||[]).forEach(function(o){
+  // Live orders plus, for dates older than the live window, that month's
+  // archived orders (fetched on demand; re-renders when they arrive).
+  (state.orders||[]).concat(archMonthOrders(String(dateStr).slice(0,7))).forEach(function(o){
     if(rIsoDate(new Date(o.createdAt)) !== dateStr) return;
     orderCount++;
     (o.items||[]).forEach(function(i){
@@ -1463,14 +1541,70 @@ function dayReportPrint(){
 function menuHTML(){
   if(!state.menu) return state.err.menu?errBox(state.err.menu):loadingBox('Loading menu…');
   const inp = "flex:1;min-width:140px;height:40px;padding:0 13px;border:1px solid var(--border);border-radius:11px;background:var(--input);font-family:inherit;font-size:14px;color:var(--ink);outline:none;";
+  const diy = diyBuilderOn();
+  const photoBtn = '<button data-act="openPhotoMenu" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:1px solid var(--accent);background:var(--accent-tint);color:var(--accent);cursor:pointer;">📷 Photo → menu</button>';
   const toolbar = '<div style="position:sticky;top:0;z-index:6;background:var(--bg);padding:2px 0 13px;">'
     + '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">'
     + '<input id="menu-search" type="search" value="'+esc(state.menuSearch||'')+'" oninput="onMenuSearch(this.value)" placeholder="Search dishes…" autocapitalize="none" autocorrect="off" style="'+inp+'">'
     + '<button data-act="openAddDish" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);cursor:pointer;">+ Add dish</button>'
+    + (diy ? photoBtn : '')
     + '<button data-act="openImport" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import</button>'
     + '</div></div>';
-  return '<div style="padding:18px 24px 90px;animation:fadeUp .35s ease;">'+toolbar+'<div id="menu-list">'+menuListHTML()+'</div></div>';
+  const editorCol = '<div style="padding:18px 24px 90px;animation:fadeUp .35s ease;">'+toolbar+'<div id="menu-list">'+menuListHTML()+'</div></div>';
+  if(!diy) return editorCol;   // legacy tenants (Crispy/Bodrum): unchanged single-column menu
+  // DIY builder: editor + live phone preview of the customer menu.
+  return '<div class="diy-wrap'+(state.previewOpen?' preview-open':'')+'">'
+    + '<div class="diy-editor">'+editorCol+'</div>'
+    + '<div class="diy-preview">'+phonePreviewPanelHTML()+'</div>'
+    + '</div>'
+    + '<button class="diy-fab" data-act="togglePreview">'+(state.previewOpen?'✕ Close preview':'📱 Preview')+'</button>';
 }
+// Menu-setup state (Plan 3). state.me.menuBuild is present only for paid tenants
+// provisioned with a billing block; legacy tenants (Crispy/Bodrum) → null, so the
+// DIY builder chrome (phone preview + photo import) never shows for them.
+function menuBuildInfo(){ return (state.me && state.me.menuBuild) || null; }
+function diyBuilderOn(){ return !!menuBuildInfo(); }
+// Live phone preview: a phone-framed render of the WHOLE customer menu, read from the
+// SAME state.menu the editor mutates + the open item's unsaved _menuDraft, so it
+// updates on every keystroke (refreshPhonePreview) and every save/add/delete (render).
+function phonePreviewPanelHTML(){
+  const cafeName = esc((state.cafe && state.cafe.name) || cfg().name || 'Your menu');
+  return '<div class="pv-label">Live customer preview</div>'
+    + '<div class="phone-frame"><div class="phone-top"></div>'
+    + '<div class="phone-screen"><div class="pv-head">'+cafeName+'</div>'
+    + '<div class="pv-body" id="phone-preview-scroll">'+previewMenuBodyHTML()+'</div>'
+    + '</div></div>';
+}
+function previewMenuBodyHTML(){
+  const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const html = cats.map(function(c){
+    const items = (c.items||[]);
+    if(!items.length) return '';
+    return '<div class="pv-cat"><div class="pv-cat-t">'+esc(c.label)+'</div>'+items.map(previewItemCardHTML).join('')+'</div>';
+  }).join('');
+  return html || '<div class="pv-empty">Your menu preview appears here as you add dishes.</div>';
+}
+function previewItemCardHTML(it){
+  // Overlay the open editor's unsaved draft onto its item so typing shows live.
+  let name=it.name, desc=it.desc||'', priceLbl=itemPriceLabel(it);
+  let ir=(it.imgRight!=null)?parseFloat(it.imgRight):-22;
+  if(_menuDraft && state.menuEditId===it.id){
+    name=_menuDraft.name; desc=_menuDraft.desc||'';
+    if(_menuDraft.price!=null){ priceLbl=money(_menuDraft.price); }
+    else if(_menuDraft.sizes){ const vs=Object.values(_menuDraft.sizes).map(Number).filter(function(x){return !isNaN(x);}); priceLbl=vs.length?('from '+money(Math.min.apply(null,vs))):'—'; }
+    if(_menuDraft.imgRight!=null){ const n=parseFloat(_menuDraft.imgRight); if(!isNaN(n)) ir=n; }
+  }
+  if(isNaN(ir)) ir=-22;
+  const img=imageFor(it);
+  const mask='linear-gradient(to left,#000 55%,rgba(0,0,0,.75) 75%,transparent 100%)';
+  return '<div class="pv-card"'+(it.outOfStock?' style="opacity:.45;"':'')+'>'
+    + '<div class="pv-card-txt"><div class="pv-name">'+esc(name)+'</div>'+(desc?'<div class="pv-desc">'+esc(desc)+'</div>':'')+'<div class="pv-price">'+priceLbl+'</div></div>'
+    + (img?'<img src="'+esc(img)+'" alt="" onerror="this.style.display=\'none\'" style="position:absolute;top:50%;transform:translateY(-50%);right:'+ir+'%;height:116px;width:auto;-webkit-mask-image:'+mask+';mask-image:'+mask+';pointer-events:none;">':'')
+    + '</div>';
+}
+// Re-render just the preview body (keeps it cheap + focus-safe on keystrokes). No-op
+// when the panel isn't mounted (legacy tenants / other screens).
+function refreshPhonePreview(){ const el=document.getElementById('phone-preview-scroll'); if(el) el.innerHTML=previewMenuBodyHTML(); }
 // Just the category list — re-rendered in place on search/collapse so the search box
 // keeps focus + caret (a full render() would rebuild and blur it).
 function menuListHTML(){
@@ -1688,6 +1822,263 @@ function customersHTML(){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   SETUP HOME (Plan 2) — getting-started checklist + QR center + billing.
+   /me exposes billing:{plan,status,purchaseType,entitlementExpiresAt,
+   currentPeriodEnd,active,legacy?}. Legacy tenants (Crispy/Bodrum, no
+   config.billing) come back {active:true,legacy:true} → NO billing UI.
+═══════════════════════════════════════════════════════════════════════════ */
+function billingInfo(){ return (state.me && state.me.billing) || null; }
+function billingLegacy(){ const b=billingInfo(); return !b || b.legacy===true; }
+function billingIsPaused(){ const b=billingInfo(); return !!(b && b.legacy!==true && b.active===false); }
+function planLabel(p){ return ({trial:'Weekly trial',monthly:'Monthly plan',annual:'Annual plan',onetime:'Lifetime licence'})[p] || (p?String(p):'Your plan'); }
+function fmtDate(v){ if(!v) return ''; const d=new Date(v); return isNaN(d.getTime())?'' : d.toLocaleDateString('en-NZ',{day:'numeric',month:'short',year:'numeric'}); }
+function billingStatusLine(b){
+  if(!b) return '';
+  if(b.purchaseType==='lifetime') return 'Lifetime access — no recurring charge.';
+  if(b.purchaseType==='trial'){ const d=fmtDate(b.entitlementExpiresAt); return d?('Free trial — ends '+d+'.'):'Free trial.'; }
+  const nice={active:'Active',trialing:'Trial',past_due:'Payment overdue',canceled:'Cancelled',unpaid:'Unpaid',incomplete:'Payment incomplete'}[b.status]||(b.status||'Active');
+  const per=fmtDate(b.currentPeriodEnd);
+  return per ? (nice+' — next charge '+per+'.') : (nice+'.');
+}
+/* Reactivation nudge — paused paid tenant only (never legacy). Console still loads. */
+function reactivationBannerHTML(){
+  if(!billingIsPaused()) return '';
+  return '<div style="background:rgba(168,74,46,.14);border-bottom:1px solid rgba(168,74,46,.4);padding:13px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:200px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:16px;color:var(--neg);line-height:1.1;">Your access is paused</div>'
+    + '<div style="font-size:12.5px;color:var(--muted);margin-top:3px;">Your customer ordering page is offline until billing is updated. Your dashboard still works.</div></div>'
+    + '<button data-act="billingManage" style="padding:10px 18px;border-radius:9px;border:none;background:var(--neg);color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">Update billing</button>'
+    + '</div>';
+}
+/* QR "viewed" tick — set the first time the owner opens any QR/link (per café). */
+function qrKey(){ return 'cmc_qr_'+(state.activeSlug||''); }
+function qrViewed(){ return lsGet(qrKey())==='1'; }
+function markQrViewed(){ lsSet(qrKey(),'1'); }
+function testedKey(){ return 'cmc_tested_'+(state.activeSlug||''); }
+
+function setupHTML(){
+  const card = 'background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;margin-bottom:20px;';
+  const secTitle = "font-family:'Fraunces',serif;font-style:italic;font-size:19px;color:var(--ink);";
+  const secSub = 'font-size:12.5px;color:var(--muted);margin:4px 0 16px;line-height:1.5;';
+  const btn = 'padding:11px 16px;border-radius:10px;border:none;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;background:var(--accent);color:#fbf6ec;';
+  const btnAlt = 'padding:11px 16px;border-radius:10px;border:1px solid var(--border);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;background:var(--input);color:var(--ink);';
+
+  /* ── getting-started state (cheap ticks from tenant state) ── */
+  const hasMenu = menuItemCount()>0;
+  const ordersNow = (state.orders||[]).length>0;
+  if(ordersNow) markSetupTested();
+  const tested = ordersNow || lsGet(testedKey())==='1';
+  const qrDone = qrViewed();
+  const liveDone = hasMenu && qrDone && tested;
+  // PLAN 3: step-1 slot switches on the menu-setup state. Only new paid tenants ever
+  // reach 'choosing'/'building' (menuBuild!=null); Crispy/Bodrum (null) keep the plain
+  // Edit/Set-up button and never see the chooser.
+  const mb = menuBuildInfo();
+  let menuSlot;
+  if(mb && mb.status==='choosing'){ menuSlot = menuChooserHTML(); }
+  else if(mb && mb.status==='building'){ menuSlot = dfyBuildingBannerHTML(mb); }
+  else { menuSlot = '<div id="setup-menu-slot"><button data-act="menuSetup" style="'+btn+'margin-top:12px;">'+(hasMenu?'Edit your menu':'Set up your menu')+'</button></div>'; }
+  const steps = [
+    { title:'Set up your menu', done:hasMenu,
+      body:'Add your dishes, prices and photos so guests can order.',
+      slot:menuSlot },
+    { title:'Print your QR codes', done:qrDone,
+      body:'Generate the QR codes your guests scan at the table to open your menu.',
+      slot:'<button data-act="nav" data-screen="setup" style="'+btnAlt+'margin-top:12px;">See QR codes below ↓</button>' },
+    { title:'Test an order', done:tested,
+      body:'Scan a QR yourself and send a test order — watch it land on the Kitchen board.',
+      slot:'<button data-act="nav" data-screen="kitchen" style="'+btnAlt+'margin-top:12px;">Open Kitchen</button>' },
+    { title:'Go live', done:liveDone,
+      body:'Once the first three are ticked, place your QR codes on tables and start taking orders.',
+      slot:'' },
+  ];
+  let doneCount = steps.filter(function(s){ return s.done; }).length;
+  const checklist = steps.map(function(s,i){
+    const tick = s.done
+      ? '<span style="flex-shrink:0;width:26px;height:26px;border-radius:50%;background:var(--pos);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;">✓</span>'
+      : '<span style="flex-shrink:0;width:26px;height:26px;border-radius:50%;border:2px solid var(--border);color:var(--muted2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">'+(i+1)+'</span>';
+    return '<div style="display:flex;gap:14px;padding:16px 0;'+(i<steps.length-1?'border-bottom:1px solid var(--border);':'')+'">'+tick
+      + '<div style="flex:1;min-width:0;"><div style="font-size:14px;font-weight:600;color:'+(s.done?'var(--muted)':'var(--ink)')+';'+(s.done?'text-decoration:line-through;':'')+'">'+esc(s.title)+'</div>'
+      + '<div style="font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.5;">'+esc(s.body)+'</div>'+(s.slot||'')+'</div></div>';
+  }).join('');
+  const gettingStarted = '<div style="'+card+'">'
+    + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;"><div style="'+secTitle+'">Getting started</div>'
+    + '<div style="font-size:12px;color:var(--muted2);">'+doneCount+' of '+steps.length+' done</div></div>'
+    + '<div style="'+secSub+'">A few quick steps to open for orders.</div>'
+    + checklist + '</div>';
+
+  /* ── QR codes centre (reuses GET /qr-pack; token in the URL for the new tab) ── */
+  const f = cfg().features || {};
+  const custUrl = (state.me && state.me.cafe && state.me.cafe.customerUrl) || '';
+  let qrExtra = '';
+  if(f.drinksPreorder) qrExtra += '<button data-act="openCustomerLink" data-extra="&preorder=drinks" style="'+btnAlt+'margin:8px 8px 0 0;">Coffee pre-order link</button>';
+  if(f.groups) qrExtra += '<button data-act="openCustomerLink" data-extra="&group=NEW" style="'+btnAlt+'margin:8px 8px 0 0;">Corporate / group link</button>';
+  const qrCentre = '<div style="'+card+'">'
+    + '<div style="'+secTitle+'">QR codes</div>'
+    + '<div style="'+secSub+'">Open a printable pack in a new tab, then print or save it. Each table gets its own QR.</div>'
+    + '<div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;">'
+    + '<div><label style="display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Tables</label>'
+    + '<input id="qr-tables" type="number" min="1" max="200" value="12" style="width:96px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;"></div>'
+    + '<button data-act="openTableQr" style="'+btn+'">Open table QR pack ↗</button></div>'
+    + (custUrl?('<div style="margin-top:16px;"><div style="font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Your customer ordering page</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><code style="flex:1;min-width:180px;font-size:12px;color:var(--muted);background:var(--input);border:1px solid var(--border);border-radius:8px;padding:9px 11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(custUrl)+'</code>'
+        + '<button data-act="openCustomerLink" data-extra="" style="'+btnAlt+'">Open ↗</button></div></div>'):'')
+    + (qrExtra?('<div style="margin-top:6px;">'+qrExtra+'</div>'):'')
+    + '</div>';
+
+  /* ── Billing & subscription (paid tenants only — hidden for legacy) ── */
+  let billingCard = '';
+  if(!billingLegacy()){
+    const b = billingInfo() || {};
+    const paused = billingIsPaused();
+    const label = b.purchaseType==='subscription' ? 'Manage billing'
+      : (b.purchaseType==='trial' ? 'Upgrade — choose a plan'
+      : (b.purchaseType==='lifetime' ? 'Billing details' : 'Manage billing'));
+    const statusChip = paused
+      ? '<span style="font-size:11px;font-weight:600;color:var(--neg);background:rgba(168,74,46,.12);border:1px solid rgba(168,74,46,.4);border-radius:20px;padding:3px 11px;">Paused</span>'
+      : '<span style="font-size:11px;font-weight:600;color:var(--pos);background:rgba(95,184,122,.14);border:1px solid rgba(95,184,122,.4);border-radius:20px;padding:3px 11px;">Active</span>';
+    billingCard = '<div style="'+card+'margin-bottom:0;">'
+      + '<div style="display:flex;align-items:center;gap:10px;"><div style="'+secTitle+'">Billing &amp; plan</div>'+statusChip+'</div>'
+      + '<div style="font-size:15px;font-weight:600;color:var(--ink);margin-top:14px;">'+esc(planLabel(b.plan))+'</div>'
+      + '<div style="font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.5;">'+esc(billingStatusLine(b))+'</div>'
+      + '<button data-act="billingManage" style="'+btn+'margin-top:16px;">'+label+'</button>'
+      + '<div style="font-size:11px;color:var(--muted2);margin-top:9px;">'+(b.purchaseType==='subscription'?'Update your card, download invoices, or cancel in the secure Stripe portal.':'Opens the secure Stripe portal or your plan options.')+'</div>'
+      + '</div>';
+  }
+
+  return '<div style="padding:26px 30px;max-width:720px;animation:fadeUp .35s ease;">'+gettingStarted+qrCentre+billingCard+'</div>';
+}
+function markSetupTested(){ try{ if(state.activeSlug) lsSet(testedKey(),'1'); }catch(e){} }
+
+/* ════════════════════════════════════════════════════════════════════════
+   PLAN 3 — menu setup UX: the setup-path chooser, the DFY intake form, and the
+   DIY "Photo → menu" AI accelerator. All gated on menuBuildInfo() (paid tenants),
+   so Crispy/Bodrum never see any of it.
+═══════════════════════════════════════════════════════════════════════════ */
+function menuChooserHTML(){
+  const wrap='margin-top:14px;display:flex;gap:12px;flex-wrap:wrap;';
+  const base='flex:1;min-width:200px;text-align:left;border-radius:13px;padding:16px;cursor:pointer;font-family:inherit;';
+  const diy=base+'border:1px solid var(--accent);background:var(--accent-tint);';
+  const dfy=base+'border:1px solid var(--border);background:var(--input);';
+  const h='font-family:\'Fraunces\',serif;font-style:italic;font-size:17px;margin-bottom:5px;';
+  const p='font-size:12px;color:var(--muted);line-height:1.5;';
+  return '<div id="setup-menu-slot" style="'+wrap+'">'
+    + '<button data-act="chooseMenuDiy" style="'+diy+'"><div style="'+h+'color:var(--accent);">Build it myself</div><div style="'+p+'">Add dishes with a live phone preview. Snap a photo of your paper menu to start in seconds.</div></button>'
+    + '<button data-act="chooseMenuDfy" style="'+dfy+'"><div style="'+h+'color:var(--ink);">Do it for me</div><div style="'+p+'">Send us your menu photos and we’ll build it for you — live within 2 working days.</div></button>'
+    + '</div>';
+}
+function dfyBuildingBannerHTML(mb){
+  const by=fmtDate(mb&&mb.liveBy);
+  const nPhotos=(mb&&Array.isArray(mb.photos))?mb.photos.length:0;
+  return '<div id="setup-menu-slot" style="margin-top:14px;border:1px solid var(--accent);background:var(--accent-tint);border-radius:13px;padding:16px;">'
+    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:17px;color:var(--accent);margin-bottom:5px;">We’re building your menu'+(by?(' — live by '+esc(by)):'')+'</div>'
+    + '<div style="font-size:12.5px;color:var(--muted);line-height:1.5;">Our team is turning your photos into your live ordering menu. We’ll email you the moment it’s ready.'+(nPhotos?(' ('+nPhotos+' photo'+(nPhotos===1?'':'s')+' received)'):'')+'</div>'
+    + '</div>';
+}
+/* DFY intake form (modal overlay, mirrors the Import/Add-dish sheets). */
+function dfyFormHTML(){
+  const inp="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;box-sizing:border-box;";
+  const lbl="display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px;";
+  const preVenue=esc((state.cafe&&state.cafe.name)||cfg().name||'');
+  return '<div style="position:fixed;inset:0;z-index:52;display:flex;align-items:center;justify-content:center;padding:20px;">'
+    + '<div data-act="closeDfy" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
+    + '<div style="position:relative;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">We’ll build it for you</div><button data-act="closeDfy" style="background:none;border:none;font-size:22px;line-height:1;color:var(--muted2);cursor:pointer;">×</button></div>'
+    + '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:6px;">Send clear photos of your menu plus a few details and we’ll build your live ordering menu — usually within 2 working days. We’ll email you when it’s ready.</div>'
+    + '<label style="'+lbl+'">Venue name</label><input id="dfy-venue" maxlength="120" value="'+preVenue+'" placeholder="Your café / restaurant" style="'+inp+'">'
+    + '<label style="'+lbl+'">Cuisine</label><input id="dfy-cuisine" maxlength="80" placeholder="e.g. Italian, brunch, coffee" style="'+inp+'">'
+    + '<label style="'+lbl+'">Menu photos (up to 8)</label><input id="dfy-photos" type="file" accept="image/*" multiple style="'+inp+'padding:9px 13px;">'
+    + '<label style="'+lbl+'">Notes (optional)</label><textarea id="dfy-notes" maxlength="2000" placeholder="Anything we should know — sizes, dietary tags, sections to skip…" style="'+inp+'height:80px;resize:vertical;"></textarea>'
+    + '<div id="dfy-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:var(--muted);">'+esc(state.dfyMsg||'')+'</div>'
+    + '<button id="dfy-submit" data-act="submitDfy" style="width:100%;margin-top:6px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Send to our team</button>'
+    + '</div></div>';
+}
+function setDfyMsg(m){ state.dfyMsg=m; const el=document.getElementById('dfy-msg'); if(el) el.textContent=m; }
+/* DIY AI accelerator: reuse the photo-to-menu extractor (POST /menu/extract), then
+   create any missing categories + import the drafted items. */
+function photoMenuHTML(){
+  const inp="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;box-sizing:border-box;";
+  return '<div style="position:fixed;inset:0;z-index:52;display:flex;align-items:center;justify-content:center;padding:20px;">'
+    + '<div data-act="closePhotoMenu" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
+    + '<div style="position:relative;width:100%;max-width:440px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">Photo → menu</div><button data-act="closePhotoMenu" style="background:none;border:none;font-size:22px;line-height:1;color:var(--muted2);cursor:pointer;">×</button></div>'
+    + '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:12px;">Upload a clear photo or PDF of your paper menu. We’ll read the dishes + prices and add them — then tweak anything with the live preview.</div>'
+    + '<input id="pm-file" type="file" accept="image/*,application/pdf" style="'+inp+'padding:9px 13px;">'
+    + '<div id="pm-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:var(--muted);"></div>'
+    + '<button id="pm-run" data-act="runPhotoMenu" style="width:100%;margin-top:8px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Read my menu</button>'
+    + '</div></div>';
+}
+function setPhotoMenuMsg(m){ const el=document.getElementById('pm-msg'); if(el) el.textContent=m; }
+async function chooseMenuDiy(){
+  try {
+    const d=await api('/me/menu-build',{ method:'PATCH', body:{ mode:'diy' } });
+    if(state.me) state.me.menuBuild = (d&&d.menuBuild) || { mode:'diy', status:'live' };
+  } catch(e){ /* non-fatal — still open the builder */ }
+  goScreen('menu');
+}
+function chooseMenuDfy(){ state.dfyOpen=true; state.dfyMsg=''; render(); }
+async function submitDfy(){
+  if(state.dfyBusy) return;
+  const venue=val('dfy-venue').trim();
+  if(!venue){ setDfyMsg('Enter your venue name.'); return; }
+  const cuisine=val('dfy-cuisine').trim();
+  const notes=val('dfy-notes').trim();
+  const fileEl=document.getElementById('dfy-photos');
+  const files=(fileEl&&fileEl.files)?Array.prototype.slice.call(fileEl.files,0,8):[];
+  state.dfyBusy=true; setDfyMsg('Sending your menu to our team…');
+  const btn=document.getElementById('dfy-submit'); if(btn) btn.disabled=true;
+  try {
+    const fd=new FormData();
+    fd.append('venue',venue); fd.append('cuisine',cuisine); fd.append('notes',notes);
+    files.forEach(function(f){ fd.append('photos',f); });
+    const r=await fetch('/me/menu-build/dfy',{ method:'POST', headers: SESSION?{ 'Authorization':'Bearer '+SESSION }:{}, body:fd });
+    const t=await r.text(); let j=null; try{ j=JSON.parse(t); }catch(e){}
+    if(!r.ok){ setDfyMsg((j&&j.error)||('Could not send ('+r.status+')')); state.dfyBusy=false; if(btn) btn.disabled=false; return; }
+    if(state.me) state.me.menuBuild = (j&&j.menuBuild) || { mode:'dfy', status:'building', liveBy: j&&j.liveBy };
+    state.dfyOpen=false; state.dfyBusy=false; state.dfyMsg='';
+    toast('Menu build requested — we’re on it','ok');
+    render();
+  } catch(e){ setDfyMsg(e.message||'Could not send'); state.dfyBusy=false; if(btn) btn.disabled=false; }
+}
+async function runPhotoMenuImport(){
+  const fileEl=document.getElementById('pm-file');
+  const file=fileEl&&fileEl.files&&fileEl.files[0];
+  if(!file){ setPhotoMenuMsg('Choose a photo or PDF of your menu first.'); return; }
+  const btn=document.getElementById('pm-run'); if(btn) btn.disabled=true;
+  setPhotoMenuMsg('Reading your menu…');
+  let cats;
+  try {
+    const fd=new FormData(); fd.append('file',file);
+    const r=await fetch('/menu/extract',{ method:'POST', headers: SESSION?{ 'Authorization':'Bearer '+SESSION }:{}, body:fd });
+    const t=await r.text(); let j=null; try{ j=JSON.parse(t); }catch(e){}
+    if(!r.ok){ setPhotoMenuMsg((j&&j.error)||('Couldn’t read that menu ('+r.status+')')); if(btn) btn.disabled=false; return; }
+    cats=(j&&j.categories)||[];
+  } catch(e){ setPhotoMenuMsg(e.message||'Upload failed'); if(btn) btn.disabled=false; return; }
+  if(!cats.length){ setPhotoMenuMsg('No dishes found — try a clearer photo, or add them by hand.'); if(btn) btn.disabled=false; return; }
+  const totalItems=cats.reduce(function(s,c){ return s+((c.items||[]).length); },0);
+  setPhotoMenuMsg('Adding '+totalItems+' dish'+(totalItems===1?'':'es')+'…');
+  try {
+    // Reuse an existing category (matched by label) or create it, then flatten into
+    // /menu/import rows. Import de-dupes by name + skips unknown categories, so a
+    // re-run is safe.
+    const existing={}; menuCategoriesOrdered().forEach(function(c){ if(!c.virtual) existing[String(c.label||'').trim().toLowerCase()]=c.key; });
+    const items=[];
+    for(const c of cats){
+      const title=String(c.title||'').trim(); if(!title) continue;
+      let slug=existing[title.toLowerCase()];
+      if(!slug){ try { const d=await api('/menu/categories',{ method:'POST', body:{ title:title } }); slug=d&&d.slug; if(slug) existing[title.toLowerCase()]=slug; } catch(e){ continue; } }
+      if(!slug) continue;
+      (c.items||[]).forEach(function(it){ if(it&&it.name) items.push({ categorySlug:slug, name:it.name, price:it.price, desc:it.desc }); });
+    }
+    let added=0;
+    for(let i=0;i<items.length;i+=50){ const chunk=items.slice(i,i+50); const d=await api('/menu/import',{ method:'POST', body:{ items:chunk } }); added+=((d&&d.added)||[]).length; }
+    state.photoMenuOpen=false;
+    await loadMenu();
+    toast('Added '+added+' dish'+(added===1?'':'es')+' from your photo', added?'ok':'info');
+    render();
+  } catch(e){ setPhotoMenuMsg(e.message||'Import failed'); if(btn) btn.disabled=false; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    ACTIONS
 ═══════════════════════════════════════════════════════════════════════════ */
 async function advance(orderId, next){
@@ -1727,22 +2118,24 @@ function menuDraftInit(it){
     imgRight: (it.imgRight!=null) ? String(it.imgRight) : null   // horizontal photo offset (CSS `right:`), null = untouched
   } : null;
 }
-function menuDraftSet(k,v){ if(_menuDraft) _menuDraft[k]=v; }
+function menuDraftSet(k,v){ if(_menuDraft) _menuDraft[k]=v; refreshPhonePreview(); }
 // Photo alignment slider — mirrors the customer card exactly (dish photo floats on the
 // right, positioned by CSS `right: imgRight`). Nudge the draft + move the preview live.
 function menuDraftImgRight(v){
   if(!_menuDraft) return;
   _menuDraft.imgRight = v + '%';
   const img=document.getElementById('ed-photo-img'); if(img) img.style.right = v + '%';
+  refreshPhonePreview();
 }
 function menuDraftImgRightNum(){ const d=_menuDraft; const n=(d && d.imgRight!=null)?parseFloat(d.imgRight):-22; return isNaN(n)?-22:n; }
-function menuDraftPrice(v){ if(_menuDraft) _menuDraft.price = (v===''?0:Number(v)); }
-function menuDraftSize(k,v){ if(_menuDraft && _menuDraft.sizes) _menuDraft.sizes[k] = (v===''?0:Number(v)); }
+function menuDraftPrice(v){ if(_menuDraft) _menuDraft.price = (v===''?0:Number(v)); refreshPhonePreview(); }
+function menuDraftSize(k,v){ if(_menuDraft && _menuDraft.sizes) _menuDraft.sizes[k] = (v===''?0:Number(v)); refreshPhonePreview(); }
 // +/− stepper for single-price items — nudges the draft and reflects it in the field.
 function bump(d){
   if(!_menuDraft || _menuDraft.price==null) return;
   _menuDraft.price = Math.max(0, Math.round((Number(_menuDraft.price)+d)*100)/100);
   const el=document.getElementById('ed-price'); if(el) el.value=_menuDraft.price.toFixed(2);
+  refreshPhonePreview();
 }
 // 86 is a decisive, immediate action — PATCH it right away so the customer menu
 // reflects it now (no "looks 86'd but isn't" trap), and revert the toggle on failure.
@@ -2043,6 +2436,8 @@ function feeQuick(n){
   if(n==='ytd'){ from=new Date(now.getFullYear(),0,1); }
   else if(n==='all'){
     var earliest=(state.orders||[]).reduce(function(min,o){ var t=new Date(o.createdAt).getTime(); return isNaN(t)?min:Math.min(min,t); }, Infinity);
+    var am=archIdx(); // archived months predate the live window
+    if(am.length){ var pp=String(am[0].month).split('-'); var at=new Date(Number(pp[0]),Number(pp[1])-1,1).getTime(); if(!isNaN(at)) earliest=Math.min(earliest,at); }
     from=isFinite(earliest)?new Date(earliest):new Date(now.getFullYear(),now.getMonth()-5,1);
   } else { var k=Number(n)||6; from=new Date(now.getFullYear(),now.getMonth()-(k-1),1); }
   state.fee={ from:rIsoDate(from), to:rIsoDate(to), quick:n }; render();
@@ -2110,7 +2505,7 @@ async function poll(){
   // field: a full render() destroys the focused input and eats the typing.
   const ae=document.activeElement;
   const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
-  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
+  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.dfyOpen||state.photoMenuOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
   if(A==='kitchen') refreshKitchenInPlace();
   // Dashboard/billing do a full render() on the background poll, which rebuilds
   // .app-body from scratch (scrollTop → 0). Even with scrollTop restored the
@@ -2178,9 +2573,46 @@ function handle(act, ds, ev){
     case 'updateAccount': updateAccount(); break;
     case 'savePrinters': savePrinters(); break;
     case 'testStation': testStation(ds.key); break;
+    case 'billingManage': billingManage(); break;
+    case 'openTableQr': openTableQr(); break;
+    case 'openCustomerLink': openCustomerLink(ds.extra||''); break;
+    case 'menuSetup': menuSetup(); break;
+    case 'chooseMenuDiy': chooseMenuDiy(); break;
+    case 'chooseMenuDfy': chooseMenuDfy(); break;
+    case 'closeDfy': state.dfyOpen=false; state.dfyMsg=''; render(); break;
+    case 'submitDfy': submitDfy(); break;
+    case 'openPhotoMenu': state.photoMenuOpen=true; render(); break;
+    case 'closePhotoMenu': state.photoMenuOpen=false; render(); break;
+    case 'runPhotoMenu': runPhotoMenuImport(); break;
+    case 'togglePreview': state.previewOpen=!state.previewOpen; render(); break;
     case 'signOut': logout(); break;
   }
 }
+/* ── Plan 2 setup-home actions ── */
+async function billingManage(){
+  try {
+    const d = await api('/me/billing-portal', { method:'POST' });
+    if(d && d.url){ window.location = d.url; }
+    else if(d && d.upgradeUrl){ window.location = d.upgradeUrl; }
+    else toast('Billing is unavailable right now.','err');
+  } catch(e){ toast(e.message||'Could not open billing.','err'); }
+}
+function openTableQr(){
+  const n = Math.max(1, Math.min(200, parseInt(val('qr-tables'),10)||12));
+  // /qr-pack is requireStaff; the new tab can't send an Authorization header, so
+  // pass the session as ?token= (getReqToken reads it). Returns a printable page.
+  window.open('/qr-pack?token='+enc(SESSION)+'&tables='+n, '_blank');
+  markQrViewed(); if(state.active==='setup') render();
+}
+function openCustomerLink(extra){
+  const base = (state.me && state.me.cafe && state.me.cafe.customerUrl) || '';
+  if(!base){ toast('Customer link unavailable.','err'); return; }
+  window.open(base + (extra||''), '_blank');   // customerUrl already carries ?r=slug
+  markQrViewed(); if(state.active==='setup') render();
+}
+// PLAN 3 replaces this: mount the setup-path chooser on the step-1 slot. Until then
+// the button routes to the existing Menu editor so the step is never a dead end.
+function menuSetup(){ goScreen('menu'); }
 async function doLoginFromForm(){
   if(_loginBusy) return; _loginBusy=true;
   const lg=val('li-login').trim(), pw=val('li-pass');
