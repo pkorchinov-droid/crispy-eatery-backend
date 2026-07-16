@@ -12,8 +12,56 @@ const path = require("path");
 const crypto = require("crypto");
 const { Resend } = require("resend");
 const QRCode = require("qrcode");
+// Time-of-day menu availability (lunch/dinner auto-switch). Loaded defensively so
+// that if this file is ever missing from a deploy, the server still boots and
+// simply serves every category (filtering disabled) instead of crash-looping.
+let filterMenuByTime;
+try { ({ filterMenuByTime } = require("./menu-availability")); }
+catch (e) { console.warn("[menu] availability module unavailable — time filtering disabled:", e && e.message); filterMenuByTime = (menu) => menu; }
+
+// Promo-code discounts — per-tenant codes (config.promos), each %/$-off the
+// whole order, a category, an item, or the legacy honeycake. Same defensive
+// load as above: if the module is missing/broken, promo codes are simply
+// disabled rather than crash-looping the server.
+let computePromoDiscount, normalizePromos, LEGACY_KATYUSHA;
+try { ({ computePromoDiscount, normalizePromos, LEGACY_KATYUSHA } = require("./promo")); }
+catch (e) { console.warn("[promo] module unavailable — promo codes disabled:", e && e.message); computePromoDiscount = () => null; normalizePromos = (l) => (Array.isArray(l) ? l : []); LEGACY_KATYUSHA = null; }
+
+// Loyalty program (stamp card + frequent-customer standing discount). Same
+// defensive load: a missing/broken module disables loyalty rather than crash-looping.
+let computeRewardDiscount, computeFrequentDiscount, loyaltyConfig, loyaltyEnabled, itemsSubtotal, frequentPercent, earnStamp;
+try {
+  ({ computeRewardDiscount, computeFrequentDiscount, loyaltyConfig, loyaltyEnabled, itemsSubtotal, frequentPercent, earnStamp } = require("./loyalty"));
+} catch (e) {
+  console.warn("[loyalty] module unavailable — loyalty disabled:", e && e.message);
+  computeRewardDiscount = () => null; computeFrequentDiscount = () => null;
+  loyaltyConfig = (c) => ((c && c.loyalty) || {}); loyaltyEnabled = () => false;
+  itemsSubtotal = () => 0; frequentPercent = () => 0; earnStamp = (l) => l;
+}
+// resolveMenuItem is reused for the reward-item name lookup in GET /menu.
+let resolveMenuItem;
+try { ({ resolveMenuItem } = require("./promo")); } catch { resolveMenuItem = () => null; }
+
+// Breakfast meal deal — a time-gated, auto-applied promo (config.mealDeal): a
+// qualifying meal before the daily cutoff unlocks one eligible drink for $1.
+// Same defensive load — a missing/broken module disables the deal, never 500s.
+let computeMealDeal, mealDealActive, normalizeMealDeal;
+try { ({ computeMealDeal, mealDealActive, normalizeMealDeal } = require("./mealdeal")); }
+catch (e) { console.warn("[mealdeal] module unavailable — meal deal disabled:", e && e.message); computeMealDeal = () => null; mealDealActive = () => false; normalizeMealDeal = () => { throw new Error("Meal deal unavailable."); }; }
+
+// Pricing/fees normaliser (config.developerFee + config.surcharge/default) for the
+// owner Settings editor. Defensive load — a missing module disables PATCH /me/pricing.
+let normalizePricing;
+try { ({ normalizePricing } = require("./pricing")); }
+catch (e) { console.warn("[pricing] module unavailable — pricing editor disabled:", e && e.message); normalizePricing = () => { throw new Error("Pricing editor unavailable."); }; }
+
+const compression = require("compression");
 
 const app = express();
+// gzip every compressible response. The console polls the full order history
+// every 6 seconds; uncompressed, that JSON payload grows with the data set and
+// repetitive order objects compress ~10x.
+app.use(compression());
 const PORT = process.env.PORT || 3001;
 const STAFF_TOKEN = process.env.STAFF_TOKEN || "";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || ""; // comma-separated allowlist; empty = same-origin only
@@ -51,6 +99,8 @@ try {
 } catch (e) {
   console.warn("[pay] Stripe SDK unavailable:", e && e.message);
 }
+const { isActive: billingIsActive } = require("./entitlement");
+const { planSpec, buildBilling } = require("./billing");
 
 // ── Self-serve onboarding (Phase 1) ────────────────────────
 // Public signup + magic-link sign-in + photo-to-menu import. ANTHROPIC_API_KEY
@@ -66,6 +116,7 @@ const AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "IT Logistics <login@eate
 const BILL_EMAIL_FROM = process.env.BILL_EMAIL_FROM || "IT Logistics <bills@eatery.crispycatering.com>";
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://crispy-eatery-backend-1.onrender.com";
 const OWNER_CUSTOMER_ORIGIN = process.env.OWNER_CUSTOMER_ORIGIN || "https://sparkling-lokum-4e28b8.netlify.app";
+const STOREFRONT_URL = process.env.STOREFRONT_URL || "https://itlogisticsnz.com";
 const MENU_IMPORT_MODEL = process.env.MENU_IMPORT_MODEL || "claude-sonnet-4-6";
 
 // Secret for signing magic-link tokens. Prefer an explicit AUTH_SECRET; else
@@ -319,6 +370,61 @@ const jsonStd = express.json({ limit: "64kb" });
 const jsonSignup = express.json({ limit: "512kb" });
 app.use((req, res, next) => (req.path === "/signup" ? jsonSignup : jsonStd)(req, res, next));
 
+// Stripe webhook (billing/checkout) — RAW body required for signature
+// verification, so this route is registered here, above the global JSON
+// parser selector (Express 5 consumes the body stream in the first matching
+// body parser). req.body is already a raw Buffer by the time this runs, via
+// the app.use("/webhooks", express.raw(...)) mounted just above; the
+// route-level express.raw() below is a no-op in that case (body-parser skips
+// re-parsing once req._body is set) and is kept only for defensiveness.
+// NOTE: this literal path is registered BEFORE the generic
+// app.post("/webhooks/:provider", ...) handler further down (used for the
+// coffee "skip the queue" PSP payment-confirmation webhook), so it takes
+// precedence for exactly "/webhooks/stripe". If that coffee-prepay Stripe
+// webhook (WEBHOOK_SECRET_STRIPE) is ever pointed at the SAME URL in Stripe's
+// dashboard, its events would be swallowed here instead — give it a distinct
+// webhook path/URL in Stripe when wiring that flow up.
+app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!stripeClient || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).end();
+  let event;
+  try {
+    event = stripeClient.webhooks.constructEvent(
+      req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (e) {
+    console.warn("[webhook] bad signature:", e && e.message);
+    return res.status(400).send("bad signature");
+  }
+  if (stripeEventSeen(event.id)) return res.json({ received: true, duplicate: true });
+  // Reserve the event id SYNCHRONOUSLY, before any await, so a concurrent
+  // duplicate delivery of the SAME event (Stripe retries / at-least-once
+  // delivery can overlap) sees it as seen and returns early instead of
+  // double-processing. Since checkout.session.completed carries one event.id
+  // per session, this also prevents a concurrent double-provision. On error we
+  // release it below so Stripe's later retry reprocesses. markStripeEvent()
+  // then persists the (already-present) id to disk on success.
+  seenStripeEvents.add(event.id);
+  try {
+    if (event.type === "checkout.session.completed") {
+      await provisionFromSession(event.data.object);
+    } else if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted" ||
+      event.type === "invoice.payment_failed"
+    ) {
+      syncSubscriptionStatus(event);
+    }
+    markStripeEvent(event.id);
+    return res.json({ received: true });
+  } catch (e) {
+    // Release the reservation so Stripe's retry reprocesses this event
+    // (createTenant is also idempotent on session id via findTenantByCheckoutSession).
+    seenStripeEvents.delete(event.id);
+    console.error("[webhook] handler error:", (e && e.stack) || e);
+    return res.status(500).end();
+  }
+});
+
 // ── Security headers (lightweight, dependency-free) ────────
 // Render and most hosts terminate TLS upstream; trust the first proxy hop so
 // req.ip reflects the real client (X-Forwarded-For). This is required for
@@ -364,8 +470,11 @@ function rateRule(req) {
   if (m === "POST" && /^\/groups\/[^/]+\/join$/.test(p)) return ["gjoin", 30];
   if (m === "GET" && /^\/groups\/[^/]+$/.test(p)) return ["gget", 40];
   if (m === "GET" && /^\/orders\/by-table\//.test(p)) return ["bytable", 90];
+  if (m === "GET" && p === "/buy/checkout") return ["buycheckout", 20];
   if (m === "POST" && p === "/signup") return ["signup", 5];
   if (m === "POST" && p === "/auth/request-link") return ["authlink", 5];
+  if (m === "POST" && p === "/loyalty/request-link") return ["loyaltylink", 5];
+  if (m === "POST" && p === "/auth/login") return ["authlogin", 10];
   if (m === "POST" && p === "/menu/extract") return ["extract", 5];
   return null;
 }
@@ -504,6 +613,7 @@ function tenantStore(slug) {
   const menuFile = path.join(dir, "menu.json");
   const groupsFile = path.join(dir, "groups.json");
   const customersFile = path.join(dir, "customers.json");
+  const loyaltySessionsFile = path.join(dir, "loyalty-sessions.json");
   return {
     slug,
     loadOrders() { const a = readJson(ordersFile, []); return Array.isArray(a) ? a : []; },
@@ -536,7 +646,18 @@ function tenantStore(slug) {
     persistGroups(groups) { writeJson(groupsFile, groups); return mirrorToSupabase(tKey(slug, "groups"), groups); },
     loadCustomers() { const a = readJson(customersFile, []); return Array.isArray(a) ? a : []; },
     persistCustomers(customers) { writeJson(customersFile, customers); return mirrorToSupabase(tKey(slug, "customers"), customers); },
+    loadLoyaltySessions() { const o = readJson(loyaltySessionsFile, {}); return (o && typeof o === "object" && !Array.isArray(o)) ? o : {}; },
+    persistLoyaltySessions(sessions) { writeJson(loyaltySessionsFile, sessions); return mirrorToSupabase(tKey(slug, "loyalty-sessions"), sessions); },
   };
+}
+
+// Drop expired customer loyalty sessions in place (called before any write).
+function pruneLoyaltySessions(sessions) {
+  const now = Date.now();
+  for (const k of Object.keys(sessions)) {
+    if (!sessions[k] || !(sessions[k].exp > now)) delete sessions[k];
+  }
+  return sessions;
 }
 
 // ── Tenant registry ────────────────────────────────────────
@@ -570,6 +691,8 @@ function baseConfig() {
     emailFrom: "",        // "Name <addr@domain>"; empty → generic platform sender
     surcharge: {},        // category slug → dollars added on the online menu
     surchargeDefault: 0,  // applied to categories not in the map
+    developerFee: 0,      // flat fee (dollars) added once to every order's total
+    developerFeeLabel: "Developer fee", // label shown at checkout + on the receipt
     drinkCategories: [],  // category slugs routed to the barista + eligible for drink pickup
     dessertCategory: "",  // category slug for the dessert-upsell nudge ("" → no nudge)
     i18n: {},             // { enabled, languages:[{code,label}], dictionary:{code:{key:val}} }
@@ -597,6 +720,33 @@ function mergeConfig(stored) {
 }
 const TENANTS = new Map(); // slug → { slug, name, config, staffTokenHash, createdAt }
 function hashToken(tok) { return crypto.createHash("sha256").update(String(tok)).digest("hex"); }
+// Password hashing for ops-console accounts. scrypt is built into Node (no native
+// dep like bcrypt → safe on Render). Returns {salt, hash}; verify is constant-time.
+function hashPassword(password, salt) {
+  salt = salt || crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return { salt, hash };
+}
+function verifyPassword(password, salt, hash) {
+  if (!salt || !hash) return false;
+  try {
+    const h = crypto.scryptSync(String(password), salt, 64);
+    const stored = Buffer.from(String(hash), "hex");
+    return h.length === stored.length && crypto.timingSafeEqual(h, stored);
+  } catch (e) { return false; }
+}
+// Console account lookup (keyed by lowercased login).
+function getAccount(login) {
+  const k = String(login == null ? "" : login).trim().toLowerCase();
+  return k ? AUTH.accounts[k] : null;
+}
+// Resolve the console account behind an owner session (session.email = "acct:<login>").
+function accountFromReq(req) {
+  const s = sessionFromToken(getReqToken(req));
+  if (!s || typeof s.email !== "string" || !s.email.startsWith("acct:")) return null;
+  return getAccount(s.email.slice(5));
+}
+const LOGIN_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/i;
 function normalizeSlug(s) {
   // Slugify: spaces/underscores → hyphens, drop the rest, collapse/trim hyphens.
   // Idempotent (safe to apply on both write and lookup): "Joe's Diner" →
@@ -637,6 +787,14 @@ function persistTenants() {
 }
 function getTenant(slug) { return TENANTS.get(normalizeSlug(slug)) || null; }
 function allTenants() { return [...TENANTS.values()]; }
+// A tenant's promo codes. Explicit config.promos wins; otherwise the default
+// (Crispy) tenant falls back to the carried-over KATYUSHA until its owner first
+// saves a promo list in the console. Every other café starts empty.
+function promosForTenant(t) {
+  if (t && t.config && Array.isArray(t.config.promos)) return t.config.promos;
+  if (t && t.slug === DEFAULT_TENANT && LEGACY_KATYUSHA) return [LEGACY_KATYUSHA];
+  return [];
+}
 function saveTenant(rec) {
   rec.config = mergeConfig(rec.config);
   TENANTS.set(rec.slug, rec);
@@ -650,6 +808,31 @@ function findTenantByToken(token) {
   const h = hashToken(token);
   for (const t of TENANTS.values()) {
     if (t.staffTokenHash && safeEqual(h, t.staffTokenHash)) return t;
+  }
+  return null;
+}
+// ── Stripe webhook idempotency + subscription lookup ───────
+// Persist processed Stripe event ids so a retried webhook never double-provisions.
+const STRIPE_EVENTS_FILE = require("path").join(DATA_DIR, "stripe-events.json");
+const seenStripeEvents = new Set(readJson(STRIPE_EVENTS_FILE, []));
+function stripeEventSeen(id) { return seenStripeEvents.has(id); }
+function markStripeEvent(id) {
+  seenStripeEvents.add(id);
+  const arr = [...seenStripeEvents].slice(-500); // bound the file
+  seenStripeEvents.clear(); for (const x of arr) seenStripeEvents.add(x);
+  writeJson(STRIPE_EVENTS_FILE, arr);
+}
+function findTenantBySubscription(subId) {
+  if (!subId) return null;
+  for (const t of allTenants()) {
+    if (t.config && t.config.billing && t.config.billing.subscriptionId === subId) return t;
+  }
+  return null;
+}
+function findTenantByCheckoutSession(sessionId) {
+  if (!sessionId) return null;
+  for (const t of allTenants()) {
+    if (t.config && t.config.billing && t.config.billing.checkoutSessionId === sessionId) return t;
   }
   return null;
 }
@@ -675,6 +858,8 @@ const CRISPY_DEFAULTS = {
   printerStations: { food: "192.168.1.160", drinks: "192.168.1.76", expo: "192.168.1.210", receipt: "192.168.1.66" },
   surcharge: {},          // no per-dish online cut (owner removed it 2026-06-16; live tenant zeroed via PATCH /admin/tenants/crispy)
   surchargeDefault: 0,
+  developerFee: 2,        // flat $2 developer fee per order, disclosed at checkout (2026-06-16; live tenant set via PATCH /admin/tenants/crispy)
+  developerFeeLabel: "Developer fee",
   emailFrom: "Crispy Eatery <bills@eatery.crispycatering.com>",
   // Crispy keeps every bespoke flow it ships today; new tenants start with the clean core.
   features: { groups: true, preorder: true, printing: true, dessertNudge: true, drinksPreorder: true, i18n: true, collectibleReceipt: true, stationPrinting: true, poweredBy: true },
@@ -713,8 +898,17 @@ function backfillDefaultTenantConfig() {
   // would never deliberately pick the exact platform slate).
   if (c.themeColor === PLATFORM_DEFAULT_THEME) { c.themeColor = CRISPY_DEFAULTS.themeColor; changed = true; }
   // Bespoke flows Crispy already runs: enable unless explicitly turned off.
+  // (=== undefined, NOT !== true — an owner's explicit `false` must survive a
+  // restart instead of being flipped back on every boot.)
   for (const f of ["dessertNudge", "drinksPreorder", "i18n", "collectibleReceipt", "stationPrinting"]) {
-    if (c.features[f] !== true) { c.features[f] = true; changed = true; }
+    if (c.features[f] === undefined) { c.features[f] = true; changed = true; }
+  }
+  // Loyalty: feature on; FC track live now (+1%/visit, cap 15%); stamp track
+  // stays inactive until the owner picks a reward item in settings.
+  if (c.features.loyalty === undefined) { c.features.loyalty = true; changed = true; }
+  if (!c.loyalty || typeof c.loyalty !== "object") {
+    c.loyalty = { stampsNeeded: 10, rewardItemId: null, minOrder: 0, frequent: { enabled: true, percentPerVisit: 1, maxPercent: 15 } };
+    changed = true;
   }
   if (changed) {
     saveTenant(t);
@@ -732,7 +926,10 @@ function backfillDefaultTenantConfig() {
 //   owners[email]   = { email, name, tenants:[slug], createdAt, lastLoginAt }
 //   sessions[hash]  = { email, slug, exp }   (hash = sha256 of the session token)
 //   usedMagic[jti]  = exp                     (single-use magic-link guard)
-const AUTH = { owners: {}, sessions: {}, usedMagic: {} };
+//   accounts[login] = { login, name, passwordHash, salt, tenants:[slug], ... }
+//        login+password sign-in for the ops console (keyed by lowercased login).
+//        Parallel to magic-link owners; its session.email is "acct:<login>".
+const AUTH = { owners: {}, sessions: {}, usedMagic: {}, accounts: {} };
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 function pruneAuth() {
   const now = Date.now();
@@ -749,6 +946,7 @@ function loadAuthIntoCache() {
   AUTH.owners = obj.owners || {};
   AUTH.sessions = obj.sessions || {};
   AUTH.usedMagic = obj.usedMagic || {};
+  AUTH.accounts = obj.accounts || {};
   pruneAuth();
 }
 function persistAuth() {
@@ -806,6 +1004,70 @@ function deleteSession(tok) {
   delete AUTH.sessions[hashToken(tok)];
   persistAuth();
 }
+
+// ── Customer (loyalty) magic-link auth — per-tenant, disjoint from owner auth ──
+// Token payload { e:email, t:slug, exp, j }; the HMAC is computed over "cust."+p
+// so it can never be verified as an owner token (and vice-versa). 15-min, single-use.
+function signCustomerToken(email, slug) {
+  if (!authSecret()) return null;
+  const payload = { e: email, t: slug, exp: Date.now() + 900000, j: crypto.randomBytes(9).toString("hex") };
+  const p = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  const sig = b64url(crypto.createHmac("sha256", authSecret()).update("cust." + p).digest());
+  return p + "." + sig;
+}
+function verifyCustomerToken(tok) {
+  try {
+    if (!authSecret()) return null;
+    const parts = String(tok || "").split(".");
+    if (parts.length !== 2) return null;
+    const [p, sig] = parts;
+    const want = b64url(crypto.createHmac("sha256", authSecret()).update("cust." + p).digest());
+    if (!safeEqual(sig, want)) return null;
+    const payload = JSON.parse(Buffer.from(p.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    if (!payload || typeof payload.exp !== "number" || payload.exp <= Date.now()) return null;
+    if (!payload.e || !payload.t) return null;
+    if (AUTH.usedMagic[payload.j]) return null;             // single-use (shared guard)
+    return { email: String(payload.e), slug: String(payload.t), jti: payload.j, exp: payload.exp };
+  } catch { return null; }
+}
+function buildCustomerMagicLink(email, slug) {
+  const t = signCustomerToken(email, slug);
+  return t ? PUBLIC_BASE_URL + "/loyalty/verify?token=" + encodeURIComponent(t) : null;
+}
+// Resolve the loyalty Bearer/?token to { email } for the request's tenant, or null.
+function customerFromReq(req) {
+  if (!req.store) return null;
+  const tok = getReqToken(req);
+  if (!tok) return null;
+  const rec = req.store.loadLoyaltySessions()[hashToken(tok)];
+  return (rec && rec.exp > Date.now()) ? { email: rec.email } : null;
+}
+function requireCustomer(req, res, next) {
+  const c = customerFromReq(req);
+  if (!c) return res.status(401).json({ error: "Please sign in to your loyalty account" });
+  req.customer = c;
+  next();
+}
+// Add the session hash for a freshly-minted token to a tenant's session store
+// (mutates `sessions` in place). The raw token is generated by the caller so it
+// can be returned in the response BEFORE the (locked) write lands.
+function addLoyaltySession(sessions, token, email) {
+  sessions[hashToken(token)] = { email, exp: Date.now() + 2592000000 };
+  return sessions;
+}
+// Find or create a per-tenant customer ACCOUNT by lowercased email, initializing
+// the loyalty counters. Reuses an existing customer record if one exists (e.g.
+// from the email-bill CRM) so history carries over.
+function upsertCustomerAccount(customers, email) {
+  email = String(email || "").toLowerCase();   // self-defending: never create dup records on case
+  const now = new Date().toISOString();
+  let c = customers.find((x) => x.email === email);
+  if (!c) { c = { email, firstVisit: now, lastVisit: now, visits: 0, totalSpent: 0, orders: [] }; customers.push(c); }
+  if (!c.loyalty) c.loyalty = { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+  if (!c.account) c.account = { createdAt: now, lastLoginAt: now };
+  else c.account.lastLoginAt = now;
+  return c;
+}
 // Resolve a token to a tenant: a tenant STAFF token first (existing behaviour),
 // else an owner SESSION token scoped to that owner's café. This is what lets an
 // owner session act as staff for ONLY its own tenant.
@@ -849,6 +1111,92 @@ async function sendMagicEmail(email, kind) {
   }
 }
 
+// The "package" email: a magic sign-in link into /console + the setup guide.
+// (The printable QR pack lives inside the console — added in Plan 2.)
+async function sendPackageEmail(email) {
+  if (!resend) return;
+  const link = buildMagicLink(email);
+  const text = [
+    "Your venue is set up and ready. Sign in to your console with the link below:",
+    "",
+    link,
+    "",
+    "Inside the console you can build your menu (or send us photos to build it for you),",
+    "print your QR codes, and manage your subscription.",
+    "",
+    "Setup guide: " + STOREFRONT_URL + "/guide",
+    "",
+    "This link works once and expires in 15 minutes; request a fresh one anytime from the sign-in page.",
+  ].join("\n");
+  try {
+    await resend.emails.send({ from: AUTH_EMAIL_FROM, to: [email], subject: "Welcome — your QR ordering is ready", text });
+    console.log(`[buy] package email sent → ${maskPII(email)}`);
+  } catch (e) {
+    console.error(`[buy] package email failed for ${maskPII(email)}:`, e && e.message);
+  }
+}
+
+function venueNameFromSession(session) {
+  const cf = (session && session.custom_fields) || [];
+  const f = cf.find((x) => x && x.key === "venue_name");
+  return (f && f.text && f.text.value && sanitizeString(f.text.value, 80)) || "";
+}
+
+// Provision a paid tenant from a completed Checkout Session. Idempotent on the
+// session id. Mirrors POST /signup (createTenant → AUTH.owners → welcome email)
+// but stamps a billing block + menuBuild.status:'choosing' (drives the Plan-2
+// setup chooser). NEW paid tenants only — never touches existing tenants.
+async function provisionFromSession(session) {
+  const plan = session && session.metadata && session.metadata.plan;
+  const spec = planSpec(plan);
+  if (!spec) throw new Error("checkout session has no valid plan metadata");
+  if (findTenantByCheckoutSession(session.id)) return; // already provisioned
+  const email = String(
+    (session.customer_details && session.customer_details.email) || session.customer_email || ""
+  ).trim().toLowerCase();
+  const venueName = venueNameFromSession(session) || (email ? email.split("@")[0] : "My venue");
+  const billing = buildBilling({
+    plan,
+    customerId: session.customer || null,
+    subscriptionId: session.subscription || null,
+    status: "active",
+  });
+  billing.checkoutSessionId = session.id;
+  const { slug } = await createTenant({
+    name: venueName,
+    onConflict: "suffix",
+    ownerEmail: email || undefined,
+    features: { poweredBy: true },
+    billing,
+    menuBuild: { mode: null, status: "choosing" },
+  });
+  // Open (or extend) the owner account so the magic link signs them into THIS café.
+  if (email && EMAIL_RE.test(email)) {
+    if (AUTH.owners[email]) {
+      if (!AUTH.owners[email].tenants.includes(slug)) AUTH.owners[email].tenants.push(slug);
+    } else {
+      AUTH.owners[email] = { email, name: venueName, tenants: [slug], createdAt: new Date().toISOString(), lastLoginAt: null };
+    }
+    persistAuth();
+    await sendPackageEmail(email);
+  }
+  console.log(`[buy] provisioned paid café '${slug}' plan=${plan}`);
+}
+
+// Reflect a subscription's Stripe status onto its tenant (hard-cut on non-active).
+function syncSubscriptionStatus(event) {
+  const obj = event.data && event.data.object;
+  let subId = null, status = null;
+  if (event.type === "invoice.payment_failed") { subId = obj.subscription; status = "past_due"; }
+  else if (event.type === "customer.subscription.deleted") { subId = obj.id; status = "canceled"; }
+  else { subId = obj.id; status = obj.status; } // customer.subscription.updated
+  const t = findTenantBySubscription(subId);
+  if (!t) return;
+  t.config.billing = Object.assign({}, t.config.billing, { status });
+  saveTenant(t);
+  console.log(`[buy] subscription ${subId} → status=${status} (tenant ${t.slug})`);
+}
+
 // ── Shared provisioning helper ─────────────────────────────
 // Used by BOTH POST /admin/tenants and POST /signup so the slug-derivation,
 // token minting, tenant save and menu seeding live in one place. onConflict:
@@ -859,25 +1207,35 @@ async function sendMagicEmail(email, kind) {
 // (e.g. { ...configOverridesFromBody(b), name, slug, … }); the rest pattern
 // gathers them back into configOverrides, alongside an explicit configOverrides
 // key if one is passed directly.
-function createTenant({ name, slug, menu, categories, onConflict, configOverrides, ...rest }) {
+async function createTenant({ name, slug, menu, categories, onConflict, configOverrides, ...rest }) {
   configOverrides = Object.assign({}, rest, configOverrides || {});
   let s = normalizeSlug(slug || name);
   if (!s) { const e = new Error("A slug or name is required"); e.status = 400; throw e; }
-  if (getTenant(s)) {
-    if (onConflict === "suffix") {
-      let n = 2;
-      let cand = normalizeSlug(s + "-" + n);
-      while (getTenant(cand)) { n += 1; cand = normalizeSlug(s + "-" + n); }
-      s = cand;
-    } else {
-      const e = new Error("A restaurant with that slug already exists: " + s);
-      e.status = 409;
-      throw e;
-    }
-  }
   const cfg = mergeConfig(Object.assign({}, configOverrides || {}, { name }));
   const staffToken = crypto.randomBytes(24).toString("hex");
-  withWriteLock(() => {
+  // The conflict check, suffixing and save all run INSIDE the write lock, so two
+  // concurrent signups with the same name can't both pass the check and have the
+  // second silently overwrite the first tenant's record.
+  await withWriteLock(() => {
+    if (getTenant(s)) {
+      if (onConflict === "suffix") {
+        // Truncate the base FIRST so "-n" always survives normalizeSlug's 40-char
+        // cap — appending before the cap used to re-truncate the suffix away and
+        // spin forever on a 39/40-char base slug.
+        let n = 2;
+        let cand;
+        do {
+          const suffix = "-" + n;
+          cand = normalizeSlug(s.slice(0, 40 - suffix.length) + suffix);
+          n += 1;
+        } while (getTenant(cand));
+        s = cand;
+      } else {
+        const e = new Error("A restaurant with that slug already exists: " + s);
+        e.status = 409;
+        throw e;
+      }
+    }
     saveTenant({ slug: s, name, config: cfg, staffTokenHash: hashToken(staffToken), createdAt: new Date().toISOString() });
     // Seed the menu exactly as POST /admin/tenants does: a full supplied menu,
     // else a skeleton from a category list, else empty.
@@ -1144,20 +1502,26 @@ function findMenuItem(menu, line) {
 // Returns an error string on violation, or null if all items are acceptable.
 // When the menu is empty (not yet loaded) validation is skipped so we never
 // hard-fail ordering on a cold/missing menu.
-function priceViolation(items, menu) {
+function priceViolation(items, menu, opts) {
+  opts = opts || {};
   if (!menu || !(menu.categoryOrder || []).length) return null;
   for (const it of items) {
     const mi = findMenuItem(menu, it);
     if (!mi) {
       // A client that supplied an id we can't resolve is suspicious — reject.
       // Lines without an id (legacy /add-items) are left alone to avoid breaking
-      // the shared-tab flow on a renamed/removed dish.
+      // the shared-tab flow on a renamed/removed dish; primary entry points pass
+      // requireResolvable so a made-up item name can't be injected at any price.
       if (it.id) return `Unknown menu item: ${it.name || it.id}`;
+      if (opts.requireResolvable) return `Unknown menu item: ${it.name || "?"}`;
       continue;
     }
-    const min = itemMinPrice(mi);
-    if (min != null && it.price < min - 0.01) {
-      return `Price too low for "${mi.name}" (minimum $${min.toFixed(2)})`;
+    // Floor at the CHOSEN size's price when the line names a real size — the
+    // min-across-sizes floor let a Large be ordered at the Small price.
+    let floor = itemMinPrice(mi);
+    if (it.size && mi.sizes && typeof mi.sizes[it.size] === "number") floor = mi.sizes[it.size];
+    if (floor != null && it.price < floor - 0.01) {
+      return `Price too low for "${mi.name}" (minimum $${floor.toFixed(2)})`;
     }
   }
   return null;
@@ -1285,12 +1649,21 @@ app.get("/tenant/:slug", (req, res) => {
 // for the platform token and uses it for the API calls below).
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin-console.html")));
 
-// The public self-serve owner console — the signup + sign-in + post-login home
-// screen. Served by the backend itself (same-origin) so the owner-session calls
-// to /me, /dashboard, /qr-pack, /menu/extract need no extra CORS entries. /start
-// is the marketing-friendly alias; /owner is where /auth/verify lands.
-app.get("/start", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
+// The public self-serve owner console — the sign-in + post-login home screen.
+// Served by the backend itself (same-origin) so the owner-session calls to
+// /me, /dashboard, /qr-pack, /menu/extract need no extra CORS entries.
+// /owner is where /auth/verify lands. The free /start signup wizard is retired
+// (billing spine, plan 1 of 4) — /start now points buyers at the storefront's
+// paid plans instead. Route kept registered so old links/QR codes 302 rather
+// than 404.
+app.get("/start", (req, res) => res.redirect(302, STOREFRONT_URL + "#pricing"));
 app.get("/owner", (_req, res) => res.sendFile(path.join(__dirname, "public", "owner-console.html")));
+
+// The unified staff/back-office Operations Console (Dashboard, Kitchen KDS, Reports,
+// Menu admin, Billing) behind one login. Self-contained static page; mock data for now,
+// wired to /auth + /orders + /menu + billing in a later pass. Lives alongside the legacy
+// admin pages. Spec: docs/superpowers/specs/2026-06-18-crispy-ops-console-design.md
+app.get("/console", (_req, res) => res.sendFile(path.join(__dirname, "public", "console.html")));
 
 // Admin view of a tenant (never leaks the token, only whether one is set).
 function tenantAdminView(t) {
@@ -1299,7 +1672,7 @@ function tenantAdminView(t) {
 // Fields a platform admin may set on create/update (everything else is derived).
 function configOverridesFromBody(b) {
   const o = {};
-  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features"]) {
+  for (const k of ["name", "established", "themeColor", "palette", "logoUrl", "heroUrl", "address", "phone", "hours", "currency", "currencyCode", "gstRate", "gstNumber", "legalName", "locale", "timezone", "emailFrom", "surcharge", "surchargeDefault", "developerFee", "developerFeeLabel", "drinkCategories", "dessertCategory", "i18n", "receipt", "printerStations", "features", "loyalty", "mealDeal"]) {
     if (b[k] !== undefined) o[k] = b[k];
   }
   return o;
@@ -1364,7 +1737,7 @@ app.get("/admin/tenants", requirePlatformAdmin, (_req, res) => {
 // Provision a new restaurant. Returns the staff token ONCE (only its hash is
 // stored). Seeds an empty menu (or an optional supplied menu) so the owner can
 // start editing in the existing /dashboard/menu-admin.html screen.
-app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
+app.post("/admin/tenants", requirePlatformAdmin, async (req, res) => {
   const b = req.body || {};
   // Preserve the legacy "name defaults to slug" behaviour: derive the slug the
   // same way createTenant will, then fall back to it for a missing name.
@@ -1372,7 +1745,7 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
   if (!preSlug) return res.status(400).json({ error: "A slug or name is required" });
   const name = sanitizeString(b.name, 80) || preSlug;
   try {
-    const { slug, staffToken } = createTenant({
+    const { slug, staffToken } = await createTenant({
       ...configOverridesFromBody(b),
       name,
       slug: b.slug,
@@ -1385,8 +1758,9 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
       slug,
       name,
       staffToken,                                  // SHOW ONCE — not recoverable
-      dashboardUrl: `/dashboard?token=${staffToken}`,
-      menuAdminUrl: `/dashboard/menu-admin.html?token=${staffToken}`,
+      // /dashboard is retired (302 → /console, query dropped) — hand out /console.
+      dashboardUrl: `/console`,
+      menuAdminUrl: `/console`,
       customerQuery: `?r=${slug}`,
       note: "Save the staffToken now — only its hash is stored.",
     });
@@ -1398,6 +1772,46 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
   }
 });
 
+// ── Storefront checkout (public) ───────────────────────────
+// A plan button on the IT Logistics site links to GET /buy/checkout?plan=<slug>.
+// We open a Stripe Checkout Session (Stripe collects email + venue name) and
+// 303-redirect the buyer to Stripe. Provisioning happens later in the webhook,
+// so a closed success tab never loses a paid signup.
+// Rate-limited via the shared per-path limiter (rateRule() → "buycheckout").
+app.get("/buy/checkout", async (req, res) => {
+  const plan = String((req.query && req.query.plan) || "");
+  const spec = planSpec(plan);
+  if (!spec) return res.redirect(302, STOREFRONT_URL + "#pricing");
+  if (!stripeClient) return res.status(503).send("Payments are temporarily unavailable.");
+  const priceId = process.env[spec.priceEnv];
+  if (!priceId) { console.error("[buy] missing price env " + spec.priceEnv); return res.status(503).send("This plan isn't configured yet."); }
+  try {
+    const session = await stripeClient.checkout.sessions.create({
+      mode: spec.mode,
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: { plan },
+      ...(spec.mode === "subscription" ? { subscription_data: { metadata: { plan } } } : {}),
+      custom_fields: [{
+        key: "venue_name",
+        label: { type: "custom", custom: "Venue / business name" },
+        type: "text",
+      }],
+      success_url: PUBLIC_BASE_URL + "/buy/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: STOREFRONT_URL + "#pricing",
+    });
+    return res.redirect(303, session.url);
+  } catch (e) {
+    console.error("[buy] checkout create failed:", e && e.message);
+    return res.status(502).send("Could not start checkout. Please go back and try again.");
+  }
+});
+
+// ── Storefront success page (public) ────────────────────────
+app.get("/buy/success", (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment received</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.25rem;color:#2b1f17}h1{font-size:1.6rem}a{color:#c25a3a}</style></head><body><h1>Payment received &#10003;</h1><p>Thanks! We're setting up your venue now. In the next minute you'll get an email with your <strong>sign-in link</strong> and setup guide.</p><p>No email in 5 minutes? Check spam, or email <a href="mailto:support@itlogistics.nz">support@itlogistics.nz</a>.</p></body></html>`);
+});
+
 // ══════════════════════════════════════════════════════════
 // ── SELF-SERVE SIGNUP + MAGIC-LINK AUTH ───────────────────
 // ══════════════════════════════════════════════════════════
@@ -1407,7 +1821,7 @@ app.post("/admin/tenants", requirePlatformAdmin, (req, res) => {
 // 30-day session (so the owner is signed in immediately) and emails a welcome
 // magic link. The owner's email is recorded on the tenant and the "powered by"
 // footer defaults on.
-app.post("/signup", (req, res) => {
+app.post("/signup", async (req, res) => {
   try {
     // No auth secret → magic-link login can't work (request-link 503s, verify rejects
     // all), so an account created now could never sign back in. Refuse rather than
@@ -1425,12 +1839,11 @@ app.post("/signup", (req, res) => {
     }
     const cfgOv = publicConfigOverridesFromBody(body);
     // ownerEmail + poweredBy are stamped via createTenant's config so they're
-    // saved atomically with the tenant. (createTenant's save runs under the
-    // write lock, which defers to a microtask, so a getTenant() right after the
-    // call would race and return null.) features.poweredBy defaults on; the
+    // saved atomically with the tenant (createTenant is awaited, so the tenant
+    // is durably saved before we continue). features.poweredBy defaults on; the
     // public override subset can't set it, so self-serve cafés are never
     // white-labelled for free.
-    const { slug } = createTenant({
+    const { slug } = await createTenant({
       ...cfgOv,
       ownerEmail: email,
       features: { poweredBy: true },
@@ -1457,8 +1870,9 @@ app.post("/signup", (req, res) => {
       session,
       slug,
       name,
-      dashboardUrl: "/dashboard?token=" + session,
-      menuAdminUrl: "/dashboard/menu-admin.html?token=" + session,
+      // /dashboard is retired (302 → /console, query dropped) — hand out /console.
+      dashboardUrl: "/console",
+      menuAdminUrl: "/console",
       qrPackUrl: "/qr-pack?token=" + session,
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + slug,
     });
@@ -1507,14 +1921,136 @@ app.post("/auth/logout", requireOwner, (req, res) => {
   res.json({ ok: true });
 });
 
-// GET /me — owner session. The owner console's "who am I + my café" call.
+// ── Customer loyalty accounts (magic-link, per-tenant) ─────────────────────
+// POST /loyalty/request-link — public, rate-limited. ALWAYS { ok:true } (no
+// account enumeration). Emails a tenant-bound magic link; doubles as join (the
+// account is materialized only on verify). Non-prod also returns a devLink.
+app.post("/loyalty/request-link", resolveTenant, async (req, res) => {
+  if (authSecret() === "") return res.status(503).json({ error: "Loyalty sign-in is not configured" });
+  const email = String((req.body && req.body.email) || "").trim().toLowerCase();
+  const out = { ok: true };
+  if (EMAIL_RE.test(email) && email.length <= 254) {
+    const slug = req.tenant.slug;
+    const link = buildCustomerMagicLink(email, slug);
+    if (link && resend) {
+      const brand = (req.tenant.config && req.tenant.config.name) || req.tenant.name;
+      const fromAddr = (req.tenant.config && req.tenant.config.emailFrom) || AUTH_EMAIL_FROM;
+      try {
+        await resend.emails.send({
+          from: fromAddr, to: [email], subject: `Your ${brand} rewards sign-in link`,
+          text: [`Tap to sign in to your ${brand} rewards card:`, "", link, "",
+                 "This link works once and expires in 15 minutes.",
+                 "If you didn't request this, you can ignore this email."].join("\n"),
+        });
+        console.log(`[loyalty] magic link sent → ${maskPII(email)} (${slug})`);
+      } catch (e) { console.error(`[loyalty] link send failed for ${maskPII(email)}:`, e && e.message); }
+    }
+    if (!IS_PROD && link) out.devLink = link;   // dev-only; never gated on Resend
+  }
+  res.json(out);
+});
+
+// GET /loyalty/verify — public. Validates the tenant-bound single-use token,
+// upserts the customer account, mints a session, and redirects to the customer
+// SPA with the session in the URL FRAGMENT (never logged), scoped to ?r=<slug>.
+// The session token is generated up-front so it can go in the redirect; the file
+// writes are awaited under the write lock (serialized against POST /order) so the
+// session row is durably stored before the client follows up with it.
+app.get("/loyalty/verify", async (req, res) => {
+  const v = verifyCustomerToken(req.query.token);
+  const fail = (slug) => res.redirect(OWNER_CUSTOMER_ORIGIN + "/?r=" + encodeURIComponent(slug || DEFAULT_TENANT) + "#loyalty_err=1");
+  if (!v) return fail();
+  const t = getTenant(v.slug);
+  if (!t) return fail(v.slug);
+  const store = tenantStore(v.slug);
+  const token = crypto.randomBytes(32).toString("hex");   // known before the lock
+  let burned = false;
+  await withWriteLock(() => {
+    // Re-check inside the lock: two concurrent clicks on the same link both pass
+    // verifyCustomerToken's synchronous check — only the first may burn it.
+    if (AUTH.usedMagic[v.jti]) return;
+    AUTH.usedMagic[v.jti] = v.exp; persistAuth();          // burn the token (single-use)
+    burned = true;
+    const customers = store.loadCustomers();
+    upsertCustomerAccount(customers, v.email);
+    store.persistCustomers(customers);
+    const sessions = addLoyaltySession(pruneLoyaltySessions(store.loadLoyaltySessions()), token, v.email);
+    store.persistLoyaltySessions(sessions);
+  });
+  if (!burned) return fail(v.slug);
+  return res.redirect(OWNER_CUSTOMER_ORIGIN + "/?r=" + encodeURIComponent(v.slug) + "#loyalty=" + token);
+});
+
+// GET /loyalty/me — the signed-in customer's card + standing-discount status.
+app.get("/loyalty/me", resolveTenant, requireCustomer, (req, res) => {
+  const cfg = req.tenant.config;
+  const customers = req.store.loadCustomers();
+  const c = customers.find((x) => x.email === req.customer.email);
+  const L = loyaltyConfig(cfg);
+  const loyalty = (c && c.loyalty) || { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+  const rewardItem = L.rewardItemId ? resolveMenuItem(req.store.loadMenu(), { id: L.rewardItemId }) : null;
+  res.json({
+    enabled: loyaltyEnabled(cfg),
+    email: req.customer.email,
+    stamps: loyalty.stamps, rewardsAvailable: loyalty.rewardsAvailable,
+    lifetimeStamps: loyalty.lifetimeStamps, stampsNeeded: L.stampsNeeded,
+    rewardItemId: L.rewardItemId, rewardName: rewardItem ? rewardItem.name : null,
+    paidVisits: loyalty.lifetimeStamps,
+    standingDiscountPercent: frequentPercent(cfg, c),
+  });
+});
+
+// POST /loyalty/logout — end the current customer session.
+app.post("/loyalty/logout", resolveTenant, requireCustomer, async (req, res) => {
+  const tok = getReqToken(req);
+  await withWriteLock(() => {
+    const sessions = pruneLoyaltySessions(req.store.loadLoyaltySessions());
+    delete sessions[hashToken(tok)];
+    req.store.persistLoyaltySessions(sessions);
+  });
+  res.json({ ok: true });
+});
+
+// GET /me — owner/console session. "Who am I + my cafés". Additive: still returns
+// {email, cafe} for the legacy owner console; now also {login, name, cafes[]} for
+// the ops console's branding + multi-café switcher.
 app.get("/me", requireOwner, (req, res) => {
-  const owner = AUTH.owners[req.ownerEmail];
   const t = getTenant(req.ownerSlug);
   if (!t) return res.status(404).json({ error: "Café not found" });
+  const acc = accountFromReq(req);
+  const identity = acc || AUTH.owners[req.ownerEmail];
+  const slugs = (identity && Array.isArray(identity.tenants) && identity.tenants.length) ? identity.tenants : [req.ownerSlug];
+  const cafes = slugs.map(getTenant).filter(Boolean).map((tt) => {
+    const cc = tt.config || {};
+    return { slug: tt.slug, name: cc.name || tt.name, themeColor: cc.themeColor || "#c25a3a", logoUrl: cc.logoUrl || null };
+  });
   const c = t.config || {};
+  // Billing summary for the console's self-serve home (Plan 2). Legacy tenants
+  // (Crispy, Bodrum, admin-provisioned — no config.billing) report
+  // { active:true, legacy:true } so the console renders NO billing UI for them.
+  // Paid tenants expose plan/status + the reactivation flag (active:false ⇒ access
+  // paused ⇒ banner + portal nudge). Read-only: never mutates config.billing.
+  const bl = c.billing;
+  const billing = bl
+    ? {
+        plan: bl.plan || null,
+        status: bl.status || null,
+        purchaseType: bl.purchaseType || null,
+        entitlementExpiresAt: bl.entitlementExpiresAt || null,
+        currentPeriodEnd: bl.currentPeriodEnd || null,
+        active: billingIsActive(bl),
+      }
+    : { active: true, legacy: true };
   res.json({
     email: req.ownerEmail,
+    login: acc ? acc.login : undefined,
+    name: acc ? acc.name : ((AUTH.owners[req.ownerEmail] && AUTH.owners[req.ownerEmail].name) || undefined),
+    cafes,
+    billing,
+    // Menu setup state (Plan 3). Only new paid tenants ever have config.menuBuild
+    // (stamped at provision as {mode:null,status:'choosing'}); legacy tenants
+    // (Crispy/Bodrum) report null → the console never shows the setup-path chooser.
+    menuBuild: (c.menuBuild && typeof c.menuBuild === "object") ? c.menuBuild : null,
     cafe: {
       slug: t.slug,
       name: t.name,
@@ -1527,10 +2063,366 @@ app.get("/me", requireOwner, (req, res) => {
         currencyCode: c.currencyCode || "NZD",
         gstRate: typeof c.gstRate === "number" ? c.gstRate : 0.15,
         features: c.features || {},
+        loyalty: c.loyalty || {},
+        // Without these the console's Settings cards render defaults after a
+        // reload — and "Save meal deal" would then silently disable a live deal.
+        mealDeal: c.mealDeal && typeof c.mealDeal === "object" ? c.mealDeal : {},
+        drinkCategories: Array.isArray(c.drinkCategories) ? c.drinkCategories : [],
+        promos: promosForTenant(t),
+        // Pricing/fees the owner edits via PATCH /me/pricing (the Settings card).
+        developerFee: typeof c.developerFee === "number" ? c.developerFee : 0,
+        developerFeeLabel: c.developerFeeLabel || "Developer fee",
+        surcharge: c.surcharge && typeof c.surcharge === "object" ? c.surcharge : {},
+        surchargeDefault: typeof c.surchargeDefault === "number" ? c.surchargeDefault : 0,
+        // Manager lock: whether a PIN is set (never expose the hash). The console
+        // uses this to gate the Reports + Settings screens on a shared device.
+        managerPinSet: !!(c.managerPin && c.managerPin.hash),
       },
       customerUrl: OWNER_CUSTOMER_ORIGIN + "/?r=" + t.slug,
     },
   });
+});
+
+// ── Ops-console auth: login + password (parallel to magic-link) ──────────────
+// POST /auth/login — public, rate-limited. { login, password } → owner session.
+app.post("/auth/login", (req, res) => {
+  const login = String((req.body && req.body.login) || "").trim();
+  const password = String((req.body && req.body.password) || "");
+  const acc = getAccount(login);
+  const ok = !!acc && verifyPassword(password, acc.salt, acc.passwordHash);
+  if (!ok) return res.status(401).json({ error: "Wrong login or password." });
+  if (!Array.isArray(acc.tenants) || !acc.tenants.length) return res.status(403).json({ error: "No café is linked to this account." });
+  acc.lastLoginAt = new Date().toISOString();
+  const slug = acc.tenants[0];
+  const session = createSession("acct:" + acc.login, slug);
+  persistAuth();
+  console.log(`[auth] console login '${acc.login}' → ${slug}`);
+  res.json({ success: true, session, slug, login: acc.login });
+});
+
+// POST /auth/switch — console session. { slug } → new session for another owned café.
+app.post("/auth/switch", requireOwner, (req, res) => {
+  const acc = accountFromReq(req);
+  const identity = acc || AUTH.owners[req.ownerEmail];
+  const slug = normalizeSlug(String((req.body && req.body.slug) || ""));
+  const allowed = identity && Array.isArray(identity.tenants) && identity.tenants.includes(slug);
+  if (!allowed) return res.status(403).json({ error: "Not one of your cafés." });
+  if (!getTenant(slug)) return res.status(404).json({ error: "Unknown café." });
+  deleteSession(getReqToken(req));
+  const session = createSession(req.ownerEmail, slug);
+  res.json({ success: true, session, slug });
+});
+
+// POST /auth/credentials — console account. Change own login and/or password;
+// current password ALWAYS required. Returns a fresh session if the login changed.
+app.post("/auth/credentials", requireOwner, (req, res) => {
+  const acc = accountFromReq(req);
+  if (!acc) return res.status(400).json({ error: "Only console accounts can change credentials here." });
+  const b = req.body || {};
+  if (!verifyPassword(String(b.currentPassword || ""), acc.salt, acc.passwordHash))
+    return res.status(403).json({ error: "Current password is incorrect." });
+  const newLogin = b.newLogin != null ? String(b.newLogin).trim() : "";
+  const newPassword = b.newPassword != null ? String(b.newPassword) : "";
+  const changingLogin = newLogin && newLogin.toLowerCase() !== acc.login.toLowerCase();
+  if (changingLogin) {
+    if (!LOGIN_RE.test(newLogin)) return res.status(400).json({ error: "Login must be 3–32 chars: letters, numbers, . _ -" });
+    if (AUTH.accounts[newLogin.toLowerCase()]) return res.status(409).json({ error: "That login is already taken." });
+  }
+  if (newPassword && newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters." });
+  if (!changingLogin && !newPassword) return res.status(400).json({ error: "Nothing to change." });
+  const oldEmail = ("acct:" + acc.login).toLowerCase();
+  if (newPassword) { const h = hashPassword(newPassword); acc.salt = h.salt; acc.passwordHash = h.hash; }
+  if (changingLogin) {
+    delete AUTH.accounts[acc.login.toLowerCase()];
+    acc.login = newLogin;
+    AUTH.accounts[newLogin.toLowerCase()] = acc;
+  }
+  // Security: ANY credential change (password OR login) revokes EVERY existing
+  // session for this account — so changing the password actually locks out a
+  // lost/compromised/shared device — then we mint one fresh session for the caller.
+  for (const h of Object.keys(AUTH.sessions)) {
+    const s = AUTH.sessions[h];
+    if (s && typeof s.email === "string" && s.email.toLowerCase() === oldEmail) delete AUTH.sessions[h];
+  }
+  const session = createSession("acct:" + acc.login, req.ownerSlug);
+  persistAuth();
+  res.json({ success: true, login: acc.login, session });
+});
+
+// PATCH /me/printers — owner/console session. Account-managed station printer setup:
+// the logged-in owner sets THEIR café's station IPs (food=Kitchen, drinks=Barista,
+// expo=Full order, receipt=Receipt), saved to the café config so every device shares
+// them. An empty value clears that station. requireOwner pins it to req.ownerSlug, so
+// an owner can only edit their own café's printers.
+const STATION_KEYS = ["food", "drinks", "expo", "receipt"];
+function validStationHost(v) {
+  v = String(v == null ? "" : v).trim();
+  if (!v) return "";                                   // empty clears the station
+  if (/^(\d{1,3})(\.\d{1,3}){3}$/.test(v) && v.split(".").every((o) => +o >= 0 && +o <= 255)) return v; // IPv4
+  if (/^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,60}$/.test(v)) return v; // LAN hostname
+  return null;                                         // anything else is rejected
+}
+app.patch("/me/printers", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  // Validate up-front (pure), but read `existing` and merge INSIDE the lock so
+  // two concurrent PATCHes can't lose each other's stations.
+  const patch = {};
+  for (const key of STATION_KEYS) {
+    if (b[key] === undefined) continue;                // not sent → keep
+    const v = validStationHost(b[key]);
+    if (v === null) return res.status(400).json({ error: `Invalid printer address for “${key}”.` });
+    patch[key] = v;                                    // non-empty → set; "" → clear
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    const existing = t.config.printerStations || {};
+    const out = {};
+    for (const key of STATION_KEYS) {
+      const v = patch[key] !== undefined ? patch[key] : (existing[key] || "");
+      if (v) out[key] = v;
+    }
+    t.config.printerStations = out;
+    saveTenant(t);
+    res.json({ success: true, printerStations: out });
+  }).catch((e) => {
+    console.error("[printers] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save printers" });
+  });
+});
+
+// PATCH /me/loyalty — owner/console session. The logged-in owner configures THEIR
+// café's loyalty program: enable flag, stamps-per-reward, reward item, min order,
+// and the frequent-customer ramp. Scoped to req.ownerSlug so an owner only edits
+// their own café. Values are clamped; loyaltyConfig normalizes again on read.
+app.patch("/me/loyalty", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.features = t.config.features || {};
+    if (b.enabled !== undefined) t.config.features.loyalty = !!b.enabled;
+    const L = Object.assign({}, t.config.loyalty);
+    if (b.stampsNeeded !== undefined) {
+      const n = Math.floor(Number(b.stampsNeeded));
+      L.stampsNeeded = Number.isFinite(n) && n > 0 && n <= 100 ? n : 10;
+    }
+    if (b.rewardItemId !== undefined) {
+      L.rewardItemId = b.rewardItemId == null ? null : (sanitizeString(String(b.rewardItemId), 80).trim() || null);
+    }
+    if (b.minOrder !== undefined) { const m = Number(b.minOrder); L.minOrder = Number.isFinite(m) && m > 0 ? Math.round(m * 100) / 100 : 0; }
+    const f = Object.assign({}, L.frequent);
+    if (b.frequentEnabled !== undefined) f.enabled = !!b.frequentEnabled;
+    if (b.percentPerVisit !== undefined) { const p = Number(b.percentPerVisit); f.percentPerVisit = Number.isFinite(p) && p > 0 && p <= 100 ? p : 1; }
+    if (b.maxPercent !== undefined) { const mx = Number(b.maxPercent); f.maxPercent = Number.isFinite(mx) && mx >= 0 && mx <= 100 ? mx : 15; }
+    L.frequent = f;
+    // Reward item must resolve to a real menu item, else clear it (keeps stamp track inert).
+    if (L.rewardItemId) {
+      const item = resolveMenuItem(tenantStore(t.slug).loadMenu(), { id: L.rewardItemId });
+      if (!item) L.rewardItemId = null;
+    }
+    t.config.loyalty = L;
+    saveTenant(t);
+    res.json({ success: true, loyalty: t.config.loyalty, enabled: !!t.config.features.loyalty });
+  }).catch((e) => {
+    console.error("[loyalty] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save loyalty settings" });
+  });
+});
+
+// PATCH /me/promos — owner/console session. Replace THIS café's promo-code list
+// wholesale. Body: { promos: [ { code, label?, enabled?, discount:{mode,value},
+// target:{scope,ref?} }, ... ] }. normalizePromos validates every entry against
+// the café's live menu (codes unique, ranges sane, targets resolvable) and
+// throws a friendly message on the first problem → 400. Scoped to req.ownerSlug.
+app.patch("/me/promos", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const list = (req.body && Array.isArray(req.body.promos)) ? req.body.promos : null;
+  if (!list) return res.status(400).json({ error: "Send a promos array." });
+  let cleaned;
+  try {
+    cleaned = normalizePromos(list, tenantStore(t.slug).loadMenu());
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid promo codes." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.promos = cleaned;
+    saveTenant(t);
+    res.json({ success: true, promos: cleaned });
+  }).catch((e) => {
+    console.error("[promos] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save promos" });
+  });
+});
+
+// PATCH /me/mealdeal — owner/console session. Replace THIS café's breakfast meal
+// deal wholesale. Body: { mealDeal: { enabled, label?, window:{from?,to?},
+// qualifyCategories:[slug], drinkCategories:[slug], drinkPrice } }.
+// normalizeMealDeal validates categories against the café's live menu and the
+// window/price ranges, throwing a friendly message on the first problem → 400.
+app.patch("/me/mealdeal", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const raw = req.body && typeof req.body.mealDeal === "object" ? req.body.mealDeal : null;
+  if (!raw) return res.status(400).json({ error: "Send a mealDeal object." });
+  let cleaned;
+  try {
+    cleaned = normalizeMealDeal(raw, tenantStore(t.slug).loadMenu());
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid meal deal." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.mealDeal = cleaned;
+    saveTenant(t);
+    res.json({ success: true, mealDeal: cleaned });
+  }).catch((e) => {
+    console.error("[mealdeal] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save meal deal" });
+  });
+});
+
+// PATCH /me/pricing — owner/console session. Set THIS café's two independent
+// online-order charging models: a flat per-order developer fee and a per-category
+// menu price rise (surcharge). Body:
+//   { developerFee, developerFeeLabel, surcharge:{slug:$}, surchargeDefault }.
+// normalizePricing clamps all money to >= 0 (0 = off), drops surcharge slugs that
+// aren't real menu categories, and falls the label back to "Developer fee". The
+// downstream logic (withOnlineSurcharge in GET /menu, developerFeeFor in POST
+// /order, receipts, reports) already consumes these config fields unchanged.
+app.patch("/me/pricing", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const raw = req.body && typeof req.body === "object" ? req.body : null;
+  if (!raw) return res.status(400).json({ error: "Send a pricing object." });
+  const pricingMenu = tenantStore(t.slug).loadMenu();
+  // normalizePricing filters surcharge slugs against the menu — on a cold/empty
+  // menu that would silently discard every entry while still reporting success.
+  const hasCategories = pricingMenu && Array.isArray(pricingMenu.categoryOrder) && pricingMenu.categoryOrder.length > 0;
+  if (!hasCategories && raw.surcharge && typeof raw.surcharge === "object" && Object.keys(raw.surcharge).length) {
+    return res.status(409).json({ error: "The menu hasn't loaded yet — per-category price rises can't be saved right now." });
+  }
+  let cleaned;
+  try {
+    cleaned = normalizePricing(raw, pricingMenu);
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || "Invalid pricing." });
+  }
+  withWriteLock(() => {
+    t.config = t.config || {};
+    t.config.developerFee = cleaned.developerFee;
+    t.config.developerFeeLabel = cleaned.developerFeeLabel;
+    t.config.surcharge = cleaned.surcharge;
+    t.config.surchargeDefault = cleaned.surchargeDefault;
+    saveTenant(t);
+    res.json({ success: true, pricing: cleaned });
+  }).catch((e) => {
+    console.error("[pricing] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save pricing" });
+  });
+});
+
+// PATCH /me/security — owner/console session. Set/change/clear THIS café's manager
+// PIN (config.managerPin). Body { pin }: 4–8 digits sets it (stored as a scrypt
+// hash, never plaintext); "" clears it (lock off). The PIN gates the Reports +
+// Settings screens in the console on a shared device — a UI deterrent, since the
+// device is already authenticated as the owner (see the /me/verify-pin note).
+app.patch("/me/security", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const pin = String((req.body && req.body.pin) != null ? req.body.pin : "").trim();
+  if (pin && !/^\d{4,8}$/.test(pin)) return res.status(400).json({ error: "PIN must be 4–8 digits." });
+  withWriteLock(() => {
+    t.config = t.config || {};
+    if (pin) t.config.managerPin = hashPassword(pin);
+    else delete t.config.managerPin;
+    saveTenant(t);
+    res.json({ success: true, managerPinSet: !!pin });
+  }).catch((e) => {
+    console.error("[security] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save PIN" });
+  });
+});
+
+// POST /me/verify-pin — owner/console session. Check a manager PIN against this
+// café's stored hash → { success }. NOTE: this gates the console UI only; the
+// caller is already an authenticated owner, so the underlying data endpoints
+// remain reachable with the existing session. It stops casual shared-device
+// snooping, not a determined operator.
+app.post("/me/verify-pin", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const mp = t.config && t.config.managerPin;
+  if (!mp || !mp.hash) return res.json({ success: true }); // no PIN set → nothing to unlock
+  const pin = String((req.body && req.body.pin) || "");
+  res.json({ success: verifyPassword(pin, mp.salt, mp.hash) });
+});
+
+// POST /me/billing-portal — owner/console session (Plan 2 self-serve home). Route the
+// owner to manage their subscription. If the tenant has a Stripe customerId (a paid
+// subscription/one-time that created a customer) AND Stripe is configured → mint a
+// Stripe Billing Portal session and return { url }. Otherwise (trial / one-time with
+// no customer / legacy) → return { upgradeUrl } to the storefront pricing so the
+// console can send them to pick or upgrade a plan. Read-only: never touches config.
+app.post("/me/billing-portal", requireOwner, async (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const billing = (t.config && t.config.billing) || null;
+  const customerId = billing && billing.customerId;
+  if (!customerId || !stripeClient) {
+    return res.json({ upgradeUrl: STOREFRONT_URL + "#pricing" });
+  }
+  try {
+    const session = await stripeClient.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: PUBLIC_BASE_URL + "/console",
+    });
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error("[billing] portal error:", e && e.message);
+    res.status(502).json({ error: "Couldn't open the billing portal — please try again." });
+  }
+});
+
+// POST /admin/tenants/:slug/credentials — platform admin. Provision (or reset) a
+// café's ops-console account. Generates a random initial password (returned ONCE)
+// unless one is supplied. Re-call with {link:true} to add a café to an existing login.
+app.post("/admin/tenants/:slug/credentials", requirePlatformAdmin, (req, res) => {
+  const slug = normalizeSlug(req.params.slug);
+  const t = getTenant(slug);
+  if (!t) return res.status(404).json({ error: "Unknown restaurant" });
+  const b = req.body || {};
+  const login = String(b.login || slug).trim();
+  if (!LOGIN_RE.test(login)) return res.status(400).json({ error: "Login must be 3–32 chars: letters, numbers, . _ -" });
+  const key = login.toLowerCase();
+  const existing = AUTH.accounts[key];
+  if (existing && !(existing.tenants || []).includes(slug) && (existing.tenants || []).length && !b.link)
+    return res.status(409).json({ error: "Login already in use; pass {link:true} to add this café to it." });
+  // Linking another café to an EXISTING login only appends the slug — it must NOT
+  // reset that account's password (unless {resetPassword:true} is explicit).
+  if (existing && b.link && !b.resetPassword) {
+    existing.tenants = Array.from(new Set([...(existing.tenants || []), slug]));
+    persistAuth();
+    return res.json({ success: true, login, slug, tenants: existing.tenants, linked: true,
+      note: "Café linked to the existing account — password unchanged." });
+  }
+  const password = b.password ? String(b.password) : crypto.randomBytes(9).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
+  const { salt, hash } = hashPassword(password);
+  const tenants = existing ? Array.from(new Set([...(existing.tenants || []), slug])) : [slug];
+  AUTH.accounts[key] = {
+    login,
+    name: (existing && existing.name) || t.name,
+    passwordHash: hash, salt, tenants,
+    createdAt: (existing && existing.createdAt) || new Date().toISOString(),
+    lastLoginAt: (existing && existing.lastLoginAt) || null,
+  };
+  persistAuth();
+  res.json({ success: true, login, password, slug, tenants, consoleUrl: "/console",
+    note: "Save this password — it is shown only once. The owner can change it in the console's Settings." });
 });
 
 // Update a restaurant's config and/or rotate its staff token.
@@ -1541,18 +2433,33 @@ app.patch("/admin/tenants/:slug", requirePlatformAdmin, (req, res) => {
   const out = { success: true, slug: t.slug };
   withWriteLock(() => {
     if (b.name != null) t.name = sanitizeString(b.name, 80) || t.name;
-    t.config = mergeConfig(Object.assign({}, t.config, configOverridesFromBody(b)));
+    // A partial deep-key payload (e.g. { hours: { display } }) must merge onto
+    // the tenant's CURRENT nested values — Object.assign replaces the object
+    // wholesale and mergeConfig then fills from platform defaults, silently
+    // wiping the tenant's other keys (open/close hours, feature flags, …).
+    const ov = configOverridesFromBody(b);
+    for (const k of CONFIG_DEEP_KEYS) {
+      if (ov[k] && typeof ov[k] === "object" && t.config && typeof t.config[k] === "object") {
+        ov[k] = Object.assign({}, t.config[k], ov[k]);
+      }
+    }
+    t.config = mergeConfig(Object.assign({}, t.config, ov));
     if (b.name != null) t.config.name = t.name;
     if (b.regenerateToken) {
       const staffToken = crypto.randomBytes(24).toString("hex");
       t.staffTokenHash = hashToken(staffToken);
       out.staffToken = staffToken;
-      out.dashboardUrl = `/dashboard?token=${staffToken}`;
+      out.consoleUrl = "/console";
     }
     saveTenant(t);
     console.log(`[tenant] updated '${t.slug}'${b.regenerateToken ? " (token rotated)" : ""}`);
+    // Respond inside the lock — responding outside raced the deferred lock fn,
+    // so a rotation response could be sent BEFORE out.staffToken was filled in.
+    res.json(out);
+  }).catch((e) => {
+    console.error("[tenant] update error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to update restaurant" });
   });
-  res.json(out);
 });
 
 // ── Printable QR pack for a restaurant (platform admin) ────
@@ -1676,11 +2583,17 @@ app.get("/qr-pack", requireStaff, async (req, res) => {
 
 // ── POST /order — receive order from QR menu (PUBLIC) ─────
 app.post("/order", resolveTenant, (req, res) => {
-  const { loadOrders, persistOrders, loadMenu } = req.store;
+  const { loadOrders, persistOrders, loadMenu, loadCustomers, persistCustomers } = req.store;
   withWriteLock(() => {
     try {
       const { tableNumber, items, notes, guestCount, phoneNumber, orderType, customerName, pickupTime } = req.body || {};
 
+      // normalizeItems caps at 100 lines — reject instead of silently truncating
+      // (a "success" that dropped lines never reaches the kitchen or the bill).
+      if (Array.isArray(items) && items.length > 100) {
+        res.status(400).json({ error: "Too many items in one order — please split it up." });
+        return;
+      }
       const normalizedItems = normalizeItems(items);
       if (normalizedItems.length === 0) {
         res.status(400).json({ error: "No items in order" });
@@ -1705,8 +2618,13 @@ app.post("/order", resolveTenant, (req, res) => {
         return /^(asap|(tomorrow\s+)?\d{1,2}:\d{2}\s?(am|pm))$/i.test(v) ? v : "ASAP";
       })() : undefined;
 
-      // Reject forged/underpriced items against the authoritative menu.
+      // Reject forged/underpriced items against the authoritative menu. The
+      // customer buys at SURCHARGED prices (GET /menu bakes them in), so the
+      // price floor AND every discount below must use the same surcharged basis
+      // — validating against the raw base menu let a crafted client skip the
+      // surcharge, and made discounts under-pay against what was charged.
       const menu = loadMenu();
+      const pricedMenu = withOnlineSurcharge(menu, req.tenant.config);
       if (isPickup) {
         const dv = pickupDrinksViolation(normalizedItems, menu, req.tenant.config);
         if (dv) {
@@ -1714,7 +2632,7 @@ app.post("/order", resolveTenant, (req, res) => {
           return;
         }
       }
-      const pv = priceViolation(normalizedItems, menu);
+      const pv = priceViolation(normalizedItems, pricedMenu, { requireResolvable: true });
       if (pv) {
         res.status(400).json({ error: pv });
         return;
@@ -1758,7 +2676,61 @@ app.post("/order", resolveTenant, (req, res) => {
         paymentStatus: "unpaid",   // unpaid | pending | paid | failed | refunded
         createdAt: new Date().toISOString(),
       };
-      order.total = clampMoney(order.total);
+      order.developerFee = developerFeeFor(req.tenant.config);
+      // Build the order's adjustments from: promo code, the customer's standing
+      // frequent-customer discount, and an opted-in stamp-card reward. All amounts
+      // are derived from the AUTHORITATIVE menu / the server's stored counters.
+      const now = new Date().toISOString();
+      const adjustments = [];
+      // Promo code — look the submitted code up in this café's own promo list
+      // (enabled only) and let the engine derive the authoritative discount.
+      if (req.body && req.body.promoCode) {
+        const wanted = String(req.body.promoCode).trim().toUpperCase();
+        const promo = promosForTenant(req.tenant).find((p) => p && p.enabled !== false && String(p.code || "").toUpperCase() === wanted);
+        const disc = promo ? computePromoDiscount(promo, normalizedItems, pricedMenu) : null;
+        if (disc) {
+          order.promoCode = disc.code;
+          adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: disc.label, amount: disc.amount, promo: disc.code, addedAt: now });
+        }
+      }
+      // Loyalty attribution: a logged-in customer's session (Bearer) attributes the
+      // order so the stamp lands on the right card when it's marked paid.
+      let loyaltyCustomer = null;
+      if (loyaltyEnabled(req.tenant.config)) {
+        const cust = customerFromReq(req);
+        if (cust) {
+          const customers = loadCustomers();
+          loyaltyCustomer = customers.find((x) => x.email === cust.email && x.account) || null;
+          if (loyaltyCustomer) order.loyaltyEmail = loyaltyCustomer.email;
+        }
+      }
+      // Frequent-customer standing discount (auto, server-authoritative percent).
+      if (loyaltyCustomer) {
+        const fd = computeFrequentDiscount(req.tenant.config, loyaltyCustomer, normalizedItems);
+        if (fd) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: fd.label, amount: fd.amount, frequent: true, percent: fd.percent, addedAt: now });
+      }
+      // Breakfast meal deal (auto, no code): a qualifying meal before the cutoff
+      // reprices an eligible drink to $1. Time + prices are server-authoritative,
+      // re-checked here at order time in the tenant's timezone.
+      {
+        const md = computeMealDeal(req.tenant.config && req.tenant.config.mealDeal, normalizedItems, pricedMenu, { timezone: req.tenant.config && req.tenant.config.timezone });
+        if (md) adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: md.label, amount: md.amount, mealDeal: true, addedAt: now });
+      }
+      // Stamp-card reward redemption (opt-in: needs a redeemable reward + item in cart).
+      if (loyaltyCustomer && req.body && req.body.redeemReward) {
+        const rd = computeRewardDiscount(req.tenant.config, pricedMenu, normalizedItems);
+        const avail = (loyaltyCustomer.loyalty && loyaltyCustomer.loyalty.rewardsAvailable) || 0;
+        if (rd && avail >= 1) {
+          adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: rd.label, amount: rd.amount, loyaltyReward: true, addedAt: now });
+          order.loyaltyRedemption = { rewardItemId: rd.rewardItemId, amount: rd.amount, consumed: false };
+          // Reserve the reward now (we are inside the route's write lock).
+          const customers = loadCustomers();
+          const c = customers.find((x) => x.email === loyaltyCustomer.email);
+          if (c && c.loyalty) { c.loyalty.rewardsAvailable = Math.max(0, (c.loyalty.rewardsAvailable || 0) - 1); persistCustomers(customers); }
+        }
+      }
+      if (adjustments.length) order.adjustments = adjustments;
+      recomputeOrderTotal(order); // items + developer fee + any promo discount
       order.onlineSurcharge = orderSurcharge(normalizedItems, menu, req.tenant.config);
 
       orders.push(order);
@@ -1795,19 +2767,52 @@ app.post("/order", resolveTenant, (req, res) => {
   });
 });
 
-// ── Static dashboard & bill ───────────────────────────────
-// Dashboard is staff-only — gate it before serving HTML.
-app.get("/dashboard", requireStaff, (_req, res, next) => next());
-app.use(
-  "/dashboard",
-  requireStaff,
-  express.static(path.join(__dirname, "public"), { index: "index-full-workflow.html" })
-);
+// ── Legacy dashboard → RETIRED (replaced by the unified /console) ──────────
+// The old staff dashboard (index-full-workflow.html) and its back-office pages
+// (/dashboard/menu-admin.html, /dashboard/reports.html) are retired: the /console
+// app supersedes them. Redirect every /dashboard* path to /console so old links/
+// bookmarks land on the new app AND the old page — which polls /orders and drives
+// the printers — never loads alongside it (no double polling/printing on the server).
+// Non-destructive: the HTML files remain in public/ for rollback (restore the
+// express.static mount below to bring the legacy dashboard back).
+app.use("/dashboard", (_req, res) => res.redirect(302, "/console"));
 // Bill page is customer-facing (lookup by order ID via URL).
 app.use("/bill", express.static(path.join(__dirname, "public", "bill")));
 
 // ── GET /orders — staff ────────────────────────────────────
+// The console polls unfiltered /orders every 6 seconds; re-parsing and
+// re-serialising the whole order history per poll stalls the event loop as the
+// file grows. Cache the finished response body per tenant, keyed on the orders
+// file's inode+mtime+size, so EVERY write path (persist, Supabase restore,
+// manual edit) rotates the key — no invalidation hooks to keep coherent. The
+// precomputed ETag + Cache-Control:no-cache lets the browser revalidate each
+// poll and skip the transfer entirely (304) when nothing changed. serverTime
+// moved to the X-Server-Time header so the body stays byte-stable for the ETag.
+const ordersRespCache = new Map(); // slug → { key, body, etag }
 app.get("/orders", requireStaff, (req, res) => {
+  if (!req.query.status && !req.query.table && !req.query.since) {
+    const slug = req.store.slug;
+    let st = null;
+    try { st = fs.statSync(path.join(DATA_DIR, slug, "orders.json")); } catch {}
+    const key = st ? st.ino + ":" + st.mtimeMs + ":" + st.size : "empty";
+    let hit = ordersRespCache.get(slug);
+    if (!hit || hit.key !== key) {
+      const orders = req.store.loadOrders();
+      const body = JSON.stringify({ count: orders.length, orders: orders.slice().reverse() });
+      hit = { key, body, etag: '"' + crypto.createHash("sha1").update(body).digest("base64") + '"' };
+      // Bound memory: one cached body per tenant is fine for a handful of
+      // active cafés, but evict the oldest entry past a sane ceiling.
+      if (!ordersRespCache.has(slug) && ordersRespCache.size >= 16) {
+        ordersRespCache.delete(ordersRespCache.keys().next().value);
+      }
+      ordersRespCache.set(slug, hit);
+    }
+    res.set("ETag", hit.etag);
+    res.set("Cache-Control", "no-cache");
+    res.set("X-Server-Time", new Date().toISOString());
+    if (req.fresh) return res.status(304).end();
+    return res.type("application/json").send(hit.body);
+  }
   let orders = req.store.loadOrders();
   const status = req.query.status;
   if (status) {
@@ -1937,6 +2942,13 @@ function orderSurcharge(items, menu, cfg) {
   }
   return Math.round(s * 100) / 100;
 }
+// Flat per-order "developer fee" (dollars) from tenant config; 0 if unset/invalid.
+// Added once to each order's total at creation (and to each group member's bill),
+// and preserved through every recompute (merge / add-items / manual adjustments).
+function developerFeeFor(cfg) {
+  const n = Number(cfg && cfg.developerFee);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
 
 // GET /menu — public, returns the current menu.  The customer SPA fetches
 // this on boot and falls back to the bundled menu if we're unreachable.
@@ -1944,6 +2956,23 @@ function orderSurcharge(items, menu, cfg) {
 // response has the online surcharge baked into each price.
 app.get("/menu", resolveTenant, (req, res) => {
   const menu = req.store.loadMenu();
+  // Resolve an authed staff/owner of THIS café up front (reused below for
+  // printer-IP exposure + time-of-day filtering).
+  const authTenant = tenantFromToken(getReqToken(req));
+  const ownerViewing = !!(authTenant && authTenant.slug === req.tenant.slug);
+  // Entitlement gate (opt-in by data): a paid tenant whose access has lapsed is
+  // hidden from the PUBLIC customer view. Legacy tenants (no config.billing)
+  // pass isActive() automatically, so this never affects Crispy/Bodrum. Owners
+  // still see their menu so the console works.
+  if (!ownerViewing && !billingIsActive(req.tenant.config && req.tenant.config.billing)) {
+    res.set("Cache-Control", "no-cache");
+    return res.json({
+      active: false,
+      slug: req.tenant.slug,
+      restaurantName: (req.tenant.config && req.tenant.config.name) || req.tenant.name,
+      themeColor: (req.tenant.config && req.tenant.config.themeColor) || PLATFORM_DEFAULT_THEME,
+    });
+  }
   res.set("Cache-Control", "no-cache");
   const raw = req.query && (req.query.raw === "1" || req.query.raw === "true");
   const out = raw ? Object.assign({}, menu) : withOnlineSurcharge(menu, req.tenant.config);
@@ -1970,10 +2999,66 @@ app.get("/menu", resolveTenant, (req, res) => {
   out.i18n = c.i18n || {};
   out.receipt = c.receipt || {};
   out.features = c.features || {};
-  // Internal LAN printer IPs are exposed ONLY to this tenant's authenticated
-  // staff (resolveTenant pins req.tenant to the token's own tenant), never on the
-  // public customer fetch.
-  if (findTenantByToken(getReqToken(req))) out.printerStations = c.printerStations || {};
+  out.active = true;   // paired with the { active:false } early return above
+  out.developerFee = typeof c.developerFee === "number" ? c.developerFee : 0;
+  out.developerFeeLabel = c.developerFeeLabel || "Developer fee";
+  // Promo codes the customer SPA may offer at checkout — built from THIS café's
+  // own list, enabled only, keyed by CODE with just the fields the cart preview
+  // needs. A café with no codes gets {} so the field never appears. The discount
+  // math stays server-side and authoritative (POST /order).
+  out.promos = {};
+  for (const p of promosForTenant(req.tenant)) {
+    if (!p || p.enabled === false || !p.code) continue;
+    out.promos[String(p.code).toUpperCase()] = {
+      label: p.label || String(p.code).toUpperCase(),
+      scope: p.target && p.target.scope,
+      ref: (p.target && p.target.ref) || undefined,
+      mode: p.discount && p.discount.mode,
+      value: p.discount && p.discount.value,
+    };
+  }
+  // Loyalty program (public): lets the customer SPA render the card + standing
+  // discount. Off cafés get { enabled:false }. Reward name resolved from the menu.
+  if (loyaltyEnabled(c)) {
+    const Lc = loyaltyConfig(c);
+    const freq = Lc.frequent || {};
+    const rewardItem = Lc.rewardItemId ? resolveMenuItem(menu, { id: Lc.rewardItemId }) : null;
+    out.loyalty = {
+      enabled: true,
+      stampsNeeded: Lc.stampsNeeded,
+      rewardItemId: Lc.rewardItemId,
+      rewardName: rewardItem ? rewardItem.name : null,
+      frequent: { enabled: !!freq.enabled, percentPerVisit: Number(freq.percentPerVisit) || 0, maxPercent: Number(freq.maxPercent) || 0 },
+    };
+  } else {
+    out.loyalty = { enabled: false };
+  }
+  // Breakfast meal deal (public): lets the SPA preview the $1-drink deal and show
+  // a banner. `active` is computed server-side in the tenant's timezone so the
+  // preview matches what POST /order applies. Omitted entirely when disabled.
+  if (c.mealDeal && c.mealDeal.enabled) {
+    const m = c.mealDeal;
+    out.mealDeal = {
+      enabled: true,
+      active: mealDealActive(m, { timezone: c.timezone || "Pacific/Auckland" }),
+      label: m.label || "Meal deal",
+      drinkPrice: typeof m.drinkPrice === "number" ? m.drinkPrice : 1,
+      qualifyCategories: Array.isArray(m.qualifyCategories) ? m.qualifyCategories : [],
+      drinkCategories: Array.isArray(m.drinkCategories) ? m.drinkCategories : [],
+    };
+  }
+  // Internal LAN printer IPs are exposed ONLY to this tenant's own authenticated
+  // caller — a STAFF token OR an OWNER/console SESSION scoped to this café
+  // (tenantFromToken resolves both) — and never on the public customer fetch or
+  // to another tenant's token.
+  if (authTenant && authTenant.slug === req.tenant.slug) out.printerStations = c.printerStations || {};
+  // Time-of-day menu: drop categories outside their daily `avail` window from the
+  // PUBLIC customer view only (e.g. lunch until 3pm, dinner after). Staff of this
+  // tenant (token/session) and ?raw=1 diffs always see every category. Categories
+  // without an `avail` window are untouched, so other tenants are unaffected.
+  if (!raw && !(authTenant && authTenant.slug === req.tenant.slug)) {
+    filterMenuByTime(out, c.timezone || "Pacific/Auckland");
+  }
   res.json(out);
 });
 
@@ -2097,6 +3182,63 @@ app.post("/menu/items", requireStaff, (req, res) => {
   });
 });
 
+// POST /menu/import — staff/owner. Re-insert FULL menu items verbatim (used to
+// restore dishes removed earlier). Unlike POST /menu/items it preserves id, sizes,
+// eggOptions, tags, desc, img. Idempotent: skips any whose name already exists.
+app.post("/menu/import", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+      if (!items.length) return res.status(400).json({ error: "No items to import" });
+      if (items.length > 50) return res.status(400).json({ error: "Too many items (max 50)" });
+      const nameExists = (nm) => Object.values(menu.categories).some((c) =>
+        (c.items || []).some((it) => String(it.name || "").trim().toLowerCase() === nm.toLowerCase()));
+      const added = [], skipped = [];
+      for (const raw of items) {
+        const slug = String((raw && raw.categorySlug) || "").trim();
+        const cat = menu.categories[slug];
+        const name = String((raw && raw.name) || "").trim();
+        if (!name || name.length > 80) { skipped.push({ name: name || "(unnamed)", reason: "bad name" }); continue; }
+        if (!cat) { skipped.push({ name, reason: "unknown category: " + slug }); continue; }
+        if (nameExists(name)) { skipped.push({ name, reason: "already on the menu" }); continue; }
+        let id = slugify(raw.id || name) || slugify(name);
+        let suffix = 1; while (findItem(menu, id)) { suffix += 1; id = (slugify(raw.id || name) || slugify(name)) + "-" + suffix; }
+        const item = { id, name };
+        if (raw.sizes && typeof raw.sizes === "object" && !Array.isArray(raw.sizes)) {
+          const cleaned = {};
+          for (const sk of Object.keys(raw.sizes)) {
+            if (sk === "__proto__" || sk === "constructor" || sk === "prototype") continue;
+            const n = Number(raw.sizes[sk]);
+            if (Number.isFinite(n) && n >= 0 && n <= 9999) cleaned[String(sk).slice(0, 20)] = Math.round(n * 100) / 100;
+          }
+          if (Object.keys(cleaned).length) item.sizes = cleaned;
+        }
+        if (!item.sizes) {
+          const n = Number(raw.price);
+          if (!Number.isFinite(n) || n < 0 || n > 9999) { skipped.push({ name, reason: "no valid price/sizes" }); continue; }
+          item.price = Math.round(n * 100) / 100;
+        }
+        if (raw.desc) item.desc = String(raw.desc).slice(0, 500);
+        if (Array.isArray(raw.tags)) item.tags = raw.tags.map((t) => String(t).slice(0, 24)).slice(0, 6);
+        if (Array.isArray(raw.eggOptions)) item.eggOptions = raw.eggOptions.map((o) => String(o).slice(0, 40)).slice(0, 12);
+        if (raw.img) item.img = String(raw.img).slice(0, 200);
+        if (raw.imgRight) item.imgRight = String(raw.imgRight).slice(0, 20);
+        if (!Array.isArray(cat.items)) cat.items = [];
+        cat.items.push(item);
+        added.push({ id, name, categorySlug: slug });
+      }
+      persistMenu(menu);
+      console.log(`[menu] import: +${added.length}, skipped ${skipped.length}`);
+      res.json({ success: true, added, skipped, version: menu.version });
+    } catch (err) {
+      console.error("[menu] import error:", err.message);
+      res.status(500).json({ error: "Import failed" });
+    }
+  });
+});
+
 // POST /menu/items/:id/image — staff, upload an image for an item.
 // Multipart: field "image" carries the file (jpeg/png/webp/heic, ≤10 MB).
 // Sharp resizes to ≤1024 wide, encodes JPEG q85, uploads to Supabase Storage
@@ -2120,6 +3262,115 @@ const imageUpload = multer({
 const menuImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+// ── Menu setup path (Plan 3) ────────────────────────────────────────────────
+// New paid tenants are provisioned with config.menuBuild={mode:null,status:'choosing'}.
+// The owner console reads it (GET /me → menuBuild) to show a setup-path chooser, then
+// calls one of these two routes. Legacy tenants (Crispy/Bodrum) have menuBuild:null →
+// the console never renders the chooser, so these routes stay inert for them unless
+// the owner explicitly opts in.
+
+// requestedAt + N working days (skips Sat/Sun) — the DFY "live by" promise.
+function addWorkingDays(date, n) {
+  const d = new Date(date.getTime());
+  let added = 0;
+  while (added < n) {
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) added += 1; // 0=Sun, 6=Sat
+  }
+  return d;
+}
+
+// PATCH /me/menu-build — owner picks a setup path. { mode:'diy'|'dfy' }. DIY is
+// considered self-serve-complete the moment they start (status:'live'), which
+// replaces the chooser with the live builder on the next /me. Never touches an
+// existing tenant's menuBuild unless one is already present (paid tenants only).
+app.patch("/me/menu-build", requireOwner, (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const mode = String((req.body && req.body.mode) || "").trim();
+  if (mode !== "diy" && mode !== "dfy") return res.status(400).json({ error: "mode must be 'diy' or 'dfy'." });
+  withWriteLock(() => {
+    t.config = t.config || {};
+    const mb = (t.config.menuBuild && typeof t.config.menuBuild === "object") ? t.config.menuBuild : {};
+    mb.mode = mode;
+    if (mode === "diy") mb.status = "live";
+    t.config.menuBuild = mb;
+    saveTenant(t);
+    res.json({ success: true, menuBuild: mb });
+  }).catch((e) => {
+    console.error("[menu-build] save error:", e && e.message);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to save menu setup choice" });
+  });
+});
+
+// POST /me/menu-build/dfy — owner requests a done-for-you build. Multipart:
+// venue/cuisine/notes text fields + up to 8 menu photos (field "photos"). Photos
+// are stored in Supabase Storage exactly like menu-item images (resized JPEG); the
+// request is emailed to the build team. Sets config.menuBuild = { mode:'dfy',
+// status:'building', requestedAt, photos:[urls], notes, liveBy }. Returns { ok, liveBy }
+// where liveBy = requestedAt + 2 working days.
+app.post("/me/menu-build/dfy", requireOwner, imageUpload.array("photos", 8), async (req, res) => {
+  const t = getTenant(req.ownerSlug);
+  if (!t) return res.status(404).json({ error: "Café not found" });
+  const b = req.body || {};
+  const venue = sanitizeString(b.venue, 120) || (t.config && t.config.name) || t.name;
+  const cuisine = sanitizeString(b.cuisine, 80);
+  const notes = sanitizeString(b.notes, 2000);
+  // Store photos the same way menu-item images are stored (Supabase bucket
+  // "menu-images", sharp-resized JPEG). Best-effort: a storage hiccup must not lose
+  // the build request — we still record + email whatever uploaded.
+  const photoUrls = [];
+  const files = Array.isArray(req.files) ? req.files.slice(0, 8) : [];
+  if (files.length && supabase) {
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const resized = await sharp(files[i].buffer)
+          .rotate()
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 82, progressive: true })
+          .toBuffer();
+        const fileName = `${t.slug}/dfy/${Date.now()}-${i}.jpg`;
+        const { error: upErr } = await supabase.storage.from("menu-images").upload(fileName, resized, { contentType: "image/jpeg", upsert: false });
+        if (upErr) { console.error("[menu-build] dfy photo upload:", upErr.message); continue; }
+        photoUrls.push(supabase.storage.from("menu-images").getPublicUrl(fileName).data.publicUrl);
+      } catch (e) { console.error("[menu-build] dfy photo error:", e && e.message); }
+    }
+  }
+  const requestedAt = new Date();
+  const requestedAtIso = requestedAt.toISOString();
+  const liveBy = addWorkingDays(requestedAt, 2).toISOString();
+  const mb = { mode: "dfy", status: "building", requestedAt: requestedAtIso, photos: photoUrls, notes, liveBy };
+  await new Promise((resolve, reject) => withWriteLock(() => {
+    try { t.config = t.config || {}; t.config.menuBuild = mb; saveTenant(t); resolve(); }
+    catch (e) { reject(e); }
+  })).catch((e) => { console.error("[menu-build] dfy save:", e && e.message); });
+  // Email the request to the build team (no-op if Resend isn't configured).
+  if (resend) {
+    const to = process.env.BUILD_REQUEST_EMAIL || "support@itlogistics.nz";
+    const text = [
+      "New done-for-you menu build request.",
+      "",
+      "Tenant slug: " + t.slug,
+      "Owner: " + (req.ownerEmail || "(unknown)"),
+      "Venue: " + venue,
+      "Cuisine: " + (cuisine || "(not given)"),
+      "Notes: " + (notes || "(none)"),
+      "",
+      "Photos (" + photoUrls.length + "):",
+      photoUrls.length ? photoUrls.join("\n") : "(none uploaded)",
+      "",
+      "Requested at: " + requestedAtIso,
+      "Target live-by: " + liveBy,
+    ].join("\n");
+    try {
+      await resend.emails.send({ from: AUTH_EMAIL_FROM, to: [to], subject: "[DFY build] " + venue, text });
+      console.log(`[menu-build] dfy request emailed for '${t.slug}' (${photoUrls.length} photos)`);
+    } catch (e) { console.error("[menu-build] dfy email failed:", e && e.message); }
+  }
+  res.json({ ok: true, liveBy, menuBuild: mb });
 });
 
 // POST /menu/extract — public, rate-limited. Reads a menu photo/PDF with Claude
@@ -2548,6 +3799,11 @@ app.get("/orders/:id", resolveTenant, (req, res) => {
       notes: i.notes,
     })),
     adjustments: (Array.isArray(order.adjustments) ? order.adjustments : []).map((a) => ({ label: a.label, amount: a.amount })),
+    // The bill page must show the fee/adjustments or the line items won't sum
+    // to the total (an "undisclosed" fee on a customer-facing bill).
+    developerFee: Number(order.developerFee) || 0,
+    developerFeeLabel: oc.developerFeeLabel || "Developer fee",
+    gstRate: typeof oc.gstRate === "number" ? oc.gstRate : 0.15,
     total: order.total,
     status: order.status,
     createdAt: order.createdAt,
@@ -2616,9 +3872,10 @@ app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
       }
 
       // Reject forged/underpriced additions against the menu (best-effort:
-      // /add-items lines carry no id, so this matches by name).
+      // /add-items lines carry no id, so this matches by name). Floor at the
+      // SURCHARGED prices the customer actually buys at.
       const addMenu = loadMenu();
-      const pv = priceViolation(newItems, addMenu);
+      const pv = priceViolation(newItems, withOnlineSurcharge(addMenu, req.tenant.config));
       if (pv) {
         res.status(400).json({ error: pv });
         return;
@@ -2662,7 +3919,7 @@ app.post("/orders/:id/add-items", resolveTenant, (req, res) => {
       }
 
       orders[idx].items = mergedItems;
-      orders[idx].total = clampMoney(projectedTotal + adjustmentsTotal(orders[idx]));
+      recomputeOrderTotal(orders[idx]); // items + adjustments + the order's existing developer fee (unchanged)
       orders[idx].onlineSurcharge = clampMoney((orders[idx].onlineSurcharge || 0) + orderSurcharge(newItems, loadMenu(), req.tenant.config));
       // Only (re)flag a brand-new/idle tab as "received". Don't drag an order
       // that's already preparing/ready/picked_up back to the start of the board.
@@ -2765,10 +4022,11 @@ app.patch("/orders/:id", requireStaff, (req, res) => {
       const cleanMethod =
         paymentMethod !== undefined ? sanitizeString(paymentMethod, 24) : undefined;
       if (paymentStatus !== undefined) {
+        const wasPaid = orders[idx].paymentStatus === "paid";
         orders[idx].paymentStatus = paymentStatus;
-        if (paymentStatus === "paid" && !orders[idx].paidAt) {
-          orders[idx].paidAt = new Date().toISOString();
-        }
+        if (paymentStatus === "paid" && !orders[idx].paidAt) orders[idx].paidAt = new Date().toISOString();
+        if (paymentStatus === "paid" && !wasPaid) awardLoyaltyOnPaid(req.store, orders[idx], req.tenant.config);
+        if (paymentStatus === "failed") restoreReservedReward(req.store, orders[idx]);
       }
       if (cleanMethod !== undefined) {
         orders[idx].paymentMethod = cleanMethod;
@@ -2837,6 +4095,13 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       if (targets.some((o) => ["paid", "pending", "refunded"].includes(o.paymentStatus))) {
         return res.status(409).json({ error: "One or more of these orders is paid or being paid — combine before taking payment." });
       }
+      // Loyalty: a combined order can track at most ONE pending reward redemption
+      // (finalize-on-paid / restore-on-cancel key off a single order.loyaltyRedemption),
+      // so refuse rather than silently orphan a reserved reward.
+      const pendingRedemptions = targets.filter((o) => o.loyaltyRedemption && !o.loyaltyRedemption.consumed);
+      if (pendingRedemptions.length > 1) {
+        return res.status(409).json({ error: "More than one of these orders has a pending loyalty reward — settle those separately before combining." });
+      }
 
       // Earliest order is the primary (keeps id + billToken so its bill link survives).
       targets.sort((a, b2) => new Date(a.createdAt || 0) - new Date(b2.createdAt || 0));
@@ -2852,7 +4117,9 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       primary.items = mergedItems;
       // Carry every order's manual bill adjustments into the combined bill.
       primary.adjustments = targets.reduce((acc, o) => acc.concat(Array.isArray(o.adjustments) ? o.adjustments : []), []);
-      primary.total = clampMoney(projectedTotal + adjustmentsTotal(primary));
+      // Each folded order brought its own developer fee — sum them (per-order fee).
+      primary.developerFee = clampMoney(targets.reduce((s, o) => s + (Number(o.developerFee) || 0), 0));
+      recomputeOrderTotal(primary); // items + adjustments + summed developer fees
       primary.onlineSurcharge = clampMoney(targets.reduce((s, o) => s + (Number(o.onlineSurcharge) || 0), 0));
       primary.guestCount = clampQty(targets.reduce((s, o) => s + (Number(o.guestCount) || 0), 0));
       const allNotes = targets.map((o) => (o.notes || "").trim()).filter(Boolean);
@@ -2866,6 +4133,14 @@ app.post("/orders/merge", requireStaff, (req, res) => {
       delete primary._lastAddHash;
       delete primary._lastAddAt;
       primary.mergedFrom = (primary.mergedFrom || []).concat(others.map((o) => o.id));
+      // Carry loyalty state onto the combined order so the stamp still lands on paid
+      // and a reserved reward stays tracked (and is credited back to the right card on
+      // cancel). Attribution follows the pending reward's owner when there is one.
+      const keptRedemption = pendingRedemptions[0];
+      const mergedLoyaltyEmail = keptRedemption ? keptRedemption.loyaltyEmail : targets.map((o) => o.loyaltyEmail).find(Boolean);
+      if (mergedLoyaltyEmail) primary.loyaltyEmail = mergedLoyaltyEmail; else delete primary.loyaltyEmail;
+      delete primary.loyaltyStampAwarded;                 // unpaid combined order earns its own single stamp
+      if (keptRedemption) primary.loyaltyRedemption = keptRedemption.loyaltyRedemption; else delete primary.loyaltyRedemption;
       primary.updatedAt = new Date().toISOString();
 
       const removeIds = new Set(others.map((o) => o.id));
@@ -2892,8 +4167,51 @@ function adjustmentsTotal(order) {
 }
 function recomputeOrderTotal(order) {
   const itemsSum = (order.items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
-  order.total = clampMoney(itemsSum + adjustmentsTotal(order));
+  // Stacked discounts (promo + frequent + meal deal + reward) can exceed the
+  // items themselves; cap the net adjustment at -itemsSum so discounts zero out
+  // the food but never eat the developer fee or drive the total below it.
+  const adj = Math.max(adjustmentsTotal(order), -itemsSum);
+  order.total = clampMoney(itemsSum + adj + (Number(order.developerFee) || 0));
   return order.total;
+}
+
+// Award one stamp when an order first transitions to paid, and finalize any
+// reserved reward. Idempotent per order via order.loyaltyStampAwarded. Mutates
+// `order` and persists the tenant's customers; the caller persists orders.
+function awardLoyaltyOnPaid(store, order, cfg) {
+  try {
+    if (!loyaltyEnabled(cfg) || !order || !order.loyaltyEmail) return;
+    if (order.loyaltyRedemption && !order.loyaltyRedemption.consumed) order.loyaltyRedemption.consumed = true;
+    if (order.loyaltyStampAwarded) return;
+    const L = loyaltyConfig(cfg);
+    // Check eligibility BEFORE setting the idempotency flag — flagging a
+    // sub-minimum order blocked it from ever earning a stamp after items were
+    // added and it was re-confirmed paid. (All callers run under the write
+    // lock, so flag-after-check can't double-award.)
+    if (itemsSubtotal(order.items) < L.minOrder) return;
+    order.loyaltyStampAwarded = true;
+    const customers = store.loadCustomers();
+    const c = customers.find((x) => x.email === order.loyaltyEmail);
+    if (!c) return;
+    if (!c.loyalty) c.loyalty = { stamps: 0, rewardsAvailable: 0, lifetimeStamps: 0, lifetimeRewards: 0 };
+    earnStamp(c.loyalty, L.stampsNeeded);
+    c.lastVisit = new Date().toISOString();
+    store.persistCustomers(customers);
+  } catch (e) { console.error("[loyalty] award error:", e.message); }
+}
+// Give back a reward that was reserved at order time but never consumed (order
+// cancelled / payment failed). Idempotent via the consumed flag.
+function restoreReservedReward(store, order) {
+  try {
+    if (!order || !order.loyaltyEmail || !order.loyaltyRedemption || order.loyaltyRedemption.consumed) return;
+    const customers = store.loadCustomers();
+    const c = customers.find((x) => x.email === order.loyaltyEmail);
+    if (c && c.loyalty) {
+      c.loyalty.rewardsAvailable = (c.loyalty.rewardsAvailable || 0) + 1;
+      order.loyaltyRedemption.consumed = true;         // prevent double restore
+      store.persistCustomers(customers);
+    }
+  } catch (e) { console.error("[loyalty] restore error:", e.message); }
 }
 
 // POST /orders/:id/adjust — add a manual charge/discount to the bill.
@@ -2954,6 +4272,49 @@ app.delete("/orders/:id/adjust/:adjId", requireStaff, (req, res) => {
     } catch (e) {
       console.error("[adjust] delete error:", e.message);
       res.status(500).json({ error: "Failed to remove the adjustment" });
+    }
+  });
+});
+
+// POST /orders/:id/redeem-loyalty — staff redeem a stamp-card reward against an
+// order already ATTRIBUTED to a logged-in customer (order.loyaltyEmail). Requires
+// a redeemable reward and the reward item in the cart. Mirrors the self-redeem in
+// POST /order: seed a negative adjustment + reserve the reward.
+app.post("/orders/:id/redeem-loyalty", requireStaff, (req, res) => {
+  const { loadOrders, persistOrders, loadMenu, loadCustomers, persistCustomers } = req.store;
+  withWriteLock(() => {
+    try {
+      const cfg = req.tenant.config;
+      if (!loyaltyEnabled(cfg)) return res.status(400).json({ error: "Loyalty is not enabled" });
+      const orders = loadOrders();
+      const o = orders.find((x) => x.id === req.params.id);
+      if (!o) return res.status(404).json({ error: "Order not found" });
+      if (["paid", "pending", "refunded"].includes(o.paymentStatus)) {
+        return res.status(409).json({ error: "Order is paid or being paid — can't change the bill." });
+      }
+      if (!o.loyaltyEmail) return res.status(400).json({ error: "This order is not linked to a loyalty account." });
+      if (o.loyaltyRedemption && !o.loyaltyRedemption.consumed) return res.status(409).json({ error: "A reward is already applied to this order." });
+      // Surcharged basis — the order's line prices include the online surcharge,
+      // so a "free" reward must discount the surcharged price, not the base one.
+      const rd = computeRewardDiscount(cfg, withOnlineSurcharge(loadMenu(), cfg), o.items);
+      if (!rd) return res.status(400).json({ error: "The reward item isn't on this order." });
+      const customers = loadCustomers();
+      const c = customers.find((x) => x.email === o.loyaltyEmail);
+      const avail = (c && c.loyalty && c.loyalty.rewardsAvailable) || 0;
+      if (!c || avail < 1) return res.status(409).json({ error: "No reward available on this customer's card." });
+      if (!Array.isArray(o.adjustments)) o.adjustments = [];
+      o.adjustments.push({ id: crypto.randomBytes(6).toString("hex"), label: rd.label, amount: rd.amount, loyaltyReward: true, addedAt: new Date().toISOString() });
+      o.loyaltyRedemption = { rewardItemId: rd.rewardItemId, amount: rd.amount, consumed: false };
+      c.loyalty.rewardsAvailable = Math.max(0, avail - 1);
+      recomputeOrderTotal(o);
+      o.updatedAt = new Date().toISOString();
+      persistCustomers(customers);
+      persistOrders(orders);
+      console.log(`[loyalty] staff redeemed reward on ${o.id} for ${maskPII(o.loyaltyEmail)}`);
+      res.json({ success: true, order: o });
+    } catch (e) {
+      console.error("[loyalty] staff redeem error:", e.message);
+      res.status(500).json({ error: "Failed to redeem reward" });
     }
   });
 });
@@ -3211,7 +4572,6 @@ app.post("/orders/:id/charge", resolveTenant, async (req, res) => {
 // express.json so the raw bytes are available for HMAC (configured at the top
 // of this file via app.use("/webhooks", express.raw(...))).
 app.post("/webhooks/:provider", resolveTenant, (req, res) => {
-  const { loadOrders, persistOrders } = req.store;
   const providerName = req.params.provider;
   let event;
   try {
@@ -3246,8 +4606,28 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
 
   withWriteLock(() => {
     try {
-      const all = loadOrders();
-      const j = all.findIndex((o) => o.id === event.orderId);
+      // A PSP webhook is server-to-server: it carries no staff token / ?r= /
+      // x-tenant header, so resolveTenant lands on the DEFAULT tenant. If the
+      // order isn't there, find it across all tenants — the metadata billToken
+      // echo (set at createIntent) makes the match unambiguous, so a non-default
+      // café's payments settle instead of being dropped as "unknown order".
+      let store = req.store;
+      let cfg = req.tenant.config;
+      let all = store.loadOrders();
+      let j = all.findIndex((o) => o.id === event.orderId);
+      if (j === -1 && event.billToken) {
+        for (const slug of TENANTS.keys()) {
+          const st = tenantStore(slug);
+          const list = st.loadOrders();
+          const k = list.findIndex((o) => o.id === event.orderId && o.billToken && safeEqual(String(event.billToken), String(o.billToken)));
+          if (k !== -1) {
+            store = st; all = list; j = k;
+            const t = getTenant(slug);
+            if (t && t.config) cfg = t.config;
+            break;
+          }
+        }
+      }
       if (j === -1) {
         console.warn(`[pay] webhook for unknown order ${event.orderId}`);
         return res.status(200).json({ received: true, note: "unknown order" });
@@ -3287,7 +4667,8 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
           provider: providerName,
           capturedAt: new Date().toISOString(),
         };
-        persistOrders(all);
+        awardLoyaltyOnPaid(store, o, cfg);
+        store.persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → paid (${event.scheme || "card"} •••${event.last4 || "????"})`);
         return res.status(200).json({ received: true, processed: true });
       }
@@ -3300,7 +4681,8 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
         }
         o.paymentStatus = "failed";
         if (o.paymentIntent) o.paymentIntent.failedAt = new Date().toISOString();
-        persistOrders(all);
+        restoreReservedReward(store, o);
+        store.persistOrders(all);
         console.log(`[pay] ${providerName} order ${o.id} → failed`);
         return res.status(200).json({ received: true, processed: true });
       }
@@ -3312,7 +4694,7 @@ app.post("/webhooks/:provider", resolveTenant, (req, res) => {
         }
         o.paymentStatus = "refunded";
         if (o.payment) o.payment.refundedAt = new Date().toISOString();
-        persistOrders(all);
+        store.persistOrders(all);
         return res.status(200).json({ received: true, processed: true });
       }
 
@@ -3356,6 +4738,7 @@ app.post("/orders/:id/simulate-payment", requireStaff, (req, res) => {
         provider: "simulated",
         capturedAt: new Date().toISOString(),
       };
+      awardLoyaltyOnPaid(req.store, o, req.tenant.config);
       persistOrders(all);
       console.log(`[pay] simulated payment for ${o.id}`);
       res.json({ success: true, order: o });
@@ -3425,12 +4808,30 @@ function aggregateReport(orders, timeZone) {
   const tableSet = new Set();
   let totalRevenue = 0;
   let onlineIncome = 0;
+  let paidRevenue = 0;
+  let developerFeeTotal = 0;
+  // Paid orders are bucketed by tender (cash/card/other); every other status keeps
+  // its own bucket (pending/failed/refunded/unpaid) so a refund or in-flight online
+  // payment is never silently mislabelled as "unpaid".
+  const payments = { cash: 0, card: 0, unpaid: 0, pending: 0, failed: 0, refunded: 0, other: 0 };
   for (const o of orders) {
     const h = timeZone ? tzParts(new Date(o.createdAt), timeZone).hour : new Date(o.createdAt).getHours();
     hourly[h].orders += 1;
     hourly[h].revenue += Number(o.total || 0);
     totalRevenue += Number(o.total || 0);
     onlineIncome += Number(o.onlineSurcharge || 0);
+    developerFeeTotal += Number(o.developerFee || 0);
+    if (o.paymentStatus === "paid") {
+      const method = String(o.paymentMethod || "other").toLowerCase();
+      if (method === "cash") payments.cash += 1;
+      else if (method === "card") payments.card += 1;
+      else payments.other += 1;
+    } else {
+      const st = String(o.paymentStatus || "unpaid").toLowerCase();
+      if (payments[st] !== undefined && st !== "cash" && st !== "card") payments[st] += 1;
+      else payments.unpaid += 1;
+    }
+    if (o.paymentStatus === "paid") paidRevenue += Number(o.total || 0);
     if (o.tableNumber != null) tableSet.add(String(o.tableNumber));
     for (const it of (o.items || [])) {
       const key = it.name || "(unknown)";
@@ -3454,6 +4855,9 @@ function aggregateReport(orders, timeZone) {
     tableCount: tableSet.size,
     itemsSold,
     hourly,
+    paymentMethods: payments,
+    paidRevenue: Math.round(paidRevenue * 100) / 100,
+    developerFeeTotal: Math.round(developerFeeTotal * 100) / 100,
   };
 }
 
@@ -3482,6 +4886,27 @@ app.get("/reports/today", requireStaff, (req, res) => {
     serverTime: now.toISOString(),
     ...agg,
     bills,
+  });
+});
+
+// GET /reports/yesterday — sales for the prior day in the tenant's timezone.
+// Used by the dashboard to compute today-vs-yesterday deltas. Note: orders.json
+// is wiped on each deploy, so if the café deployed today this returns zeros and
+// the dashboard simply omits the delta badges (graceful).
+app.get("/reports/yesterday", requireStaff, (req, res) => {
+  const tz = req.tenant.config.timezone;
+  const all = req.store.loadOrders();
+  const now = new Date();
+  const todayStart = tzDayStart(now, tz);
+  // Anchor safely inside the prior day (12h back) and recompute its local midnight,
+  // so the window is correct even across a DST transition (prior day ≠ exactly 24h).
+  const dayStart = tzDayStart(new Date(todayStart.getTime() - 12 * 60 * 60 * 1000), tz);
+  const orders = ordersBetween(all, dayStart.toISOString(), todayStart.toISOString());
+  const agg = aggregateReport(orders, tz);
+  res.json({
+    date: tzDateStr(dayStart, tz),
+    serverTime: now.toISOString(),
+    ...agg,
   });
 });
 
@@ -3521,10 +4946,11 @@ app.get("/reports/week", requireStaff, (req, res) => {
 // ── GET /customers — staff ────────────────────────────────
 app.get("/customers", requireStaff, (req, res) => {
   const customers = req.store.loadCustomers();
-  res.json({
-    count: customers.length,
-    customers: customers.slice().sort((a, b) => b.visits - a.visits),
-  });
+  const cfg = req.tenant.config;
+  const enriched = customers.slice()
+    .sort((a, b) => ((b.loyalty && b.loyalty.lifetimeStamps) || b.visits || 0) - ((a.loyalty && a.loyalty.lifetimeStamps) || a.visits || 0))
+    .map((c) => Object.assign({}, c, { standingDiscountPercent: frequentPercent(cfg, c) }));
+  res.json({ count: customers.length, customers: enriched });
 });
 
 // ── DELETE /orders — staff + extra safety ──────────────────
@@ -3560,6 +4986,7 @@ app.delete("/orders/:id", requireStaff, (req, res) => {
       const idx = orders.findIndex((o) => o.id === req.params.id);
       if (idx === -1) { res.status(404).json({ error: "Order not found" }); return; }
       const removed = orders.splice(idx, 1)[0];
+      restoreReservedReward(req.store, removed);
       persistOrders(orders);
       console.log(`[orders] deleted ${removed.id} (table ${removed.tableNumber}) for ${req.store.slug}`);
       res.json({ success: true, id: removed.id });
@@ -3634,17 +5061,25 @@ app.post("/groups/:code/join", resolveTenant, (req, res) => {
       const b = req.body || {};
       const name = sanitizeString(b.name, 40);
       if (!name) { res.status(400).json({ error: "Your name is required" }); return; }
+      if (Array.isArray(b.items) && b.items.length > 100) {
+        res.status(400).json({ error: "Too many items in one order — please split it up." });
+        return;
+      }
       const items = normalizeItems(b.items);
       if (items.length === 0) { res.status(400).json({ error: "No items in your order" }); return; }
       const menu = loadMenu();
-      const pv = priceViolation(items, menu);
+      // Same surcharged floor + strict resolution as POST /order — group members
+      // order from the same surcharged GET /menu.
+      const pv = priceViolation(items, withOnlineSurcharge(menu, req.tenant.config), { requireResolvable: true });
       if (pv) { res.status(400).json({ error: pv }); return; }
+      const memberFee = developerFeeFor(req.tenant.config); // per-person developer fee
       const member = {
         memberId: crypto.randomBytes(6).toString("hex"),
         name,
         items,
         notes: sanitizeString(b.notes, 300),
-        total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0)),
+        developerFee: memberFee,
+        total: clampMoney(items.reduce((s, i) => s + i.price * i.qty, 0) + memberFee),
         onlineSurcharge: orderSurcharge(items, menu, req.tenant.config),
         createdAt: new Date().toISOString(),
       };
@@ -3804,6 +5239,7 @@ async function restoreFromSupabase() {
       { name: "orders",    file: path.join(dir, "orders.json"),    valid: (v) => Array.isArray(v) && v.every((o) => o && typeof o === "object" && typeof o.id === "string" && Array.isArray(o.items)) },
       { name: "customers", file: path.join(dir, "customers.json"), valid: (v) => Array.isArray(v) && v.every((c) => c && typeof c === "object" && typeof c.email === "string") },
       { name: "groups",    file: path.join(dir, "groups.json"),    valid: (v) => Array.isArray(v) && v.every((g) => g && typeof g === "object" && typeof g.code === "string") },
+      { name: "loyalty-sessions", file: path.join(dir, "loyalty-sessions.json"), valid: (v) => v && typeof v === "object" && !Array.isArray(v) },
     ];
     for (const tg of targets) {
       try {
@@ -3879,12 +5315,12 @@ async function boot() {
   console.log(`     PATCH  /menu/specials                 (staff)   set/clear today's specials banner`);
   console.log(`     POST   /menu/categories/:slug/sold-out-all  (staff)  bulk sold-out toggle`);
   console.log(`     GET    /reports/today                 (staff)   today's sales report`);
+  console.log(`     GET    /reports/yesterday             (staff)   yesterday's sales (for deltas)`);
   console.log(`     GET    /reports/week                  (staff)   last 7 days report`);
-  console.log(`     GET    /dashboard/reports.html        (staff)   reports admin page`);
   console.log(`     GET    /customers                     (staff)`);
   console.log(`     DELETE /orders                        (staff + ALLOW_DESTRUCTIVE + X-Confirm-Wipe header)`);
-  console.log(`     GET    /dashboard                     (staff, token via ?token= or Bearer)`);
-  console.log(`     GET    /dashboard/menu-admin.html     (staff)   backoffice — edit menu`);
+  console.log(`     GET    /console                       (login)   unified staff ops console`);
+  console.log(`     GET    /dashboard*                    → 302 /console (legacy dashboard retired)`);
   console.log(`     GET    /health                        (public)\n`);
   });
 }
