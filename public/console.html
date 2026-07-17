@@ -193,7 +193,7 @@ const state = {
   customers: [], custByEmail: {},
   rep:null, fee:null,   // reports: custom sales range + monthly dev-fee chart range (lazy-init)
   dayReport:null,       // end-of-shift items-sold report (lazy-init { date })
-  active:'kitchen', sel:{cat:0,item:0}, billSelId:null, alerting:false,
+  active:'kitchen', sel:{cat:0,item:0}, billSelId:null, billShowN:60, alerting:false,
   unlocked:false, pinPrompt:null, pinErr:'', securityMsg:'',
   menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
@@ -211,9 +211,13 @@ async function api(path, opts){
   opts = opts || {};
   const headers = Object.assign({}, opts.headers || {});
   if (SESSION) headers['Authorization'] = 'Bearer ' + SESSION;
+  if (opts.ifNoneMatch) headers['If-None-Match'] = opts.ifNoneMatch;
   let body = opts.body;
   if (body && typeof body !== 'string'){ headers['Content-Type'] = 'application/json'; body = JSON.stringify(body); }
   const r = await fetch(path, { method: opts.method || 'GET', headers, body });
+  // A manual If-None-Match bypasses the browser's transparent revalidation, so
+  // 304 reaches us directly (and is not r.ok — handle it before the error path).
+  if (r.status === 304) return { notModified: true };
   const txt = await r.text();
   let data = null; try { data = txt ? JSON.parse(txt) : null; } catch(e){ data = { error: txt }; }
   if (!r.ok){
@@ -226,7 +230,7 @@ async function api(path, opts){
     }
     const e = new Error((data && data.error) || ('HTTP ' + r.status)); e.status = r.status; e.data = data; throw e;
   }
-  return data;
+  return opts.wantEtag ? { data: data, etag: r.headers.get('ETag') || '' } : data;
 }
 
 /* ───────── toast ───────── */
@@ -571,9 +575,18 @@ async function loadMenu(){
   } catch(e){ state.err.menu = e.message; }
   state.loading.menu = false;
 }
+// The /orders history is current + previous month — megabytes on a busy café.
+// Re-parsing it every 6s poll (and re-stringifying it for poll()'s change sig)
+// crashed iPhone Safari's tab on the billing screen. The server ETags the
+// response, so a conditional GET makes an unchanged history cost a bodyless
+// 304; _ordersRev bumps only on real change and is poll()'s cheap change sig.
+let _ordersEtag = '', _ordersRev = 0;
 async function loadOrders(){
   try {
-    const d = await api('/orders'); state.orders = (d && d.orders) || []; state.err.orders = null;
+    const d = await api('/orders', { ifNoneMatch: _ordersEtag || undefined, wantEtag: true });
+    if (d && d.notModified){ state.err.orders = null; return; }
+    _ordersEtag = (d && d.etag) || ''; _ordersRev++;
+    state.orders = (d && d.data && d.data.orders) || []; state.err.orders = null;
     // Prune session-only print status for orders that have left the board by any
     // path (served here, advanced elsewhere, or deleted) — keep the map bounded.
     const live = {}; state.orders.forEach(function(o){ live[o.id]=1; });
@@ -625,6 +638,9 @@ async function afterAuth(){
 function logout(){
   SESSION=''; lsSet(LS.session,'');
   stopAlert();
+  // Forget the /orders ETag with the orders it validated — a same-etag 304
+  // after re-login would otherwise leave the cleared state.orders empty.
+  _ordersEtag=''; _ordersRev=0;
   state.me=null; state.cafe=null; state.cafes=[]; state.orders=[]; state.menu=null;
   state.archIndex=undefined; state.archOrders=null; state.archLoading=null;
   state.reportsToday=null; state.reportsWeek=null; state.settingsOpen=false; state.switcherOpen=false;
@@ -637,6 +653,7 @@ async function switchCafe(slug){
     SESSION = d.session; lsSet(LS.session, SESSION);
     state.switcherOpen=false; state.menu=null;
     state.archIndex=undefined; state.archOrders=null; state.archLoading=null; // per-café archives
+    _ordersEtag=''; _ordersRev=0; state.billSelId=null; state.billShowN=60;   // per-café orders
     await loadMe(); await loadMenu();
     state.active='kitchen';
     state.unlocked=false;       // each café has its own PIN → re-lock on switch
@@ -1734,8 +1751,15 @@ function billingHTML(){
   // Group the sorted bills under date headers (Today / Yesterday / Sat 21 Jun),
   // each card showing its time. data-idx stays the FLAT sorted index so selection
   // is unaffected by the grouping.
+  // Render only the newest slice — the full 2-month history is thousands of
+  // cards, and rebuilding that DOM on every poll ran iPhone Safari out of
+  // memory (repeated tab crashes). Staff settle today's bills; older ones are
+  // a tap away via "Show older". Selection stays a prefix index, so the
+  // selected bill is always within the rendered slice.
+  const showN = Math.max(state.billShowN || 60, selIdx + 1);
+  const shown = bills.slice(0, showN);
   let lastKey = null;
-  const openBills = bills.map(function(bb,i){
+  const openBills = shown.map(function(bb,i){
     const on = i===selIdx;
     const isPaid = bb.paymentStatus==='paid';
     const chip = isPaid ? ['Paid','var(--pos)','rgba(90,99,64,.18)'] : ['Unpaid','var(--neg)','rgba(194,90,58,.16)'];
@@ -1745,7 +1769,9 @@ function billingHTML(){
     const tm = billTime(bb.createdAt);
     const card = '<div data-act="billSelect" data-id="'+esc(bb.id)+'" style="display:flex;gap:12px;align-items:center;padding:14px;border-radius:12px;cursor:pointer;margin-bottom:9px;border:1.5px solid '+(on?'var(--accent)':'var(--border)')+';background:'+(on?'var(--accent-tint)':'var(--surface)')+';"><div style="flex:1;min-width:0;"><div style="display:flex;align-items:baseline;gap:8px;"><span style="font-size:14px;font-weight:600;color:var(--ink);">'+esc(orderWhere(bb))+'</span>'+(tm?'<span style="font-size:11.5px;color:var(--muted);white-space:nowrap;">'+esc(tm)+'</span>':'')+'</div><div style="font-size:12px;color:var(--muted2);">'+esc(bb.id)+' · '+((bb.items||[]).length)+' items</div>'+(bb.phoneNumber?'<div style="margin-top:2px;">'+phoneLine(bb)+'</div>':'')+'</div><div style="text-align:right;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+money(bb.total)+'</div><span style="display:inline-block;margin-top:4px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;color:'+chip[1]+';background:'+chip[2]+';">'+chip[0]+'</span></div></div>';
     return header + card;
-  }).join('');
+  }).join('') + (bills.length > shown.length
+    ? '<button data-act="billShowMore" style="width:100%;padding:12px;margin:4px 0 9px;border-radius:12px;border:1.5px dashed var(--border);background:transparent;color:var(--muted);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;">Show older bills · '+(bills.length - shown.length)+' more</button>'
+    : '');
 
   const lines = (b.items||[]).map(function(it){ return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:9px 0;border-bottom:1px dotted var(--border);"><div style="flex:1;padding-right:12px;font-size:14px;color:var(--ink);"><span style="color:var(--muted);font-size:12px;">'+(it.qty||1)+'×</span> '+esc(it.name)+(it.size?' <span style="color:var(--muted2);font-size:12px;">('+esc(it.size)+')</span>':'')+'</div><div style="font-family:\'Fraunces\',serif;font-size:14px;color:var(--ink);">'+money((it.price||0)*(it.qty||1))+'</div></div>'; }).join('');
   const adjLines = (b.adjustments||[]).map(function(a){ return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;font-size:13px;color:var(--muted);"><div>'+esc(a.label)+'</div><div style="font-family:\'Fraunces\',serif;">'+(a.amount<0?'-':'')+money(Math.abs(a.amount))+'</div></div>'; }).join('');
@@ -2512,7 +2538,7 @@ async function poll(){
   // rebuild makes the page visibly stutter, so only do it when the data
   // actually changed (or on a minute rollover so "Xm" ages stay fresh).
   else {
-    const sig=A+'|'+JSON.stringify(state.orders)+'|'+(A==='reports'?JSON.stringify(state.reportsToday):'')+'|'+Math.floor(Date.now()/60000);
+    const sig=A+'|'+_ordersRev+'|'+(A==='reports'?JSON.stringify(state.reportsToday):'')+'|'+Math.floor(Date.now()/60000);
     if(sig===_lastPollSig) return;
     _lastPollSig=sig;
     const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0; const bl=document.getElementById('bill-list-scroll'); const blt=bl?bl.scrollTop:0; _noEntrance=true; render(); _noEntrance=false; const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top; const bl2=document.getElementById('bill-list-scroll'); if(bl2) bl2.scrollTop=blt;
@@ -2543,6 +2569,7 @@ function handle(act, ds, ev){
     case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; render(); break;
     case 'submitAddDish': submitAddDish(); break;
     case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSelId=ds.id; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
+    case 'billShowMore': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billShowN=(state.billShowN||60)+240; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'openTender': state.tender=ds.id; render(); break;
     case 'tenderClose': state.tender=null; render(); break;
     case 'tenderPay': tenderPay(ds.method); break;
