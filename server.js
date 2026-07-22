@@ -3879,6 +3879,38 @@ app.delete("/menu/categories/:slug", requireStaff, (req, res) => {
   });
 });
 
+// POST /menu/categories/reorder — staff, replace the category order. Body:
+// { order: ["slug-a", "slug-b", ...] }. Any known slug omitted from `order`
+// keeps its relative position appended at the end (never silently dropped).
+app.post("/menu/categories/reorder", requireStaff, (req, res) => {
+  const { loadMenu, persistMenu } = req.store;
+  withWriteLock(() => {
+    try {
+      const menu = loadMenu();
+      const body = req.body || {};
+      const wanted = Array.isArray(body.order) ? body.order.map((s) => String(s)) : null;
+      if (!wanted) return res.status(400).json({ error: "order[] required" });
+      const known = Object.keys(menu.categories || {});
+      const seen = new Set();
+      const next = [];
+      for (const slug of wanted) {
+        if (menu.categories[slug] && !seen.has(slug)) { next.push(slug); seen.add(slug); }
+      }
+      // Append any known category the client didn't include, preserving old order.
+      for (const slug of (menu.categoryOrder || known)) {
+        if (menu.categories[slug] && !seen.has(slug)) { next.push(slug); seen.add(slug); }
+      }
+      menu.categoryOrder = next;
+      persistMenu(menu);
+      console.log(`[menu] categories reordered (${next.length})`);
+      res.json({ success: true, categoryOrder: next, version: menu.version });
+    } catch (err) {
+      console.error("[menu] category reorder error:", err.message);
+      res.status(500).json({ error: "Failed to reorder categories" });
+    }
+  });
+});
+
 // ── GET /orders/:id — public (for bill page lookup) ───────
 // Requires ?t=<billToken> for orders created with a token. Returns redacted
 // data (no phone, no cooked/picked state, no internal fields).
