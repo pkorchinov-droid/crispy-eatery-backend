@@ -171,7 +171,7 @@ function startAlert(){
   const ae=document.activeElement;
   const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
   if(state.active==='kitchen') refreshKitchenInPlace();
-  else if(!(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.dfyOpen||state.photoMenuOpen||state.menuEditId||typing)) render();
+  else if(!(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.manageCatsOpen||state.dfyOpen||state.photoMenuOpen||state.menuEditId||typing)) render();
 }
 function stopAlert(){
   state.alerting = false;
@@ -198,6 +198,7 @@ const state = {
   menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
   switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
+  addDishTags:[], manageCatsOpen:false, catMsg:'',   // Add-dish: chosen tag chips · Manage-categories panel
   dfyOpen:false, dfyBusy:false, dfyMsg:'', photoMenuOpen:false, previewOpen:false,   // Plan 3: menu-setup chooser / DFY intake / photo import / live preview toggle
   promos:null, promoMsg:'', addDishMsg:'', mealDealMsg:'', pricingMsg:'',
   loginErr:'', lastLogin:'', setMsg:'',
@@ -718,6 +719,7 @@ function appHTML(){
     + (state.tender ? tenderHTML() : '')
     + (state.importOpen ? importHTML() : '')
     + (state.addDishOpen ? addDishHTML() : '')
+    + (state.manageCatsOpen ? manageCatsHTML() : '')
     + (state.dfyOpen ? dfyFormHTML() : '')
     + (state.photoMenuOpen ? photoMenuHTML() : '')
     + (state.menuEditId ? menuSheetHTML() : '')
@@ -1018,28 +1020,149 @@ function importHTML(){
 }
 
 /* ───────── add a dish ───────── */
+// Preset tags offered as one-tap chips. Custom tags (any free text) are also
+// allowed — the server stores up to 6 tags per item, ≤24 chars each.
+const TAG_PRESETS = [['new','New'],['chef','Chef'],['popular','Popular']];
+function tagMeta(t){
+  const M = { new:['New','var(--accent)'], chef:['Chef','var(--accent)'], popular:['Popular','var(--pos)'] };
+  return M[t] || [String(t), 'var(--muted)'];   // custom tag: show its own text, neutral colour
+}
+// The tag-chip picker inside Add-a-dish. Presets toggle; custom tags get a ×.
+// Rebuilt in place by refreshAdTags() so typing a dish name/price is never lost.
+function adTagsHTML(){
+  const chosen = state.addDishTags || [];
+  const chip = function(key, label, on){
+    const c = on ? 'background:var(--accent);color:#fff;border-color:var(--accent);' : 'background:var(--input);color:var(--ink);border-color:var(--border);';
+    return '<button type="button" data-act="adToggleTag" data-tag="'+esc(key)+'" style="font:inherit;font-size:12.5px;padding:6px 12px;border-radius:999px;border:1px solid;cursor:pointer;'+c+'">'+esc(label)+(on?' ✓':'')+'</button>';
+  };
+  const presetKeys = TAG_PRESETS.map(function(p){ return p[0]; });
+  let html = TAG_PRESETS.map(function(p){ return chip(p[0], p[1], chosen.indexOf(p[0])>=0); }).join('');
+  // Custom (non-preset) chosen tags render as removable pills.
+  chosen.filter(function(t){ return presetKeys.indexOf(t)<0; }).forEach(function(t){
+    html += '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:6px 10px 6px 12px;border-radius:999px;border:1px solid var(--accent);color:var(--accent);">'+esc(t)+'<button type="button" data-act="adRemoveTag" data-tag="'+esc(t)+'" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:15px;line-height:1;padding:0;">×</button></span>';
+  });
+  return html;
+}
 function addDishHTML(){
   const inp = "width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;box-sizing:border-box;";
   const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px;";
   const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
-  const catOpts = cats.map(function(c){ return '<option value="'+esc(c.key)+'">'+esc(c.label)+'</option>'; }).join('');
-  const tagOpts = [['','None'],['new','New'],['chef','Chef'],['popular','Popular']].map(function(o){ return '<option value="'+o[0]+'">'+o[1]+'</option>'; }).join('');
+  const noCats = cats.length===0;
+  const catOpts = cats.map(function(c){ return '<option value="'+esc(c.key)+'">'+esc(c.label)+'</option>'; }).join('')
+    + '<option value="__new__"'+(noCats?' selected':'')+'>➕ New category…</option>';
   return '<div style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;">'
     + '<div data-act="closeAddDish" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
     + '<div style="position:relative;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">Add a dish</div><button data-act="closeAddDish" style="background:none;border:none;font-size:22px;line-height:1;color:var(--muted2);cursor:pointer;">×</button></div>'
-    + (cats.length ? (''
-      + '<label style="'+lbl+'margin-top:4px;">Category</label><select id="ad-cat" style="'+inp+'">'+catOpts+'</select>'
-      + '<label style="'+lbl+'">Name</label><input id="ad-name" maxlength="80" placeholder="e.g. Crispy Breakfast" style="'+inp+'">'
-      + '<label style="'+lbl+'">Price</label><input id="ad-price" type="number" min="0" step="0.1" placeholder="0.00" style="'+inp+'">'
-      + '<label style="'+lbl+'">Description (optional)</label><textarea id="ad-desc" maxlength="500" placeholder="Short description shown on the menu" style="'+inp+'height:64px;resize:vertical;"></textarea>'
-      + '<label style="'+lbl+'">Tag (optional)</label><select id="ad-tag" style="'+inp+'">'+tagOpts+'</select>'
-      + '<label style="'+lbl+'">Photo (optional)</label><input id="ad-photo" type="file" accept="image/*" style="'+inp+'padding:9px 13px;">'
-      + '<div style="font-size:11px;color:var(--muted2);margin-top:6px;line-height:1.5;">Sizes (e.g. Small/Large) can be set later in the full menu admin. The photo is uploaded after the dish is created.</div>'
-      + '<div id="ad-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:var(--neg);">'+esc(state.addDishMsg)+'</div>'
-      + '<button data-act="submitAddDish" style="width:100%;margin-top:6px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Add dish</button>'
-    ) : '<div style="font-size:13px;color:var(--muted);margin-top:14px;">Add a category first in the full menu admin, then you can add dishes to it here.</div>')
+    + '<label style="'+lbl+'margin-top:4px;">Category / section</label><select id="ad-cat" onchange="adCatChange(this.value)" style="'+inp+'">'+catOpts+'</select>'
+    + '<div id="ad-newcat-wrap" style="display:'+(noCats?'block':'none')+';margin-top:8px;">'
+      + '<input id="ad-newcat" maxlength="40" placeholder="New section name (e.g. Specials)" style="'+inp+'">'
+      + '<input id="ad-newcat-sub" maxlength="80" placeholder="Subtitle (optional)" style="'+inp+'margin-top:8px;">'
+    + '</div>'
+    + '<label style="'+lbl+'">Name</label><input id="ad-name" maxlength="80" placeholder="e.g. Crispy Breakfast" style="'+inp+'">'
+    + '<label style="'+lbl+'">Price</label><input id="ad-price" type="number" min="0" step="0.1" placeholder="0.00" style="'+inp+'">'
+    + '<label style="'+lbl+'">Description (optional)</label><textarea id="ad-desc" maxlength="500" placeholder="Short description shown on the menu" style="'+inp+'height:64px;resize:vertical;"></textarea>'
+    + '<label style="'+lbl+'">Tags (optional)</label>'
+    + '<div id="ad-tags" style="display:flex;flex-wrap:wrap;gap:8px;">'+adTagsHTML()+'</div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px;">'
+      + '<input id="ad-customtag" maxlength="24" placeholder="Add your own tag…" onkeydown="if(event.key===\'Enter\'){event.preventDefault();adAddCustomTag();}" style="'+inp+'flex:1;">'
+      + '<button type="button" data-act="adAddCustomTag" style="flex-shrink:0;font:inherit;font-size:12.5px;font-weight:600;padding:0 16px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">Add</button>'
+    + '</div>'
+    + '<label style="'+lbl+'">Photo (optional)</label><input id="ad-photo" type="file" accept="image/*" style="'+inp+'padding:9px 13px;">'
+    + '<div style="font-size:11px;color:var(--muted2);margin-top:6px;line-height:1.5;">Sizes (e.g. Small/Large) can be set later in the full menu admin. The photo is uploaded after the dish is created.</div>'
+    + '<div id="ad-msg" style="min-height:16px;font-size:12.5px;margin-top:10px;color:var(--neg);">'+esc(state.addDishMsg)+'</div>'
+    + '<button data-act="submitAddDish" style="width:100%;margin-top:6px;padding:13px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Add dish</button>'
     + '</div></div>';
+}
+// Toggle the "new section" inputs when the category select changes (no full
+// re-render — keeps any dish name/price the user has already typed).
+function adCatChange(v){ const w=document.getElementById('ad-newcat-wrap'); if(w) w.style.display = (v==='__new__')?'block':'none'; }
+function refreshAdTags(){ const el=document.getElementById('ad-tags'); if(el) el.innerHTML=adTagsHTML(); }
+function adToggleTag(key){
+  const t = state.addDishTags || (state.addDishTags=[]);
+  const i = t.indexOf(key);
+  if(i>=0){ t.splice(i,1); }
+  else { if(t.length>=6){ toast('Up to 6 tags per dish','info'); return; } t.push(key); }
+  refreshAdTags();
+}
+function adRemoveTag(key){ const t=state.addDishTags||[]; const i=t.indexOf(key); if(i>=0){ t.splice(i,1); refreshAdTags(); } }
+function adAddCustomTag(){
+  const el=document.getElementById('ad-customtag'); if(!el) return;
+  const raw=String(el.value||'').trim().slice(0,24);
+  el.value='';
+  if(!raw) return;
+  const t = state.addDishTags || (state.addDishTags=[]);
+  if(t.some(function(x){ return x.toLowerCase()===raw.toLowerCase(); })){ el.focus(); return; }
+  if(t.length>=6){ toast('Up to 6 tags per dish','info'); return; }
+  t.push(raw); refreshAdTags(); el.focus();
+}
+
+/* ── Manage sections/categories (add · rename · reorder · delete) ── */
+function manageCatsHTML(){
+  const inp = "width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--input);font-size:14px;color:var(--ink);outline:none;box-sizing:border-box;";
+  const lbl = "display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px;";
+  const ico = "width:34px;height:34px;flex-shrink:0;border-radius:9px;border:1px solid var(--border);background:var(--input);color:var(--accent);cursor:pointer;font-size:15px;line-height:1;";
+  const cats = menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const rows = cats.length ? cats.map(function(c, i){
+    const n = (c.items||[]).length;
+    const up   = i>0            ? '<button data-act="catUp"   data-slug="'+esc(c.key)+'" title="Move up"   style="'+ico+'">↑</button>' : '<span style="width:34px;flex-shrink:0;"></span>';
+    const down = i<cats.length-1? '<button data-act="catDown" data-slug="'+esc(c.key)+'" title="Move down" style="'+ico+'">↓</button>' : '<span style="width:34px;flex-shrink:0;"></span>';
+    return '<div style="margin-bottom:6px;">'
+      + '<div style="display:flex;align-items:center;gap:6px;">'
+        + '<input id="mc-t-'+esc(c.key)+'" value="'+esc(c.label)+'" maxlength="40" style="'+inp+'flex:1;">'
+        + '<button data-act="renameCat" data-slug="'+esc(c.key)+'" title="Save name" style="'+ico+'color:var(--pos);border-color:var(--pos);">✓</button>'
+        + up + down
+        + '<button data-act="deleteCat" data-slug="'+esc(c.key)+'" title="Delete section" style="'+ico+'color:var(--neg);border-color:var(--neg);">×</button>'
+      + '</div>'
+      + '<div style="font-size:11px;color:var(--muted2);margin:3px 0 0 3px;">'+n+' dish'+(n===1?'':'es')+'</div>'
+    + '</div>';
+  }).join('') : '<div style="font-size:13px;color:var(--muted);margin-top:10px;">No sections yet — add your first one below.</div>';
+  return '<div style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;">'
+    + '<div data-act="closeManageCats" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
+    + '<div style="position:relative;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">Menu sections</div><button data-act="closeManageCats" style="background:none;border:none;font-size:22px;line-height:1;color:var(--muted2);cursor:pointer;">×</button></div>'
+    + '<div style="font-size:12px;color:var(--muted2);margin-bottom:8px;line-height:1.5;">Rename (✓), reorder (↑↓) or delete your categories. Order here is the order customers see.</div>'
+    + rows
+    + '<label style="'+lbl+'">Add a section</label>'
+    + '<input id="mc-new" maxlength="40" placeholder="Section name (e.g. Specials)" style="'+inp+'">'
+    + '<input id="mc-new-sub" maxlength="80" placeholder="Subtitle (optional)" style="'+inp+'margin-top:8px;">'
+    + '<div id="mc-msg" style="min-height:16px;font-size:12.5px;margin-top:8px;color:var(--neg);">'+esc(state.catMsg)+'</div>'
+    + '<button data-act="addCat" style="width:100%;margin-top:4px;padding:12px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Add section</button>'
+    + '</div></div>';
+}
+async function addCategory(){
+  const setMsg=function(m){ state.catMsg=m; const el=document.getElementById('mc-msg'); if(el) el.textContent=m; };
+  const title=val('mc-new').trim();
+  if(!title){ setMsg('Enter a section name.'); return; }
+  const sub=val('mc-new-sub').trim();
+  try { await api('/menu/categories', { method:'POST', body:{ title:title, subtitle:sub||undefined } }); }
+  catch(e){ setMsg(e.message||'Could not add section'); return; }
+  state.catMsg=''; await loadMenu(); render(); toast('Added '+title,'ok');
+}
+async function renameCategory(slug){
+  const title=val('mc-t-'+slug).trim();
+  if(!title){ toast('Name can’t be empty','info'); return; }
+  try { await api('/menu/categories/'+enc(slug), { method:'PATCH', body:{ title:title } }); }
+  catch(e){ toast(e.message||'Could not rename','err'); return; }
+  await loadMenu(); render(); toast('Renamed to '+title,'ok');
+}
+async function deleteCategory(slug){
+  const cats=menuCategoriesOrdered().filter(function(c){ return !c.virtual; });
+  const c=cats.find(function(x){ return x.key===slug; });
+  const n=c?(c.items||[]).length:0; const label=c?c.label:slug;
+  if(!confirm(n>0 ? ('Delete “'+label+'” and its '+n+' dish'+(n===1?'':'es')+'?\n\nThis can’t be undone.') : ('Delete empty section “'+label+'”?'))) return;
+  try { await api('/menu/categories/'+enc(slug)+(n>0?'?force=1':''), { method:'DELETE' }); }
+  catch(e){ toast(e.message||'Could not delete','err'); return; }
+  await loadMenu(); render(); toast('Deleted '+label,'ok');
+}
+async function moveCategory(slug, dir){
+  const order=menuCategoriesOrdered().filter(function(c){ return !c.virtual; }).map(function(c){ return c.key; });
+  const i=order.indexOf(slug), j=i+dir;
+  if(i<0||j<0||j>=order.length) return;
+  order.splice(j,0, order.splice(i,1)[0]);
+  try { await api('/menu/categories/reorder', { method:'POST', body:{ order:order } }); }
+  catch(e){ toast(e.message||'Could not reorder','err'); return; }
+  await loadMenu(); render();
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1051,7 +1174,7 @@ function hasTag(it, tag){ return Array.isArray(it.tags) && it.tags.indexOf(tag)>
 function menuCategoriesOrdered(){
   const m = state.menu; if(!m||!m.categories) return [];
   const order = m.categoryOrder && m.categoryOrder.length ? m.categoryOrder : Object.keys(m.categories);
-  const real = order.filter(function(k){ return m.categories[k]; }).map(function(k){ return { key:k, label:(m.categories[k].label)||prettyCat(k), items:(m.categories[k].items||[]) }; });
+  const real = order.filter(function(k){ return m.categories[k]; }).map(function(k){ return { key:k, label:(m.categories[k].title)||(m.categories[k].label)||prettyCat(k), items:(m.categories[k].items||[]) }; });
   const newItems = real.reduce(function(acc,c){ return acc.concat((c.items||[]).filter(function(it){ return hasTag(it,'new'); })); }, []);
   if(newItems.length){ return [{ key:'new-items', label:'New on the Menu', items:newItems, virtual:true }].concat(real); }
   return real;
@@ -1565,6 +1688,7 @@ function menuHTML(){
     + '<input id="menu-search" type="search" value="'+esc(state.menuSearch||'')+'" oninput="onMenuSearch(this.value)" placeholder="Search dishes…" autocapitalize="none" autocorrect="off" style="'+inp+'">'
     + '<button data-act="openAddDish" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:none;background:var(--btn-bg);color:var(--btn-fg);cursor:pointer;">+ Add dish</button>'
     + (diy ? photoBtn : '')
+    + '<button data-act="openManageCats" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">☰ Sections</button>'
     + '<button data-act="openImport" style="flex-shrink:0;font-family:inherit;font-size:12.5px;font-weight:600;padding:0 14px;height:40px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--accent);cursor:pointer;">↧ Import</button>'
     + '</div></div>';
   const editorCol = '<div style="padding:18px 24px 90px;animation:fadeUp .35s ease;">'+toolbar+'<div id="menu-list">'+menuListHTML()+'</div></div>';
@@ -1649,8 +1773,9 @@ function menuListHTML(){
   return html;
 }
 function menuCardHTML(it){
-  const tag = hasTag(it,'new') ? ['New','var(--accent)'] : hasTag(it,'chef') ? ['Chef','var(--accent)'] : hasTag(it,'popular') ? ['Popular','var(--pos)'] : null;
-  const tagHTML = tag ? '<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;flex-shrink:0;color:'+tag[1]+';border:1px solid '+tag[1]+';">'+tag[0]+'</span>' : '';
+  // Render every tag as a badge (presets keep their colour; custom tags show
+  // their own text in a neutral colour). Cap at 2 to protect the row layout.
+  const tagHTML = (Array.isArray(it.tags)?it.tags:[]).slice(0,2).map(function(t){ const b=tagMeta(t); return '<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;flex-shrink:0;color:'+b[1]+';border:1px solid '+b[1]+';">'+esc(b[0])+'</span>'; }).join('');
   return '<div data-act="menuOpen" data-id="'+esc(it.id)+'" style="display:flex;gap:12px;align-items:center;padding:11px;border-radius:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface);transition:border-color .15s;'+(it.outOfStock?'opacity:.6;':'')+'">'
     + '<div style="width:46px;height:46px;border-radius:9px;background:var(--track);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);overflow:hidden;position:relative;">'+icPlate(20,1.2)+imgOverlay(it)+'</div>'
     + '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:7px;min-width:0;"><span style="font-size:14px;font-weight:600;line-height:1.15;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(it.name)+'</span>'+tagHTML+'</div><div style="font-size:12px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">'+esc(it.desc||'')+'</div></div>'
@@ -2271,14 +2396,23 @@ async function saveLoyalty(){
 // photo (POST /menu/items/:id/image). A failed photo upload keeps the dish.
 async function submitAddDish(){
   const setMsg=function(m){ state.addDishMsg=m; const el=document.getElementById('ad-msg'); if(el) el.textContent=m; };
-  const categorySlug=val('ad-cat');
+  let categorySlug=val('ad-cat');
   const name=val('ad-name').trim();
   const price=Number(val('ad-price'));
   if(!name){ setMsg('Enter a name.'); return; }
   if(!isFinite(price)||price<0){ setMsg('Enter a valid price.'); return; }
+  // New section chosen inline: create the category first, then add the dish into it.
+  if(categorySlug==='__new__'){
+    const title=val('ad-newcat').trim();
+    if(!title){ setMsg('Name the new section.'); return; }
+    const sub=val('ad-newcat-sub').trim();
+    try { const d=await api('/menu/categories', { method:'POST', body:{ title:title, subtitle:sub||undefined } }); categorySlug=d&&d.slug; }
+    catch(e){ setMsg(e.message||'Could not create section'); return; }
+    if(!categorySlug){ setMsg('Could not create section'); return; }
+  }
   const body={ categorySlug:categorySlug, name:name, price:price };
   const desc=val('ad-desc').trim(); if(desc) body.desc=desc;
-  const tag=val('ad-tag'); if(tag) body.tags=[tag];
+  const tags=(state.addDishTags||[]).slice(0,6); if(tags.length) body.tags=tags;
   let created;
   try { created=await api('/menu/items', { method:'POST', body:body }); }
   catch(e){ setMsg(e.message||'Could not add dish'); return; }
@@ -2293,7 +2427,7 @@ async function submitAddDish(){
       if(!r.ok){ const t=await r.text(); let j=null; try{ j=JSON.parse(t); }catch(e){} photoWarn=(j&&j.error)||('photo upload failed ('+r.status+')'); }
     } catch(e){ photoWarn=e.message||'photo upload failed'; }
   }
-  state.addDishOpen=false; state.addDishMsg='';
+  state.addDishOpen=false; state.addDishMsg=''; state.addDishTags=[];
   await loadMenu();
   // Highlight the new dish: expand its category and open its editor sheet.
   if(created && created.item){ state.menuEditId=created.item.id; state.menuExpanded[categorySlug]=true; }
@@ -2531,7 +2665,7 @@ async function poll(){
   // field: a full render() destroys the focused input and eats the typing.
   const ae=document.activeElement;
   const typing=!!(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'));
-  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.dfyOpen||state.photoMenuOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
+  if(state.pinPrompt||state.settingsOpen||state.tender||state.importOpen||state.addDishOpen||state.manageCatsOpen||state.dfyOpen||state.photoMenuOpen||typing){ if(A==='kitchen') refreshKitchenInPlace(); return; }
   if(A==='kitchen') refreshKitchenInPlace();
   // Dashboard/billing do a full render() on the background poll, which rebuilds
   // .app-body from scratch (scrollTop → 0). Even with scrollTop restored the
@@ -2565,9 +2699,19 @@ function handle(act, ds, ev){
     case 'openImport': state.importOpen=true; render(); break;
     case 'closeImport': state.importOpen=false; render(); break;
     case 'runImport': runImport(); break;
-    case 'openAddDish': state.addDishOpen=true; state.addDishMsg=''; render(); break;
-    case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; render(); break;
+    case 'openAddDish': state.addDishOpen=true; state.addDishMsg=''; state.addDishTags=[]; render(); break;
+    case 'closeAddDish': state.addDishOpen=false; state.addDishMsg=''; state.addDishTags=[]; render(); break;
     case 'submitAddDish': submitAddDish(); break;
+    case 'adToggleTag': adToggleTag(ds.tag); break;
+    case 'adRemoveTag': adRemoveTag(ds.tag); break;
+    case 'adAddCustomTag': adAddCustomTag(); break;
+    case 'openManageCats': state.manageCatsOpen=true; state.catMsg=''; render(); break;
+    case 'closeManageCats': state.manageCatsOpen=false; state.catMsg=''; render(); break;
+    case 'addCat': addCategory(); break;
+    case 'renameCat': renameCategory(ds.slug); break;
+    case 'deleteCat': deleteCategory(ds.slug); break;
+    case 'catUp': moveCategory(ds.slug,-1); break;
+    case 'catDown': moveCategory(ds.slug,1); break;
     case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSelId=ds.id; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'billShowMore': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billShowN=(state.billShowN||60)+240; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'openTender': state.tender=ds.id; render(); break;
