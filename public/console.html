@@ -1917,10 +1917,21 @@ function menuCardHTML(it){
   // Render every tag as a badge (presets keep their colour; custom tags show
   // their own text in a neutral colour). Cap at 2 to protect the row layout.
   const tagHTML = (Array.isArray(it.tags)?it.tags:[]).slice(0,2).map(function(t){ const b=tagMeta(t); return '<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;flex-shrink:0;color:'+b[1]+';border:1px solid '+b[1]+';">'+esc(b[0])+'</span>'; }).join('');
-  return '<div data-act="menuOpen" data-id="'+esc(it.id)+'" style="display:flex;gap:12px;align-items:center;padding:11px;border-radius:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface);transition:border-color .15s;'+(it.outOfStock?'opacity:.6;':'')+'">'
+  // 86'ing a dish is the most-used menu action in service, so it lives on the row
+  // itself: the availability pill is its own tap target (a nested data-act beats
+  // the row's menuOpen in the click delegate, so tapping it never opens the
+  // editor sheet), and an off dish strikes its name + says NOT AVAILABLE where
+  // the description normally sits. (Beside the name it squeezed the name itself
+  // to zero width behind its ellipsis in the 3-up card grid.)
+  const busy = !!_availBusy[it.id];
+  const subLine = it.outOfStock
+    ? '<span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--neg);">Not available</span>'
+    : esc(it.desc||'');
+  const availPill = '<button data-act="rowAvail" data-id="'+esc(it.id)+'"'+(busy?' disabled':'')+' title="'+(it.outOfStock?'Put back on the menu':'Mark as not available')+'" style="margin-top:5px;padding:4px 9px;border-radius:20px;cursor:pointer;font-family:inherit;font-size:10.5px;font-weight:700;letter-spacing:.02em;white-space:nowrap;'+(it.outOfStock?'background:var(--neg);color:#fbf6ec;border:1px solid var(--neg);':'background:none;color:var(--pos);border:1px solid var(--pos);')+(busy?'opacity:.5;':'')+'">'+(busy?'…':(it.outOfStock?'Not available':'Available'))+'</button>';
+  return '<div data-act="menuOpen" data-id="'+esc(it.id)+'" style="display:flex;gap:12px;align-items:center;padding:11px;border-radius:11px;cursor:pointer;border:1px solid '+(it.outOfStock?'var(--neg)':'var(--border)')+';background:var(--surface);transition:border-color .15s;'+(it.outOfStock?'opacity:.72;':'')+'">'
     + '<div style="width:46px;height:46px;border-radius:9px;background:var(--track);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--muted2);overflow:hidden;position:relative;">'+icPlate(20,1.2)+imgOverlay(it)+'</div>'
-    + '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:7px;min-width:0;"><span style="font-size:14px;font-weight:600;line-height:1.15;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(it.name)+'</span>'+tagHTML+'</div><div style="font-size:12px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">'+esc(it.desc||'')+'</div></div>'
-    + '<div style="text-align:right;flex-shrink:0;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+itemPriceLabel(it)+'</div><div style="font-size:11px;font-weight:600;margin-top:3px;color:'+(it.outOfStock?'var(--neg)':'var(--pos)')+';">'+(it.outOfStock?'86’d':'Available')+'</div></div>'
+    + '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:7px;min-width:0;"><span style="font-size:14px;font-weight:600;line-height:1.15;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'+(it.outOfStock?'text-decoration:line-through;text-decoration-color:var(--neg);':'')+'">'+esc(it.name)+'</span>'+tagHTML+'</div><div style="font-size:12px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">'+subLine+'</div></div>'
+    + '<div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;"><div style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--ink);">'+itemPriceLabel(it)+'</div>'+availPill+'</div>'
     + '<span style="flex-shrink:0;display:inline-flex;color:var(--muted2);transform:rotate(-90deg);">'+ic(ICON.chevron,1.7,15)+'</span>'
     + '</div>';
 }
@@ -2457,6 +2468,32 @@ function bump(d){
 }
 // 86 is a decisive, immediate action — PATCH it right away so the customer menu
 // reflects it now (no "looks 86'd but isn't" trap), and revert the toggle on failure.
+// In-flight 86 toggles by item id — a double-tap on the row pill would PATCH twice.
+const _availBusy = {};
+// Row-level 86 toggle (Menu list). Same PATCH as the editor sheet's toggle, but
+// re-renders the list in place so the search box keeps focus/caret and the
+// operator's scroll position survives.
+async function toggleAvailRow(id){
+  if(_availBusy[id]) return;
+  const it = menuFindItem(id);
+  if(!it){ toast('Dish not found — reload the menu','err'); return; }
+  const next = !it.outOfStock;
+  _availBusy[id] = 1; refreshMenuList();
+  try {
+    await api('/menu/items/'+enc(id), { method:'PATCH', body:{ outOfStock: next } });
+    it.outOfStock = next;
+    toast((next?'Not available · ':'Back on the menu · ')+it.name, next?'info':'ok');
+  } catch(e){ toast('Couldn’t update — '+e.message,'err'); }
+  finally { delete _availBusy[id]; refreshMenuList(); refreshPhonePreview(); }
+}
+function menuFindItem(id){
+  const cats = menuCategoriesOrdered();
+  for(let i=0;i<cats.length;i++){
+    const hit = (cats[i].items||[]).find(function(x){ return x.id===id; });
+    if(hit) return hit;
+  }
+  return null;
+}
 async function toggleAvail(){
   const it = menuEditingItem();
   if(!it) return;
@@ -2901,6 +2938,7 @@ function handle(act, ds, ev){
     case 'menuOpen': state.menuEditId=ds.id; menuDraftInit(menuEditingItem()); render(); break;
     case 'menuClose': state.menuEditId=null; _menuDraft=null; render(); break;
     case 'menuToggleCat': state.menuExpanded[ds.key]=!state.menuExpanded[ds.key]; refreshMenuList(); break;
+    case 'rowAvail': toggleAvailRow(ds.id); break;
     case 'priceUp': bump(0.5); break;
     case 'priceDown': bump(-0.5); break;
     case 'toggleAvail': toggleAvail(); break;
