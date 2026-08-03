@@ -6,7 +6,8 @@
 <title>Ops Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <style>
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;}
@@ -96,6 +97,8 @@
 <body>
 <div id="root"></div>
 <div id="toast"></div>
+<!-- Network/printer status banners — outside #root so every render() survives them. -->
+<div id="netbanner" style="position:fixed;top:0;left:0;right:0;z-index:70;pointer-events:none;"></div>
 
 <script>
 "use strict";
@@ -197,11 +200,12 @@ const state = {
   unlocked:false, pinPrompt:null, pinErr:'', securityMsg:'',
   menuExpanded:{}, menuSearch:'', menuEditId:null,   // Menu: collapsible cats · search · open editor sheet
   prefs:{ appearance:'Dark', accent:null, density:'Standard' },
-  switcherOpen:false, settingsOpen:false, tender:null, importOpen:false, addDishOpen:false,
+  switcherOpen:false, settingsOpen:false, tender:null, tenderServe:false, importOpen:false, addDishOpen:false,
   addDishTags:[], manageCatsOpen:false, catMsg:'',   // Add-dish: chosen tag chips · Manage-categories panel
   dfyOpen:false, dfyBusy:false, dfyMsg:'', photoMenuOpen:false, previewOpen:false,   // Plan 3: menu-setup chooser / DFY intake / photo import / live preview toggle
   promos:null, promoMsg:'', addDishMsg:'', mealDealMsg:'', pricingMsg:'',
   loginErr:'', lastLogin:'', setMsg:'',
+  reconnecting:false,   // saved session, afterAuth failing (non-401) — auto-retrying
   loading:{ orders:false, menu:false, reports:false },
   err:{},
 };
@@ -215,7 +219,21 @@ async function api(path, opts){
   if (opts.ifNoneMatch) headers['If-None-Match'] = opts.ifNoneMatch;
   let body = opts.body;
   if (body && typeof body !== 'string'){ headers['Content-Type'] = 'application/json'; body = JSON.stringify(body); }
-  const r = await fetch(path, { method: opts.method || 'GET', headers, body });
+  const method = opts.method || 'GET';
+  // Abort hung requests — flaky café wifi otherwise leaves awaits (and their
+  // busy guards) pending forever. GETs get 10s, mutations 15s.
+  const ctrl = new AbortController();
+  const tId = setTimeout(function(){ ctrl.abort(); }, method==='GET' ? 10000 : 15000);
+  let r;
+  try { r = await fetch(path, { method: method, headers, body, signal: ctrl.signal }); }
+  catch(err){
+    // quiet: background pollers (orders/menu retries) own their failure UI —
+    // the OFFLINE banner — so they must not spam a timeout toast every cycle
+    // and clobber operator toasts ('Marked paid', 'Receipt printed').
+    if (err && err.name==='AbortError'){ if (!opts.quiet) toast('Request timed out — check wifi','err'); const te=new Error('Request timed out'); te.timeout=true; throw te; }
+    throw err;
+  }
+  finally { clearTimeout(tId); }
   // A manual If-None-Match bypasses the browser's transparent revalidation, so
   // 304 reaches us directly (and is not r.ok — handle it before the error path).
   if (r.status === 304) return { notModified: true };
@@ -225,7 +243,7 @@ async function api(path, opts){
     // Central recovery: a mid-session 401 (expired/revoked token) drops us back to
     // the login screen instead of leaving a dead shell. Skip for the login call itself.
     if (r.status===401 && SESSION && path.indexOf('/auth/login')<0){
-      SESSION=''; lsSet(LS.session,''); state.me=null; state.settingsOpen=false; state.tender=null;
+      SESSION=''; lsSet(LS.session,''); state.me=null; state.settingsOpen=false; state.tender=null; state.tenderServe=false;
       stopAlert();
       try { render(); } catch(e){}
     }
@@ -242,6 +260,26 @@ function toast(msg, kind){
   if(_toastT) clearTimeout(_toastT);
   _toastT = setTimeout(()=>{ box.innerHTML=''; }, kind==='err'?6000:2600);
 }
+
+/* ───────── network / printer-config banners ─────────
+   Red OFFLINE bar after 2 consecutive /orders failures (or the OS says we're
+   offline); amber bar while the boot-time printer config is missing. Lives in
+   #netbanner outside #root, so it persists on every screen across renders. */
+let _ordersFails = 0, _ordersLastOk = 0, _printCfgWarn = '';
+function netBannerUpdate(){
+  const el = document.getElementById('netbanner'); if(!el) return;
+  let h = '';
+  if (navigator.onLine===false || _ordersFails>=2){
+    const t = _ordersLastOk ? new Date(_ordersLastOk).toLocaleTimeString('en-NZ',{hour:'2-digit',minute:'2-digit',hour12:false}) : 'never';
+    h += '<div style="background:#a8321e;color:#fff;text-align:center;font-size:13px;font-weight:700;letter-spacing:.05em;padding:9px 14px;box-shadow:0 4px 14px rgba(0,0,0,.35);">OFFLINE — orders may be missing · last updated '+esc(t)+'</div>';
+  }
+  if (_printCfgWarn){
+    h += '<div style="background:#8a6210;color:#fff;text-align:center;font-size:12.5px;font-weight:600;padding:8px 14px;">'+esc(_printCfgWarn)+'</div>';
+  }
+  el.innerHTML = h;
+}
+window.addEventListener('offline', netBannerUpdate);
+window.addEventListener('online', function(){ netBannerUpdate(); schedulePoll(0); });
 
 /* ───────── helpers ───────── */
 function cfg(){ return (state.cafe && state.cafe.config) || {}; }
@@ -353,6 +391,23 @@ function applyMenuToPrintConfig(m){
   TENANT_RECEIPT = { name:(m&&m.restaurantName)||'', legalName:(m&&m.legalName)||'', gstNumber:(m&&m.gstNumber)||'', address:(m&&m.address)||'', isDefaultTenant:!!(m&&m.isDefaultTenant) };
   PRINTING_ENABLED = !!(m && m.features && m.features.printing && m.features.stationPrinting);
 }
+// Last-good printer config, per café. A failed boot loadMenu() would otherwise
+// leave PRINTING_ENABLED=false (auto-print silently off) for the whole shift.
+function printCfgKey(){ return 'cmc_printcfg_'+(state.activeSlug||''); }
+function cachePrintConfig(){
+  lsSet(printCfgKey(), { itemCategory:ITEM_CATEGORY, stations:TENANT_PRINTER_IPS, gstRate:TENANT_GST_RATE, currency:TENANT_CURRENCY, devFeeLabel:TENANT_DEV_FEE_LABEL, receipt:TENANT_RECEIPT, printingEnabled:PRINTING_ENABLED });
+}
+function applyCachedPrintConfig(){
+  const c = lsJSON(printCfgKey()); if(!c) return false;
+  ITEM_CATEGORY = c.itemCategory || {};
+  TENANT_PRINTER_IPS = c.stations || {};
+  if (typeof c.gstRate==='number') TENANT_GST_RATE = c.gstRate;
+  if (c.currency) TENANT_CURRENCY = c.currency;
+  if (c.devFeeLabel) TENANT_DEV_FEE_LABEL = c.devFeeLabel;
+  TENANT_RECEIPT = c.receipt || {};
+  PRINTING_ENABLED = !!c.printingEnabled;
+  return true;
+}
 function baseName(name){ var s=String(name==null?'':name); var p=s.indexOf(' ('); return p>=0?s.slice(0,p):s; }
 function isDrink(itemName){ var lower=baseName(itemName).toLowerCase(); return DRINK_KEYWORDS.some(function(kw){ return lower.indexOf(kw)!==-1; }); }
 function isDrinkItem(item){ if(!item) return false; var cat=item&&item.id?ITEM_CATEGORY[item.id]:null; if(cat) return !!DRINK_CATEGORIES[cat]; return isDrink((item&&item.name)||''); }
@@ -370,12 +425,18 @@ function getReceiptInfo(){
 }
 function sendEposOnce(xml, ip){
   var url = 'https://' + ip + '/cgi-bin/epos/service.cgi?devid=local_printer&timeout=8000';
-  return fetch(url, { method:'POST', headers:{ 'Content-Type':'text/xml; charset=utf-8', 'SOAPAction':'""' }, body:xml })
-    .then(function(r){ return r.text().then(function(text){ if(/success="true"/.test(text)) return {ok:true}; var m=text.match(/code="([^"]*)"/); return {ok:false, reason:(m&&m[1])?m[1]:'printer error'}; }); });
+  // A hung LAN socket (printer asleep / flaky uplink) never settles on its own —
+  // abort at 10s so sendEpos's retry loop actually gets to retry.
+  var ctrl = new AbortController();
+  var t = setTimeout(function(){ ctrl.abort(); }, 10000);
+  return fetch(url, { method:'POST', headers:{ 'Content-Type':'text/xml; charset=utf-8', 'SOAPAction':'""' }, body:xml, signal:ctrl.signal })
+    .then(function(r){ clearTimeout(t); return r.text().then(function(text){ if(/success="true"/.test(text)) return {ok:true}; var m=text.match(/code="([^"]*)"/); return {ok:false, reason:(m&&m[1])?m[1]:'printer error'}; }); },
+          function(e){ clearTimeout(t); throw e; });
 }
+var EPOS_RETRY_WAITS = [700, 2000, 5000, 10000, 20000];
 function sendEpos(xml, ip, tries){
-  tries = tries||3;
-  function again(){ return new Promise(function(r){ setTimeout(r,700); }).then(function(){ return sendEpos(xml,ip,tries-1); }); }
+  tries = tries||5;
+  function again(){ var w=EPOS_RETRY_WAITS[Math.min(Math.max(5-tries,0),EPOS_RETRY_WAITS.length-1)]; return new Promise(function(r){ setTimeout(r,w); }).then(function(){ return sendEpos(xml,ip,tries-1); }); }
   return sendEposOnce(xml,ip).then(function(res){ return (res.ok||tries<=1)?res:again(); }).catch(function(e){ if(tries<=1) throw e; return again(); });
 }
 function buildStationTicketXml(order, items, stationLabel){
@@ -483,8 +544,18 @@ function buildPrintJobs(order){
   if(fIp&&items.length) jobs.push({label:'full',ip:fIp,xml:buildStationTicketXml(order,items,'FULL ORDER')});
   return jobs;
 }
+// Per-shift failed-print tally, surfaced in the header when > 0 (reset on logout).
+let _failedPrints = 0;
+function failBadgeText(){ return '⚠ '+_failedPrints+' failed print'+(_failedPrints===1?'':'s'); }
+function failBadgeHTML(){ return '<span id="fp-badge" style="display:'+(_failedPrints>0?'inline-flex':'none')+';align-items:center;background:rgba(255,107,74,.14);color:#ff6b4a;font-weight:700;font-size:12px;padding:4px 10px;border-radius:20px;white-space:nowrap;">'+failBadgeText()+'</span>'; }
+function bumpFailedPrints(n){
+  _failedPrints += (n||1);
+  const el=document.getElementById('fp-badge'); if(!el) return;
+  el.textContent = failBadgeText(); el.style.display = 'inline-flex';
+}
 function runPrintJobs(jobs){
-  return Promise.all(jobs.map(function(j){ return sendEpos(j.xml,j.ip).then(function(res){ return {j:j,ok:res.ok,reason:res.reason}; }).catch(function(){ return {j:j,ok:false,reason:'unreachable'}; }); }));
+  return Promise.all(jobs.map(function(j){ return sendEpos(j.xml,j.ip).then(function(res){ return {j:j,ok:res.ok,reason:res.reason}; }).catch(function(){ return {j:j,ok:false,reason:'unreachable'}; }); }))
+    .then(function(rs){ var bad=rs.filter(function(r){ return !r.ok; }).length; if(bad) bumpFailedPrints(bad); return rs; });
 }
 function printTicket(orderId){
   if(!PRINTING_ENABLED){ toast('Printing is off for this café','err'); return; }
@@ -521,7 +592,7 @@ function printReceipt(orderId){
   var order=state.orders.find(function(o){ return o.id===orderId; }); if(!order){ toast('Order not found','err'); return; }
   var rIp=getStation('receipt'); if(!rIp){ toast('No receipt printer configured','err'); return; }
   toast('Printing receipt '+order.id+'…');
-  sendEpos(buildReceiptXml(order),rIp).then(function(res){ toast(res.ok?'🧾 Receipt printed '+order.id:'Print failed — '+res.reason,res.ok?'ok':'err'); }).catch(function(){ toast(printerHelp(rIp),'err'); });
+  sendEpos(buildReceiptXml(order),rIp).then(function(res){ if(!res.ok) bumpFailedPrints(1); toast(res.ok?'🧾 Receipt printed '+order.id:'Print failed — '+res.reason,res.ok?'ok':'err'); }).catch(function(){ bumpFailedPrints(1); toast(printerHelp(rIp),'err'); });
 }
 
 // ── Account-based printer setup (the owner wires their café's stations) ──────
@@ -566,25 +637,60 @@ async function loadMe(){
   state.cafe = me.cafe || null;
   state.prefs.accent = null; // café brand drives accent
 }
+let _menuRetryT = null, _menuRetryN = 0, _menuSeq = 0;
 async function loadMenu(){
   state.loading.menu = true;
+  // Stale-response guard: a hung /menu for café A resolving after a switch to
+  // café B must not clobber live TENANT_* config — or worse, cache A's printer
+  // IPs/GST under B's cmc_printcfg_ key. Only the newest request, on the same
+  // session it started with, may apply.
+  const seq = ++_menuSeq, sess = SESSION;
   try {
-    const m = await api('/menu?raw=1');
+    const m = await api('/menu?raw=1', { quiet: true });
+    if (seq !== _menuSeq || sess !== SESSION) return;
     state.menu = m;
     applyMenuToPrintConfig(m);
+    cachePrintConfig();
     state.err.menu = null;
-  } catch(e){ state.err.menu = e.message; }
+    if (_menuRetryT){ clearTimeout(_menuRetryT); _menuRetryT = null; }
+    if (_printCfgWarn){
+      _printCfgWarn = ''; _menuRetryN = 0; netBannerUpdate();
+      if (state.active==='kitchen') refreshKitchenInPlace();   // print buttons may appear now
+    }
+  } catch(e){
+    if (seq !== _menuSeq || sess !== SESSION) return;
+    state.err.menu = e.message;
+    // Boot-time failure: /menu carries the printer config, so auto-print would
+    // silently stay off all shift. Fall back to the cached config and keep
+    // retrying in the background until the live one loads.
+    if (!state.menu){
+      const cached = applyCachedPrintConfig();
+      _printCfgWarn = cached ? 'Printer config not loaded — using cached printers, retrying…'
+                             : 'Printer config not loaded — auto-print disabled, retrying…';
+      netBannerUpdate();
+      scheduleMenuRetry();
+    }
+  }
   state.loading.menu = false;
+}
+function scheduleMenuRetry(){
+  if (_menuRetryT) return;
+  const d = [5000, 15000, 30000][_menuRetryN] || 60000; _menuRetryN++;
+  _menuRetryT = setTimeout(function(){ _menuRetryT = null; if (SESSION && !state.menu) loadMenu(); else { _printCfgWarn=''; netBannerUpdate(); } }, d);
 }
 // The /orders history is current + previous month — megabytes on a busy café.
 // Re-parsing it every 6s poll (and re-stringifying it for poll()'s change sig)
 // crashed iPhone Safari's tab on the billing screen. The server ETags the
 // response, so a conditional GET makes an unchanged history cost a bodyless
 // 304; _ordersRev bumps only on real change and is poll()'s cheap change sig.
-let _ordersEtag = '', _ordersRev = 0;
+let _ordersEtag = '', _ordersRev = 0, _ordersSeq = 0;
 async function loadOrders(){
+  const seq = ++_ordersSeq;   // only the newest in-flight request may apply — a slow
+                              // stale response must not clobber fresher orders
   try {
-    const d = await api('/orders', { ifNoneMatch: _ordersEtag || undefined, wantEtag: true });
+    const d = await api('/orders', { ifNoneMatch: _ordersEtag || undefined, wantEtag: true, quiet: true });
+    if (seq !== _ordersSeq) return;
+    _ordersFails = 0; _ordersLastOk = Date.now(); netBannerUpdate();
     if (d && d.notModified){ state.err.orders = null; return; }
     _ordersEtag = (d && d.etag) || ''; _ordersRev++;
     state.orders = (d && d.data && d.data.orders) || []; state.err.orders = null;
@@ -593,7 +699,11 @@ async function loadOrders(){
     const live = {}; state.orders.forEach(function(o){ live[o.id]=1; });
     Object.keys(printStatusById).forEach(function(id){ if(!live[id]) delete printStatusById[id]; });
   }
-  catch(e){ state.err.orders = e.message; }
+  catch(e){
+    if (seq !== _ordersSeq) return;
+    state.err.orders = e.message;
+    _ordersFails++; netBannerUpdate();
+  }
 }
 async function loadCustomers(){
   try {
@@ -642,6 +752,11 @@ function logout(){
   // Forget the /orders ETag with the orders it validated — a same-etag 304
   // after re-login would otherwise leave the cleared state.orders empty.
   _ordersEtag=''; _ordersRev=0;
+  // Per-shift/session status: failed-print tally, offline + printer banners, reconnect loop.
+  _failedPrints=0; _ordersFails=0; _printCfgWarn=''; state.reconnecting=false;
+  if(_menuRetryT){ clearTimeout(_menuRetryT); _menuRetryT=null; } _menuRetryN=0;
+  if(_bootRetryT){ clearTimeout(_bootRetryT); _bootRetryT=null; } _bootRetryN=0;
+  netBannerUpdate();
   state.me=null; state.cafe=null; state.cafes=[]; state.orders=[]; state.menu=null;
   state.archIndex=undefined; state.archOrders=null; state.archLoading=null;
   state.reportsToday=null; state.reportsWeek=null; state.settingsOpen=false; state.switcherOpen=false;
@@ -653,6 +768,9 @@ async function switchCafe(slug){
     const d = await api('/auth/switch', { method:'POST', body:{ slug } });
     SESSION = d.session; lsSet(LS.session, SESSION);
     state.switcherOpen=false; state.menu=null;
+    // Cancel any pending menu-retry from the OLD café — firing after the
+    // session swap it would cache the new café's printers under the old key.
+    if(_menuRetryT){ clearTimeout(_menuRetryT); _menuRetryT=null; } _menuRetryN=0; _printCfgWarn=''; netBannerUpdate();
     state.archIndex=undefined; state.archOrders=null; state.archLoading=null; // per-café archives
     _ordersEtag=''; _ordersRev=0; state.billSelId=null; state.billShowN=60;   // per-café orders
     await loadMe(); await loadMenu();
@@ -668,7 +786,19 @@ async function switchCafe(slug){
 ═══════════════════════════════════════════════════════════════════════════ */
 function render(){
   applyTheme();
-  document.getElementById('root').innerHTML = state.me ? appHTML() : loginHTML();
+  document.getElementById('root').innerHTML = state.me ? appHTML() : (SESSION && state.reconnecting ? reconnectingHTML() : loginHTML());
+}
+
+/* B2: saved session but afterAuth() failed on something other than 401 —
+   don't strand staff at the login form; show the auto-retrying holding screen. */
+function reconnectingHTML(){
+  return '<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;">'
+    + '<div style="width:100%;max-width:380px;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:34px 26px;box-shadow:0 18px 40px -26px rgba(0,0,0,.5);">'
+    + '<span class="spin" style="width:22px;height:22px;color:var(--accent);"></span>'
+    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:23px;color:var(--ink);margin-top:14px;">Reconnecting…</div>'
+    + '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.5;">Can’t reach the server right now. You’re still signed in — retrying automatically.</div>'
+    + '<button data-act="bootRetry" style="margin-top:18px;padding:12px 26px;border-radius:50px;border:none;background:var(--accent);color:#fbf6ec;font-family:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.22em;font-weight:600;cursor:pointer;">Retry now</button>'
+    + '</div></div>';
 }
 
 function loginHTML(){
@@ -712,7 +842,7 @@ function appHTML(){
     + '<header class="app-header" style="flex-shrink:0;display:flex;align-items:center;gap:16px;padding:18px 30px;border-bottom:1px solid var(--topbar-line);background:var(--surface2);color:var(--ink);">'
     + '<div style="flex:1;min-width:0;"><div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:25px;line-height:1;">'+esc(titles[A][0])+'</div>'
     + '<div style="font-size:12.5px;color:var(--muted);margin-top:4px;">'+esc(titles[A][1])+'</div></div>'
-    + '<div style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:50%;background:#5fb87a;animation:pulse 2s infinite;"></span>Live · <span id="clock">'+clockStr()+'</span></div></header>'
+    + '<div style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);">'+failBadgeHTML()+'<span style="width:8px;height:8px;border-radius:50%;background:#5fb87a;animation:pulse 2s infinite;"></span>Live · <span id="clock">'+clockStr()+'</span></div></header>'
     + '<div class="app-body" style="flex:1;min-height:0;overflow-y:auto;zoom:var(--density,1);">'+reactivationBannerHTML()+body+'</div></main>'
     + bottomNavHTML() + '</div>'
     + (state.settingsOpen ? settingsHTML() : '')
@@ -992,18 +1122,25 @@ function settingsHTML(){
 }
 
 /* ───────── tender modal (mark as paid) ───────── */
+// Two modes. From Billing ("PAID BY CUSTOMER") it only takes payment. From the
+// kitchen board's "Bump" on an UNPAID ticket (state.tenderServe=true) the same
+// sheet marks paid AND bumps to picked_up in ONE PATCH, so staff never have to
+// walk over to Billing. Serve-mode keeps an escape hatch ("Serve without
+// payment") — otherwise a comped/pay-later ticket would be stuck on the pass.
 function tenderHTML(){
   const o = state.orders.find(function(x){ return x.id===state.tender; });
   const tot = o ? money(o.total) : '';
+  const serve = !!state.tenderServe;
   function btn(method,label,bg,fg){ return '<button data-act="tenderPay" data-method="'+method+'" style="flex:1;padding:18px;border-radius:12px;border:none;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;background:'+bg+';color:'+fg+';">'+label+'</button>'; }
   return '<div style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;">'
     + '<div data-act="tenderClose" style="position:absolute;inset:0;background:rgba(0,0,0,.5);"></div>'
     + '<div style="position:relative;width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 30px 70px -28px rgba(0,0,0,.7);text-align:center;">'
-    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">Take payment</div>'
+    + '<div style="font-family:\'Fraunces\',serif;font-style:italic;font-size:22px;color:var(--ink);">'+(serve?'Take payment &amp; serve':'Take payment')+'</div>'
     + '<div style="font-family:\'Fraunces\',serif;font-size:34px;color:var(--ink);margin:6px 0 4px;">'+tot+'</div>'
-    + '<div style="font-size:12.5px;color:var(--muted);margin-bottom:20px;">'+(o?esc(orderWhere(o))+' · '+esc(o.id):'')+'</div>'
+    + '<div style="font-size:12.5px;color:var(--muted);margin-bottom:20px;">'+(o?esc(orderWhere(o))+' · '+esc(o.id):'')+(serve?' · clears the pass':'')+'</div>'
     + '<div style="display:flex;gap:12px;">'+btn('cash','Cash','var(--btn-bg)','var(--btn-fg)')+btn('card','Card','var(--accent)','#fbf6ec')+'</div>'
-    + '<button data-act="tenderClose" style="margin-top:14px;background:none;border:none;color:var(--muted2);font-family:inherit;font-size:13px;cursor:pointer;">Cancel</button>'
+    + (serve ? '<button data-act="tenderServeOnly" style="margin-top:14px;width:100%;padding:11px;border-radius:10px;border:1px solid var(--border);background:none;color:var(--muted);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;">Serve without payment</button>' : '')
+    + '<button data-act="tenderClose" style="margin-top:'+(serve?'10px':'14px')+';background:none;border:none;color:var(--muted2);font-family:inherit;font-size:13px;cursor:pointer;">Cancel</button>'
     + '</div></div>';
 }
 
@@ -1277,7 +1414,11 @@ function kitchenContentHTML(){
   const board = cols.map(function(col){
     const list = orders.filter(function(o){ return o.status===col.key; });
     const cards = list.map(function(o){
-      const em = elapMin(o.createdAt); const urgent=em>=12, warn=em>=7;
+      const em = elapMin(o.createdAt); const urgent=em>=12, warn=em>=7; const busy=!!_advBusy[o.id];
+      // Ready column: an unpaid ticket says what it will collect — tapping it
+      // opens the Cash/Card sheet, then marks paid + served in one go.
+      const needsPay = col.key==='ready' && !isPaidOrder(o);
+      const btnLabel = needsPay ? ('Bump · take '+money(o.total)) : col.btn;
       const tc = col.key==='ready' ? '#5fb87a' : urgent?'#ff6b4a':warn?K.accent:K.muted;
       const btnStyle = { received:[K.accent,'#1a1208'], preparing:['#d9774e','#fff'], ready:['#5fb87a','#0c1a10'] }[col.key];
       const items = (o.items||[]).map(function(it){ return '<div style="display:flex;gap:9px;align-items:baseline;"><span style="font-family:\'Fraunces\',serif;font-size:15px;color:var(--kds-accent);min-width:22px;">'+(it.qty||1)+'</span><div style="flex:1;"><div style="font-size:14.5px;color:var(--kds-ink);line-height:1.25;">'+esc(it.name)+(it.size?' <span style="color:var(--kds-muted);">('+esc(it.size)+')</span>':'')+'</div>'+(it.notes?'<div style="font-size:12px;color:#d9774e;font-style:italic;margin-top:2px;">'+esc(it.notes)+'</div>':'')+'</div></div>'; }).join('');
@@ -1287,7 +1428,7 @@ function kitchenContentHTML(){
         : ps==='failed' ? '<span style="font-size:11px;font-weight:700;color:#ff6b4a;display:inline-flex;align-items:center;gap:5px;">⚠ Print failed</span>'
         : '';
       const printIcon = printBtn ? '<button data-act="printTicket" data-id="'+esc(o.id)+'" title="'+(ps==='printed'?'Reprint':'Print kitchen ticket')+'" style="background:none;border:1px solid var(--kds-line);color:'+(ps==='failed'?'#ff6b4a':'var(--kds-muted)')+';border-radius:8px;width:30px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;'+(ps==='printed'?'opacity:.6;':'')+'">'+ic(ICON.print,1.5,15)+'</button>' : '';
-      return '<div style="background:var(--kds-panel);border:1px solid var(--kds-line);border-left:4px solid '+col.accent+';border-radius:12px;padding:14px 15px;"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:11px;"><span style="font-family:\'Fraunces\',serif;font-size:17px;color:var(--kds-ink);">'+esc(o.id)+'</span><span style="font-size:13px;color:var(--kds-muted);font-weight:500;white-space:nowrap;">'+esc(orderWhere(o))+'</span><span style="margin-left:auto;font-family:\'Fraunces\',serif;font-size:15px;color:'+tc+';'+(urgent?'animation:blink 1s infinite;':'')+'">'+em+'m</span></div>'+(o.phoneNumber?'<div style="margin:-4px 0 10px;">'+phoneLine(o,'var(--kds-muted)')+'</div>':'')+'<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:13px;">'+items+'</div>'+(o.notes?'<div style="font-size:12px;color:#d9774e;font-style:italic;margin:-5px 0 13px;">Order note: '+esc(o.notes)+'</div>':'')+(psBadge?'<div style="margin-bottom:9px;">'+psBadge+'</div>':'')+'<div style="display:flex;gap:8px;align-items:center;"><button data-act="advance" data-id="'+esc(o.id)+'" data-next="'+col.next+'" style="flex:1;padding:11px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.04em;background:'+btnStyle[0]+';color:'+btnStyle[1]+';">'+col.btn+'</button>'+printIcon+'</div></div>';
+      return '<div style="background:var(--kds-panel);border:1px solid var(--kds-line);border-left:4px solid '+col.accent+';border-radius:12px;padding:14px 15px;"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:11px;"><span style="font-family:\'Fraunces\',serif;font-size:17px;color:var(--kds-ink);">'+esc(o.id)+'</span><span style="font-size:13px;color:var(--kds-muted);font-weight:500;white-space:nowrap;">'+esc(orderWhere(o))+'</span><span style="margin-left:auto;font-family:\'Fraunces\',serif;font-size:15px;color:'+tc+';'+(urgent?'animation:blink 1s infinite;':'')+'">'+em+'m</span></div>'+(o.phoneNumber?'<div style="margin:-4px 0 10px;">'+phoneLine(o,'var(--kds-muted)')+'</div>':'')+'<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:13px;">'+items+'</div>'+(o.notes?'<div style="font-size:12px;color:#d9774e;font-style:italic;margin:-5px 0 13px;">Order note: '+esc(o.notes)+'</div>':'')+(psBadge?'<div style="margin-bottom:9px;">'+psBadge+'</div>':'')+'<div style="display:flex;gap:8px;align-items:center;"><button data-act="advance" data-id="'+esc(o.id)+'" data-next="'+col.next+'"'+(busy?' disabled':'')+' style="flex:1;padding:11px;border:none;border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.04em;background:'+btnStyle[0]+';color:'+btnStyle[1]+';'+(busy?'opacity:.55;':'')+'">'+(busy?'<span class="spin" style="width:12px;height:12px;vertical-align:-2px;"></span> '+btnLabel:btnLabel)+'</button>'+printIcon+'</div></div>';
     }).join('');
     const empty = list.length===0 ? '<div style="border:1.5px dashed var(--kds-line);border-radius:12px;padding:26px;text-align:center;color:var(--kds-muted);font-size:13px;">All clear</div>' : '';
     return '<div><div style="display:flex;align-items:center;gap:9px;padding:0 4px 12px;"><span style="width:10px;height:10px;border-radius:50%;background:'+col.accent+';"></span><span style="font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--kds-ink);">'+col.title+'</span><span style="font-size:12px;color:var(--kds-muted);">'+list.length+'</span></div><div style="display:flex;flex-direction:column;gap:13px;">'+cards+empty+'</div></div>';
@@ -2232,8 +2373,22 @@ async function runPhotoMenuImport(){
 /* ════════════════════════════════════════════════════════════════════════
    ACTIONS
 ═══════════════════════════════════════════════════════════════════════════ */
+// In-flight advances by order id — a double-tap on "Start cooking" would PATCH
+// twice and auto-print duplicate tickets. Marked busy renders the ticket's
+// button disabled+dimmed until the request settles.
+const _advBusy = {};
+function isPaidOrder(o){ return ['paid','pending','refunded'].indexOf(o.paymentStatus||'unpaid')>=0; }
 async function advance(orderId, next){
+  if (_advBusy[orderId]) return;
   const o = state.orders.find(function(x){ return x.id===orderId; }); if(!o) return;
+  // Bump doubles as "mark paid": an UNPAID ticket leaving the pass opens the
+  // tender sheet instead of silently walking off unpaid. Already-paid (online,
+  // pending or refunded) tickets bump straight through, as before.
+  if (next==='picked_up' && !isPaidOrder(o)){
+    state.tender = orderId; state.tenderServe = true; renderKeepScroll(); return;
+  }
+  _advBusy[orderId] = 1;
+  if (state.active==='kitchen') refreshKitchenInPlace();
   try {
     await api('/orders/'+enc(orderId), { method:'PATCH', body:{ status: next } });
     if(next==='picked_up'){ delete printStatusById[orderId]; state.orders = state.orders.filter(function(x){ return x.id!==orderId; }); }
@@ -2243,6 +2398,18 @@ async function advance(orderId, next){
     render();
     loadOrders().then(function(){ if(state.active==='kitchen') refreshKitchenInPlace(); });
   } catch(e){ toast(e.message,'err'); }
+  finally {
+    delete _advBusy[orderId];
+    if (state.active==='kitchen') refreshKitchenInPlace();
+  }
+}
+// Full render() replaces #root, which resets .app-body's scrollTop. Opening the
+// tender sheet from a long kitchen board would otherwise snap the pass to the
+// top. Save/restore around the render.
+function renderKeepScroll(){
+  const sb=document.querySelector('.app-body'); const top=sb?sb.scrollTop:0;
+  render();
+  const sb2=document.querySelector('.app-body'); if(sb2) sb2.scrollTop=top;
 }
 function refreshKitchenInPlace(){
   const el=document.getElementById('kds-content'); if(!el) return;
@@ -2360,10 +2527,53 @@ async function runImport(){
     state.importOpen=false; await loadMenu(); render();
   } catch(e){ toast('Import failed — '+e.message,'err'); }
 }
+let _tenderBusy = false;   // double-tap on Cash/Card would PATCH paid twice
 async function tenderPay(method){
+  if (_tenderBusy) return;
   const id = state.tender; if(!id) return;
-  try { await api('/orders/'+enc(id), { method:'PATCH', body:{ paymentStatus:'paid', paymentMethod:method } }); state.tender=null; toast('Marked paid · '+method,'ok'); await loadOrders(); render(); }
-  catch(e){ toast(e.message,'err'); }
+  _tenderBusy = true;
+  const serve = !!state.tenderServe;   // opened from the kitchen bump → also clear the pass
+  document.querySelectorAll('[data-act="tenderPay"],[data-act="tenderServeOnly"]').forEach(function(b){ b.disabled=true; b.style.opacity='.55'; });
+  const body = { paymentStatus:'paid', paymentMethod:method };
+  if (serve) body.status = 'picked_up';   // one PATCH: paid + bumped
+  try {
+    await api('/orders/'+enc(id), { method:'PATCH', body:body });
+    state.tender=null; state.tenderServe=false;
+    if (serve) bumpOffBoard(id);
+    toast(serve ? ('Paid · '+method+' — served') : ('Marked paid · '+method), 'ok');
+    renderKeepScroll();
+    await loadOrders();
+    if (state.active==='kitchen') refreshKitchenInPlace(); else renderKeepScroll();
+  }
+  catch(e){ toast(e.message,'err'); document.querySelectorAll('[data-act="tenderPay"],[data-act="tenderServeOnly"]').forEach(function(b){ b.disabled=false; b.style.opacity='1'; }); }
+  finally { _tenderBusy = false; }
+}
+// Drop a bumped ticket off the local board immediately (same bookkeeping the
+// plain advance() path does) so the card doesn't linger until the next poll.
+function bumpOffBoard(id){
+  delete printStatusById[id];
+  state.orders = (state.orders||[]).filter(function(x){ return x.id!==id; });
+  checkNewOrderAlert();
+}
+// "Serve without payment" — bump an unpaid ticket off the pass without tendering
+// it (comp, staff meal, customer paying later). Order stays UNPAID and still
+// shows in Billing / the Unpaid KPI.
+async function tenderServeOnly(){
+  if (_tenderBusy) return;
+  const id = state.tender; if(!id) return;
+  _tenderBusy = true;
+  document.querySelectorAll('[data-act="tenderPay"],[data-act="tenderServeOnly"]').forEach(function(b){ b.disabled=true; b.style.opacity='.55'; });
+  try {
+    await api('/orders/'+enc(id), { method:'PATCH', body:{ status:'picked_up' } });
+    state.tender=null; state.tenderServe=false;
+    bumpOffBoard(id);
+    toast('Served — still unpaid','info');
+    renderKeepScroll();
+    await loadOrders();
+    if (state.active==='kitchen') refreshKitchenInPlace(); else renderKeepScroll();
+  }
+  catch(e){ toast(e.message,'err'); document.querySelectorAll('[data-act="tenderPay"],[data-act="tenderServeOnly"]').forEach(function(b){ b.disabled=false; b.style.opacity='1'; }); }
+  finally { _tenderBusy = false; }
 }
 async function applyDiscount(id){
   const label = window.prompt('Discount / charge label (e.g. "10% off"):'); if(label==null) return;
@@ -2681,6 +2891,7 @@ async function poll(){
 function handle(act, ds, ev){
   switch(act){
     case 'nav': requestScreen(ds.screen); break;
+    case 'bootRetry': bootResume(); break;
     case 'goKitchen': state.active='kitchen'; render(); refreshActive(); break;
     case 'pinSubmit': pinSubmit(); break;
     case 'pinCancel': state.pinPrompt=null; state.pinErr=''; render(); break;
@@ -2714,9 +2925,10 @@ function handle(act, ds, ev){
     case 'catDown': moveCategory(ds.slug,1); break;
     case 'billSelect': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billSelId=ds.id; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
     case 'billShowMore': { const _bl=document.getElementById('bill-list-scroll'); const _t=_bl?_bl.scrollTop:0; state.billShowN=(state.billShowN||60)+240; render(); const _bl2=document.getElementById('bill-list-scroll'); if(_bl2) _bl2.scrollTop=_t; break; }
-    case 'openTender': state.tender=ds.id; render(); break;
-    case 'tenderClose': state.tender=null; render(); break;
+    case 'openTender': state.tender=ds.id; state.tenderServe=false; render(); break;
+    case 'tenderClose': state.tender=null; state.tenderServe=false; render(); break;
     case 'tenderPay': tenderPay(ds.method); break;
+    case 'tenderServeOnly': tenderServeOnly(); break;
     case 'applyDiscount': applyDiscount(ds.id); break;
     case 'redeemLoyalty': redeemLoyalty(ds.id); break;
     case 'saveLoyalty': saveLoyalty(); break;
@@ -2823,15 +3035,41 @@ function boot(){
   applyTheme();
   render();
   setInterval(tick, 1000);
-  setInterval(poll, 6000);
+  schedulePoll(6000);
 
-  // Resume an existing session.
-  if(SESSION){
-    afterAuth().catch(function(e){
-      if(e.status===401){ SESSION=''; lsSet(LS.session,''); render(); }
-      else { toast('Could not load your café — '+(e.message||''),'err'); }
+  // Resume an existing session — bootResume keeps retrying on non-401 failures.
+  if(SESSION) bootResume();
+}
+
+/* B1/B3: re-armed timeout instead of a fixed interval — polls can't stack behind
+   a slow /orders response, and failures back the cadence off 6s → 12s → 30s
+   (reset to 6s on success). poll() itself is untouched: the PIN/typing guard
+   and sig-gated re-render live there. */
+let _pollT = null, _pollBusy = false;
+function schedulePoll(delay){
+  if (_pollT) clearTimeout(_pollT);
+  _pollT = setTimeout(pollLoop, delay);
+}
+async function pollLoop(){
+  if (_pollBusy){ schedulePoll(2000); return; }
+  _pollBusy = true;
+  try { await poll(); } catch(e){} finally { _pollBusy = false; }
+  schedulePoll(_ordersFails===0 ? 6000 : _ordersFails===1 ? 12000 : 30000);
+}
+
+/* B2: session resume with backoff — a server blip at open no longer strands
+   staff at the login screen with their session thrown away. */
+let _bootRetryT = null, _bootRetryN = 0;
+function bootResume(){
+  if (_bootRetryT){ clearTimeout(_bootRetryT); _bootRetryT = null; }
+  if (!SESSION) return;
+  afterAuth().then(function(){ _bootRetryN = 0; state.reconnecting = false; })
+    .catch(function(e){
+      if (e.status===401){ SESSION=''; lsSet(LS.session,''); state.reconnecting=false; render(); return; }
+      state.reconnecting = true; render();
+      const d = [2000, 5000, 10000][_bootRetryN] || 15000; _bootRetryN++;
+      _bootRetryT = setTimeout(bootResume, d);
     });
-  }
 }
 boot();
 </script>
